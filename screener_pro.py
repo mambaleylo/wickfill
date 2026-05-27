@@ -2207,9 +2207,6 @@ details summary::-webkit-details-marker{display:none}
       <div class="cc-strip" id="ccStrip"></div>
     </div>
 
-    <!-- Log -->
-    <div class="log-area" id="wfLog"></div>
-
     <!-- Top-7 table -->
     <div class="table-panel" id="top20Wrap" style="display:none">
       <div class="table-hdr">
@@ -2226,6 +2223,9 @@ details summary::-webkit-details-marker{display:none}
         <tbody id="top20Body"></tbody>
       </table>
     </div>
+
+    <!-- Log -->
+    <div class="log-area" id="wfLog"></div>
 
   </div><!-- /right -->
 </div><!-- /main -->
