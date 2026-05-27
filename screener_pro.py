@@ -1365,9 +1365,10 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
     _pool = ThreadPoolExecutor(max_workers=n_workers)
 
     # Захватываем данные в замыкании — не нужен initializer
-    _c = candles; _d = days; _r = risk_pct
+    # days_limit=0: свечи уже обрезаны при загрузке, повторная фильтрация по времени не нужна
+    _c = candles; _r = risk_pct
     def _eval_thread(ind):
-        res = _simulate(_c, ind, _d, risk_pct=_r)
+        res = _simulate(_c, ind, 0, risk_pct=_r)
         if res: return res
         return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
                 "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
