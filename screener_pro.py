@@ -2755,7 +2755,6 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=_die,daemon=True).start()
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         elif parsed.path == "/load_result":
-            from urllib.parse import parse_qs
             qs=parse_qs(parsed.query)
             symbol=qs.get("symbol",["BTC_USDT"])[0]; tf=qs.get("tf",["1h"])[0]
             fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
