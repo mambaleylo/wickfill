@@ -10,7 +10,7 @@ WickFill Optimizer v3.0
 import json, time, threading, random, math, os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import smtplib, email.mime.text, email.mime.multipart
 
@@ -1355,12 +1355,20 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
     global _sw_params
 
     n_workers = max(1, os.cpu_count() or 1)
-    olog(f"   ProcessPool: {n_workers} воркеров")
+    olog(f"   ThreadPool: {n_workers} потоков")
 
-    _pool = ProcessPoolExecutor(max_workers=n_workers, initializer=_worker_init,
-                                 initargs=(candles, days, risk_pct))
+    _pool = ThreadPoolExecutor(max_workers=n_workers)
+
+    # Захватываем данные в замыкании — не нужен initializer
+    _c = candles; _d = days; _r = risk_pct
+    def _eval_thread(ind):
+        res = _simulate(_c, ind, _d, risk_pct=_r)
+        if res: return res
+        return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
+                "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
+
     def pmap(candidates):
-        return list(_pool.map(_worker_evaluate, candidates))
+        return list(_pool.map(_eval_thread, candidates))
 
     def stop_flag():
         return _opt_stop_flag.is_set()
