@@ -1548,6 +1548,7 @@ def run_optimizer(params):
 
         if _opt_stop_flag.is_set(): break
 
+        olog(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}","warn")
         if final_result:
             elapsed = round(time.time()-t0, 1)
 
