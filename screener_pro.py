@@ -2809,12 +2809,9 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             global _opt_thread
-            # Если тред жив — выставляем стоп и ждём до 3с
+            # Если тред жив — не перезапускаем, чтобы не сбрасывать циклы
             if _opt_thread and _opt_thread.is_alive():
-                _opt_stop_flag.set()
-                _opt_thread.join(timeout=3.0)
-                if _opt_thread.is_alive():
-                    self._json({"ok":False,"msg":"Не успел остановиться, подождите секунду"}); return
+                self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
             _opt_thread = threading.Thread(target=run_optimizer, args=(params,), daemon=True)
             _opt_thread.start()
             self._json({"ok":True})
