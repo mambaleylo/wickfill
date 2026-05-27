@@ -1844,14 +1844,7 @@ function checkApi(){
 checkApi();setInterval(checkApi,60000);
 
 
-const SMTP_PRESETS={
-  gmail:{host:'smtp.gmail.com',port:'465',hint:'Gmail: нужен пароль приложения из настроек аккаунта'},
-  yandex:{host:'smtp.yandex.ru',port:'465',hint:'Яндекс: Почта → Настройки → Безопасность → Пароли приложений'},
-  mail_ru:{host:'smtp.mail.ru',port:'465',hint:'Mail.ru: включите «Внешние клиенты», создайте пароль приложения'},
-  custom:{host:'',port:'465',hint:'Введите данные вашего SMTP-сервера'},
-};
-function fillSmtp(p){const pr=SMTP_PRESETS[p];if(!pr)return;document.getElementById('al_host').value=pr.host;document.getElementById('al_port').value=pr.port;document.getElementById('al_hint').textContent=pr.hint;}
-fillSmtp('yandex');
+// SMTP removed, using Telegram alerts
 
 function getAlertCfg(){
   const token=document.getElementById('al_tg_token').value.trim();
