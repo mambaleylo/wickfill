@@ -2225,6 +2225,12 @@ function renameDownload(){
   }).catch(e=>{btn.textContent='❌';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
 }
 function termuxUpdate(){
+  // Сначала сбрасываем зависший флаг оптимизации
+  fetch('/reset_running').then(()=>{
+    setTimeout(()=>location.reload(), 500);
+  });
+}
+function termuxUpdate_orig(){
   const btn=event.target;btn.disabled=true;btn.textContent='⏳ wake-lock...';
   fetch('/termux_update').then(r=>r.json()).then(d=>{
     btn.textContent=d.ok?'✅ Перезапуск...':'❌ '+d.msg;
@@ -2340,6 +2346,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
         elif parsed.path == "/sw_stop":
             with opt_lock: opt_state["sw_running"]=False
+            self._json({"ok":True})
+        elif parsed.path == "/reset_running":
+            with opt_lock:
+                opt_state["running"]=False
+                opt_state["done"]=False
+                opt_state["error"]=""
+            _opt_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
