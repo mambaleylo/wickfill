@@ -2791,17 +2791,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/scan":
-            if opt_state.get("running",False):
-                self._json({"ok":False,"msg":"Оптимизация уже запущена"}); return
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             global _opt_thread
-            # Если предыдущий тред ещё жив после стопа — ждём не более 3с
+            # Если тред жив — выставляем стоп и ждём до 3с
             if _opt_thread and _opt_thread.is_alive():
                 _opt_stop_flag.set()
                 _opt_thread.join(timeout=3.0)
                 if _opt_thread.is_alive():
-                    self._json({"ok":False,"msg":"Предыдущая оптимизация ещё не остановилась, подождите секунду"}); return
+                    self._json({"ok":False,"msg":"Не успел остановиться, подождите секунду"}); return
             _opt_thread = threading.Thread(target=run_optimizer, args=(params,), daemon=True)
             _opt_thread.start()
             self._json({"ok":True})
