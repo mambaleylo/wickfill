@@ -679,37 +679,45 @@ def _update_top20(top20_list, result):
 # ═══════════════════════════════════════════════════════════════
 def _fetch_candles(symbol, tf, days):
     interval_sec = TF_SECONDS.get(tf, 3600)
-    batch = 100
-    now = int(time.time())
+    LIMIT = 999          # Gate.io futures максимум за один запрос
+    now   = int(time.time())
     since = now - days * 86400
-    all_candles = []; current_from = since
-    total_sec = now - since
-    print(f"[fetch] {symbol} {tf} {days}д — загрузка...", flush=True)
+    total_needed = (now - since) // interval_sec + 2   # +2 на граничные свечи
+    all_candles = []
+    current_from = since
+    print(f"[fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
-        to = min(current_from + interval_sec * batch, now)
-        pct = int((current_from - since) / total_sec * 100) if total_sec > 0 else 0
+        pct = int((current_from - since) / max(now - since, 1) * 100)
         print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
         try:
             r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
-                params={"contract":symbol,"interval":tf,"from":current_from,"to":to}, timeout=10)
+                params={"contract": symbol, "interval": tf,
+                        "from": current_from, "limit": LIMIT}, timeout=15)
             if r.status_code != 200:
                 print("\n[fetch] HTTP {} — прерываем".format(r.status_code), flush=True); break
             data = r.json()
             if not isinstance(data, list) or not data: break
+            added = 0
             for c in data:
-                all_candles.append({"t":int(c.get("t",0)),"open":float(c["o"]),
-                    "high":float(c["h"]),"low":float(c["l"]),"close":float(c["c"])})
-            last_t = int(data[-1].get("t",0))
+                t = int(c.get("t", 0))
+                if t < since: continue          # отбрасываем свечи раньше окна
+                if t > now:   continue          # и будущие (на всякий случай)
+                all_candles.append({"t": t, "open": float(c["o"]),
+                    "high": float(c["h"]), "low": float(c["l"]), "close": float(c["c"])})
+                added += 1
+            last_t = int(data[-1].get("t", 0))
             next_from = last_t + interval_sec
-            if next_from <= current_from or next_from >= now: break
+            # Останавливаемся если нет прогресса или вышли за now
+            if next_from <= current_from: break
+            if last_t >= now - interval_sec: break   # последняя свеча уже закрытая — всё
             current_from = next_from
             time.sleep(0.05)
         except Exception as e:
             print("\n[fetch] err: {}".format(e), flush=True); break
-    seen=set(); result=[]
+    seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    print("\n[fetch] Готово: {} свечей".format(len(result)), flush=True)
+    print("\n[fetch] Готово: {} свечей (ожидалось ~{})".format(len(result), total_needed), flush=True)
     return result
 
 def _fetch_latest_candle(symbol, tf):
@@ -1467,7 +1475,11 @@ def run_optimizer(params):
         olog(f"❌ Мало свечей: {len(candles)}", "error")
         with opt_lock: opt_state["running"]=False; opt_state["error"]=f"Мало свечей: {len(candles)}"
         return
-    olog(f"   Загружено {len(candles)} свечей", "ok")
+    # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
+    cutoff_check = time.time() - days * 86400
+    candles_in_window = [c for c in candles if c.get("t", 0) >= cutoff_check]
+    expected_per_day = round(86400 / TF_SECONDS.get(tf, 3600))
+    olog(f"   Загружено {len(candles)} свечей → в окне {days}д: {len(candles_in_window)} (≈{expected_per_day}/день × {days}д = {expected_per_day*days})", "ok")
 
     # Если задано n_candles — обрезаем окно
     if n_candles > 0 and n_candles < len(candles):
