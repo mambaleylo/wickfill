@@ -798,7 +798,7 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
                               stop_flag=None):
     current = dict(start_ind)
-    best_result = _worker_evaluate(current)
+    best_result = pmap_fn([current])[0]
     top20_global = _update_top20(top20_global, best_result)
     pass_num = 0
 
