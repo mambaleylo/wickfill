@@ -2034,6 +2034,7 @@ let _cc = {};          // cycle# -> card DOM el
 let _ccCur = null;     // current running card el
 let _prevEq = null;    // last finished cycle equity (for delta)
 let _startBuf = null;  // best {eq,wr,dd} seen during current cycle's starts
+let _cc = {};          // cycle cards map
 
 function _resetLog(){
   document.getElementById('wfLog').innerHTML='<div class="cc-strip" id="ccStrip"></div>';
