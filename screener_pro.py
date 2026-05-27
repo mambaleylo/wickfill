@@ -1921,26 +1921,39 @@ function saveResult(){
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
   if(!best){_slStatus('❌ Нет результата для сохранения',false);return;}
-  fetch('/save_result',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({best,top20:top20||[],symbol:sym,tf})})
-  .then(r=>r.json()).then(d=>{
-    if(d.ok)_slStatus('✅ Сохранено: '+d.file,true);
-    else _slStatus('❌ '+d.msg,false);
-  }).catch(e=>_slStatus('❌ Ошибка сети: '+e,false));
+  // Скачиваем JSON прямо на устройство
+  const data={best,top20:top20||[],symbol:sym,tf,saved_at:new Date().toLocaleString()};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`wickfill_${sym.replace('/','_')}_${tf}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  _slStatus('✅ Файл скачан на устройство',true);
 }
 function loadResult(){
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
-  const tf=document.getElementById('wf_tf_sel').value;
-  fetch('/load_result?symbol='+encodeURIComponent(sym)+'&tf='+encodeURIComponent(tf))
-  .then(r=>r.json()).then(d=>{
-    if(!d.ok){_slStatus('❌ '+d.msg,false);return;}
-    window._loadedSeed={best:d.best,top20:d.top20};
-    // Показываем лучший результат из файла
-    if(d.best) renderBest(d.best, d.top20||[]);
-    const eq=d.best?.equity?.toFixed(2)||'?';
-    const wr=d.best?.winrate?.toFixed(1)||'?';
-    _slStatus(`✅ Загружено: $${eq} WR ${wr}% | Запустите оптимизацию — начнёт с этой точки`,true);
-  }).catch(e=>_slStatus('❌ Ошибка сети: '+e,false));
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='.json';
+  input.onchange=function(e){
+    const file=e.target.files[0];
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=function(ev){
+      try{
+        const d=JSON.parse(ev.target.result);
+        if(!d.best){_slStatus('❌ Неверный формат файла',false);return;}
+        window._loadedSeed={best:d.best,top20:d.top20};
+        if(d.best) renderBest(d.best, d.top20||[]);
+        const eq=d.best?.equity?.toFixed(2)||'?';
+        const wr=d.best?.winrate?.toFixed(1)||'?';
+        _slStatus(`✅ Загружено: $${eq} WR ${wr}% | Запустите оптимизацию — начнёт с этой точки`,true);
+      }catch(err){_slStatus('❌ Ошибка файла: '+err,false);}
+    };
+    reader.readAsText(file);
+  };
+  input.click();
 }
 
 function startOpt(){
