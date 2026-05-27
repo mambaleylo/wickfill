@@ -841,6 +841,10 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
                 opt_state["progress"]=step_in_pass
                 opt_state["top20"]=top20_global; opt_state["elapsed"]=round(time.time()-t0,1)
 
+        # Проверяем — for по параметрам прервался из-за stop_flag?
+        if stop_flag and stop_flag():
+            olog(f"  [DBG] Круг #{pass_num} прерван stop_flag внутри параметров","warn"); break
+
         if not improved_in_pass:
             # RSI control sweep
             rsi_candidates=[]
@@ -856,10 +860,11 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
             if rsi_best["fitness"]>best_result["fitness"]:
                 for k in ("use_rsi_filter","rsi_len","rsi_long_max","rsi_short_min"):
                     current[k]=rsi_best["params"][k]
-                best_result=rsi_best; olog("  RSI-контроль улучшил → продолжаю","ok")
+                best_result=rsi_best; olog("  RSI-контроль улучшил -> продолжаю","ok")
             else:
-                olog("  RSI-контроль не помог — локальный максимум","ok"); break
-        if pass_num>=max_passes: break
+                olog(f"  [DBG] Круг #{pass_num} стоп: RSI не помог (fitness={best_result['fitness']:.4f})","warn"); break
+        if pass_num>=max_passes:
+            olog(f"  [DBG] Круг #{pass_num} стоп: max_passes={max_passes} достигнут","warn"); break
 
     return best_result, current, top20_global
 
