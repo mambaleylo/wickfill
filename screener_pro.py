@@ -1603,328 +1603,708 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
-<title>WickFill Optimizer v3</title>
+<title>WickFill · Optimizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;
-  --blue:#1f6feb;--blue2:#58a6ff;--green:#238636;--green2:#3fb950;
-  --red:#f85149;--yellow:#e3b341;--muted:#8b949e;--text:#e6edf3;
-  --purple:#a78bfa;--radius:10px;--gap:8px}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;font-size:14px}
-body{display:flex;flex-direction:column;padding:8px;gap:var(--gap);overflow-x:hidden}
-.topbar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)}
-.topbar h1{font-size:1rem;font-weight:700;flex:1}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
-.dot.ok{background:var(--green2)}.dot.err{background:var(--red)}
-.btn-icon{padding:4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:.8rem}
-.main{display:grid;grid-template-columns:360px 1fr;gap:var(--gap);flex:1;min-height:0}
-.panel{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
-.panel-title{font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em}
-.field{display:flex;flex-direction:column;gap:3px}
-.field label{font-size:.72rem;color:var(--muted)}
-.field-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-select,input[type=text],input[type=password]{padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:.85rem;width:100%}
-select:focus,input:focus{outline:none;border-color:var(--blue)}
-.slider-row{display:flex;align-items:center;gap:8px}
-.slider-row input[type=range]{flex:1;accent-color:var(--blue);height:3px}
-.slider-val{min-width:32px;text-align:right;font-size:.85rem;font-weight:600;color:var(--blue2)}
-/* Toggle switch */
-.toggle-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:8px;cursor:pointer}
-.toggle-label{font-size:.82rem;flex:1}
-.toggle-switch{width:36px;height:20px;background:#333;border-radius:10px;position:relative;transition:background .2s;flex-shrink:0}
-.toggle-switch.on{background:var(--blue)}
-.toggle-switch::after{content:'';position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:3px;left:3px;transition:left .2s}
-.toggle-switch.on::after{left:19px}
-/* Infinite badge */
-.inf-badge{padding:2px 8px;background:#0a1a3a;border:1px solid var(--blue2);border-radius:10px;font-size:.7rem;color:var(--blue2);animation:pulse 1.5s infinite}
-.sw-badge{padding:2px 8px;background:#0f2a0f;border:1px solid var(--green2);border-radius:10px;font-size:.7rem;color:var(--green2)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.btn-run{padding:11px;background:linear-gradient(135deg,var(--blue),#1a5cc7);border:none;border-radius:8px;color:#fff;font-size:.95rem;font-weight:700;cursor:pointer;width:100%;transition:opacity .2s}
-.btn-run:disabled{opacity:.4;cursor:not-allowed}
-.btn-stop{padding:8px;background:transparent;border:1px solid var(--red);border-radius:8px;color:var(--red);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.btn-sw-stop{padding:8px;background:transparent;border:1px solid var(--yellow);border-radius:8px;color:var(--yellow);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.btn-chart{padding:8px;background:linear-gradient(135deg,#1a2f1a,#0f2a0f);border:1px solid var(--green2);border-radius:8px;color:var(--green2);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.prog-wrap{display:none;flex-direction:column;gap:4px}
-.prog-track{background:var(--bg3);border-radius:3px;height:5px;overflow:hidden}
-.prog-bar{height:100%;background:linear-gradient(90deg,var(--blue),var(--blue2));width:0%;border-radius:3px;transition:width .4s}
-.right{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
-.logwrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
- #wfLog{flex:1;overflow-y:auto;min-height:0}
- /* ── Cycle cards strip ── */
- .cc-strip{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 8px;align-content:flex-start}
- .cc{width:110px;flex-shrink:0;border-radius:9px;padding:9px 10px;border:1px solid var(--border);background:var(--bg3);display:flex;flex-direction:column;gap:4px;position:relative;overflow:hidden}
- .cc.running{border-color:var(--blue);animation:cc-pulse 1.4s ease-in-out infinite}
- @keyframes cc-pulse{0%,100%{border-color:var(--blue)}50%{border-color:var(--blue2);box-shadow:0 0 8px rgba(88,166,255,.25)}}
- .cc.pos{border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.05)}
- .cc.neg{border-color:rgba(248,81,73,.35);background:rgba(248,81,73,.04)}
- .cc-num{font-size:.6rem;color:var(--muted);font-weight:600;letter-spacing:.05em;text-transform:uppercase}
- .cc-eq{font-size:1.05rem;font-weight:800;line-height:1;margin:1px 0}
- .cc-eq.pos{color:var(--green2)}.cc-eq.neg{color:var(--red)}.cc-eq.run{color:var(--blue2)}
- .cc-delta{font-size:.62rem;font-weight:700}
- .cc-delta.pos{color:var(--green2)}.cc-delta.neg{color:var(--red)}.cc-delta.flat{color:var(--muted)}
- .cc-meta{font-size:.58rem;color:var(--muted);line-height:1.4}
- .cc-bar{position:absolute;bottom:0;left:0;height:3px;background:var(--green2);transition:width .5s}
- .cc-bar.neg{background:var(--red)}
- /* activity line */
- .cc-activity{font-size:.67rem;color:var(--muted);font-family:'JetBrains Mono',monospace;padding:2px 0 6px;display:flex;align-items:center;gap:5px}
- .spin{animation:spin .9s linear infinite;display:inline-block}
- @keyframes spin{to{transform:rotate(360deg)}}
- .cc-status{font-size:.67rem;color:var(--muted);font-family:'JetBrains Mono',monospace;padding:2px 0}
- .cc-status.ok{color:var(--green2)}.cc-status.warn{color:var(--yellow)}.cc-status.err{color:var(--red)}
-.best-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
-.stat{background:var(--bg3);border-radius:7px;padding:7px 10px;text-align:center}
-.stat-val{font-size:1.05rem;font-weight:700;color:var(--blue2)}
-.stat-lbl{font-size:.66rem;color:var(--muted);margin-top:2px}
-.stat.good .stat-val{color:var(--green2)}.stat.bad .stat-val{color:var(--red)}
-.top20-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.top20-hdr{padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--blue2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
-#top20Table{width:100%;border-collapse:collapse;font-size:.71rem}
-#top20Table th{padding:6px;color:var(--muted);border-bottom:1px solid var(--border);font-weight:500;text-align:left;white-space:nowrap}
-#top20Table td{padding:6px;border-bottom:1px solid var(--bg3)}
-#top20Table tr:last-child td{border:none}
-#top20Table tr:hover td{background:var(--bg3)}
-.div{height:1px;background:var(--border);margin:2px 0}
-.info-banner{padding:9px 12px;background:linear-gradient(135deg,#0d1f2d,#091622);border:1px solid var(--blue);border-radius:8px;font-size:.72rem;color:var(--muted);line-height:1.65}
-.info-banner b{color:var(--yellow)}
-.alert-field{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
-.alert-field label{font-size:.72rem;color:var(--muted)}
-::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+:root{
+  --cream:#f7f3ee;
+  --cream2:#ede8e0;
+  --cream3:#e2dbd0;
+  --sand:#c9bfb0;
+  --sand2:#b5a896;
+  --warm:#8c7b6b;
+  --bark:#5c4f43;
+  --text:#2d2520;
+  --text2:#6b5f55;
+  --text3:#9c8f84;
+  --glass:rgba(247,243,238,0.72);
+  --glass2:rgba(237,232,224,0.55);
+  --blur:saturate(180%) blur(20px);
+  --shadow:0 2px 20px rgba(92,79,67,0.10);
+  --shadow2:0 8px 40px rgba(92,79,67,0.14);
+  --radius:18px;
+  --radius-sm:12px;
+  --accent:#7c6a58;
+  --green:#4a7c59;
+  --green-light:#e8f2eb;
+  --red:#8b3a3a;
+  --red-light:#f5e8e8;
+  --blue:#4a6580;
+  --blue-light:#e8eef5;
+  --yellow:#8a7040;
+  --yellow-light:#f5f0e4;
+  --border:rgba(92,79,67,0.12);
+  --border2:rgba(92,79,67,0.08);
+}
+
+html,body{
+  height:100%;
+  background:var(--cream);
+  color:var(--text);
+  font-family:'DM Sans',sans-serif;
+  font-size:14px;
+  overflow-x:hidden;
+}
+
+/* Subtle noise texture */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events:none;z-index:0;opacity:.4;
+}
+
+body>*{position:relative;z-index:1}
+
+/* ── Layout ── */
+.app{display:flex;flex-direction:column;height:100vh;gap:0}
+
+/* ── Topbar ── */
+.topbar{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 20px;
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.topbar-logo{
+  display:flex;align-items:center;gap:8px;
+  font-weight:600;font-size:.95rem;letter-spacing:-.01em;color:var(--bark);
+}
+.topbar-logo .dot-live{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--green);flex-shrink:0;
+  box-shadow:0 0 0 2px var(--green-light);
+}
+.topbar-spacer{flex:1}
+.topbar-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Pill badge */
+.pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:20px;
+  font-size:.72rem;font-weight:500;
+  border:1px solid var(--border);
+  background:var(--glass2);
+  color:var(--text2);
+  white-space:nowrap;
+}
+.pill.green{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
+.pill.blue{background:var(--blue-light);border-color:rgba(74,101,128,.2);color:var(--blue)}
+.pill.pulse{animation:softpulse 2s ease-in-out infinite}
+@keyframes softpulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* ── Icon Buttons (topbar) ── */
+.icon-btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  padding:6px 12px;border-radius:10px;
+  background:var(--glass2);
+  border:1px solid var(--border);
+  color:var(--text2);font-size:.75rem;font-weight:500;
+  cursor:pointer;transition:all .18s ease;
+  white-space:nowrap;
+}
+.icon-btn:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
+.icon-btn.danger{color:var(--red)}
+.icon-btn.danger:hover{background:var(--red-light);border-color:rgba(139,58,58,.25)}
+.icon-btn.success{color:var(--green)}
+.icon-btn.success:hover{background:var(--green-light);border-color:rgba(74,124,89,.25)}
+
+/* ── Main 2-col grid ── */
+.main{display:flex;flex:1;min-height:0;gap:0}
+
+/* ── Left sidebar ── */
+.sidebar{
+  width:320px;flex-shrink:0;
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-right:1px solid var(--border);
+  overflow-y:auto;padding:18px 16px;
+  display:flex;flex-direction:column;gap:14px;
+}
+
+/* Card */
+.card{
+  background:var(--glass2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  padding:14px 15px;
+}
+.card-title{
+  font-size:.67rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text3);margin-bottom:11px;
+}
+
+/* Field */
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:.72rem;color:var(--text3);font-weight:500}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+
+input[type=text],input[type=password],select{
+  padding:8px 11px;
+  background:rgba(247,243,238,0.9);
+  border:1px solid var(--border);
+  border-radius:10px;
+  color:var(--text);
+  font-size:.85rem;
+  font-family:'DM Sans',sans-serif;
+  width:100%;
+  transition:border-color .18s;
+  -webkit-appearance:none;appearance:none;
+}
+input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
+
+/* Slider */
+.slider-wrap{display:flex;align-items:center;gap:10px}
+.slider-wrap input[type=range]{
+  flex:1;height:3px;accent-color:var(--bark);
+  -webkit-appearance:none;appearance:none;
+  background:linear-gradient(to right, var(--bark) 0%, var(--bark) var(--pct,50%), var(--cream3) var(--pct,50%), var(--cream3) 100%);
+  border-radius:2px;cursor:pointer;
+}
+.slider-wrap input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;
+  border-radius:50%;background:#fff;
+  border:2px solid var(--bark);
+  box-shadow:0 1px 4px rgba(92,79,67,.2);
+  transition:transform .15s;
+}
+.slider-wrap input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
+.slider-val{
+  min-width:36px;text-align:right;
+  font-size:.82rem;font-weight:600;
+  color:var(--bark);font-family:'DM Mono',monospace;
+}
+
+/* Toggle */
+.toggle-wrap{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 12px;
+  background:rgba(247,243,238,0.8);
+  border:1px solid var(--border2);
+  border-radius:var(--radius-sm);
+  cursor:pointer;transition:background .18s;
+}
+.toggle-wrap:hover{background:var(--cream2)}
+.toggle-text{flex:1;font-size:.82rem;color:var(--text2)}
+.toggle-text small{display:block;font-size:.68rem;color:var(--text3);margin-top:1px}
+.toggle-sw{
+  width:38px;height:22px;border-radius:11px;
+  background:var(--cream3);border:1.5px solid var(--sand);
+  position:relative;transition:all .22s;flex-shrink:0;
+}
+.toggle-sw::after{
+  content:'';position:absolute;
+  width:14px;height:14px;border-radius:50%;
+  background:#fff;top:2px;left:2px;
+  box-shadow:0 1px 3px rgba(0,0,0,.15);
+  transition:left .22s;
+}
+.toggle-sw.on{background:var(--bark);border-color:var(--bark)}
+.toggle-sw.on::after{left:20px}
+
+/* Divider */
+.div{height:1px;background:var(--border2);margin:2px 0}
+
+/* ── Primary button ── */
+.btn-primary{
+  width:100%;padding:11px 16px;
+  background:linear-gradient(135deg,#5c4f43 0%,#7c6a58 100%);
+  border:none;border-radius:var(--radius-sm);
+  color:#f7f3ee;font-size:.9rem;font-weight:600;
+  font-family:'DM Sans',sans-serif;
+  cursor:pointer;letter-spacing:-.01em;
+  box-shadow:0 2px 12px rgba(92,79,67,.25),inset 0 1px 0 rgba(255,255,255,.12);
+  transition:all .18s ease;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+}
+.btn-primary:hover:not(:disabled){
+  background:linear-gradient(135deg,#6b5c4e 0%,#8c7a68 100%);
+  box-shadow:0 4px 20px rgba(92,79,67,.3);transform:translateY(-1px);
+}
+.btn-primary:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+/* Secondary / ghost */
+.btn-ghost{
+  width:100%;padding:9px 16px;
+  background:transparent;
+  border:1.5px solid var(--border);
+  border-radius:var(--radius-sm);
+  color:var(--text2);font-size:.85rem;font-weight:500;
+  font-family:'DM Sans',sans-serif;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  transition:all .18s;
+}
+.btn-ghost:hover{background:var(--cream2);border-color:var(--sand2);color:var(--bark)}
+.btn-ghost.red{border-color:rgba(139,58,58,.3);color:var(--red)}
+.btn-ghost.red:hover{background:var(--red-light);border-color:rgba(139,58,58,.4)}
+.btn-ghost.green2{border-color:rgba(74,124,89,.3);color:var(--green)}
+.btn-ghost.green2:hover{background:var(--green-light);border-color:rgba(74,124,89,.4)}
+
+/* Action buttons row */
+.action-row{display:flex;gap:7px}
+.action-row .btn-ghost{flex:1}
+
+/* Progress */
+.prog-wrap{display:flex;flex-direction:column;gap:5px}
+.prog-track{background:var(--cream3);border-radius:3px;height:4px;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--warm),var(--bark));border-radius:3px;width:0%;transition:width .4s ease}
+.prog-meta{display:flex;justify-content:space-between;font-size:.68rem;color:var(--text3)}
+.prog-param{font-size:.68rem;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Best stats */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.stat-cell{
+  background:rgba(247,243,238,0.9);
+  border:1px solid var(--border2);
+  border-radius:10px;padding:8px 8px;text-align:center;
+}
+.stat-v{font-size:.95rem;font-weight:700;color:var(--bark);font-family:'DM Mono',monospace;line-height:1}
+.stat-v.good{color:var(--green)}
+.stat-v.bad{color:var(--red)}
+.stat-l{font-size:.58rem;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+
+/* ── Telegram field ── */
+.tg-grid{display:flex;flex-direction:column;gap:7px}
+.tg-row{display:flex;gap:7px}
+.tg-row input{flex:1}
+.btn-tg-test{
+  padding:0 14px;
+  background:rgba(74,101,128,.1);
+  border:1px solid rgba(74,101,128,.2);
+  border-radius:10px;color:var(--blue);
+  font-size:.75rem;font-weight:500;
+  cursor:pointer;white-space:nowrap;
+  transition:all .18s;
+}
+.btn-tg-test:hover{background:var(--blue-light);border-color:rgba(74,101,128,.35)}
+
+/* ── Right panel ── */
+.right{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+
+/* Cycles strip */
+.cycles-bar{
+  padding:14px 18px 10px;
+  border-bottom:1px solid var(--border2);
+  display:flex;flex-direction:column;gap:8px;
+  flex-shrink:0;
+}
+.cycles-label{font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
+.cc-strip{display:flex;gap:8px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+.cc-strip::-webkit-scrollbar{height:3px}
+.cc-strip::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+
+.cc{
+  flex-shrink:0;width:108px;
+  background:var(--glass2);
+  border:1px solid var(--border);
+  border-radius:14px;padding:10px 11px;
+  position:relative;overflow:hidden;
+  transition:all .2s;
+}
+.cc.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
+.cc.pos{border-color:rgba(74,124,89,.3);background:rgba(232,242,235,.5)}
+.cc.neg{border-color:rgba(139,58,58,.3);background:rgba(245,232,232,.4)}
+@keyframes cc-glow{0%,100%{box-shadow:0 0 0 rgba(92,79,67,0)}50%{box-shadow:0 0 12px rgba(92,79,67,.15)}}
+.cc-n{font-size:.6rem;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.cc-eq{font-size:1.05rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1.15;color:var(--bark)}
+.cc-eq.pos{color:var(--green)}.cc-eq.neg{color:var(--red)}.cc-eq.run{color:var(--bark)}
+.cc-d{font-size:.62rem;font-weight:600;margin-top:1px}
+.cc-d.pos{color:var(--green)}.cc-d.neg{color:var(--red)}.cc-d.flat{color:var(--text3)}
+.cc-m{font-size:.6rem;color:var(--text3);margin-top:2px;line-height:1.4}
+.cc-bar{position:absolute;bottom:0;left:0;height:2.5px;background:var(--green);transition:width .5s ease;border-radius:0 2px 0 0}
+.cc-bar.neg{background:var(--red)}
+
+/* Log area */
+.log-area{flex:1;overflow-y:auto;padding:12px 18px;display:flex;flex-direction:column;gap:3px;min-height:0}
+.log-area::-webkit-scrollbar{width:4px}
+.log-area::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+
+.log-line{
+  font-size:.73rem;font-family:'DM Mono',monospace;
+  color:var(--text3);line-height:1.6;padding:1px 0;
+}
+.log-line.ok{color:var(--bark)}
+.log-line.found{color:var(--green)}
+.log-line.error{color:var(--red)}
+.log-line.warn{color:var(--yellow)}
+.log-line.info{color:var(--text3)}
+
+.activity-line{
+  font-size:.72rem;font-family:'DM Mono',monospace;
+  color:var(--text3);padding:3px 0;
+  display:flex;align-items:center;gap:6px;
+}
+.spin{animation:spin .9s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Bottom: Top-7 table ── */
+.table-panel{
+  border-top:1px solid var(--border);
+  flex-shrink:0;max-height:220px;overflow-y:auto;
+}
+.table-panel::-webkit-scrollbar{width:4px}
+.table-panel::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+.table-hdr{
+  padding:10px 18px 8px;
+  font-size:.68rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text3);background:var(--glass);
+  border-bottom:1px solid var(--border2);
+  position:sticky;top:0;z-index:2;
+  display:flex;align-items:center;justify-content:space-between;
+}
+
+table{width:100%;border-collapse:collapse;font-size:.72rem}
+thead th{
+  padding:7px 10px;text-align:left;
+  color:var(--text3);font-weight:500;
+  font-size:.67rem;
+  background:var(--cream);
+  border-bottom:1px solid var(--border2);
+  position:sticky;top:0;white-space:nowrap;
+}
+tbody td{padding:7px 10px;border-bottom:1px solid var(--border2);color:var(--text2);font-family:'DM Mono',monospace;font-size:.7rem}
+tbody tr:hover td{background:rgba(247,243,238,.7)}
+tbody tr:first-child td{color:var(--bark);font-weight:600}
+
+/* Params collapse */
+.params-toggle{
+  font-size:.7rem;color:var(--text3);cursor:pointer;
+  padding:5px 0;display:flex;align-items:center;gap:4px;
+  transition:color .15s;
+}
+.params-toggle:hover{color:var(--bark)}
+.params-box{
+  display:none;margin-top:5px;padding:9px 11px;
+  background:rgba(247,243,238,.9);border:1px solid var(--border2);
+  border-radius:10px;font-size:.68rem;font-family:'DM Mono',monospace;
+  line-height:1.9;max-height:140px;overflow-y:auto;color:var(--text2);
+}
+.params-box::-webkit-scrollbar{width:3px}
+.params-box::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+.params-box span{color:var(--text3)}
+
+/* Alert status */
+.alert-msg{font-size:.71rem;padding:4px 0;line-height:1.5;color:var(--text3)}
+.alert-msg.ok{color:var(--green)}
+.alert-msg.err{color:var(--red)}
+
+/* Save/load row */
+.save-row{display:flex;gap:7px}
+.save-row .btn-ghost{flex:1;font-size:.78rem;padding:7px 10px}
+.save-status{font-size:.68rem;color:var(--text3);padding:2px 0}
+.save-status.ok{color:var(--green)}
+.save-status.err{color:var(--red)}
+
+/* ── Details (Telegram) ── */
+details summary{
+  cursor:pointer;list-style:none;
+  display:flex;align-items:center;gap:6px;
+  font-size:.75rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;
+  color:var(--text3);padding:4px 0;
+  transition:color .15s;
+}
+details summary:hover{color:var(--bark)}
+details summary::before{content:'›';font-size:1rem;transition:transform .2s}
+details[open] summary::before{transform:rotate(90deg)}
+details summary::-webkit-details-marker{display:none}
+
+/* ── Responsive mobile ── */
+@media(max-width:700px){
+  .main{flex-direction:column}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border)}
+  .topbar{padding:8px 12px}
+  .sidebar{padding:12px}
+}
 </style></head><body>
 
-<div class="topbar">
-  <span class="dot" id="apidot"></span>
-  <h1>🧬 WickFill Optimizer <span style="font-size:.7rem;font-weight:400;color:var(--muted)">v3.0</span></h1>
-  <span id="statusBadge"></span>
-  <span style="font-size:.72rem;color:var(--muted)" id="latency">—</span>
-  <button class="btn-icon" onclick="checkApi()">⟳ API</button>
-  <button class="btn-icon" onclick="termuxUpdate()" style="background:#1a3a1a;border-color:#238636;color:#3fb950">⬆ Update</button>
-  <button class="btn-icon" onclick="renameDownload()" style="background:#1a2a3a;border-color:#1a6a9a;color:#58a6ff" title="Переименовать screener_pro (1).py → screener_pro.py">✏ Fix</button>
-  <button class="btn-icon" onclick="deleteDownload()" style="background:#2a1a1a;border-color:#8b1a1a;color:#e05a5a" title="Удалить screener_pro.py из папки Downloads">🗑</button>
-</div>
+<div class="app">
 
+<!-- ── Topbar ── -->
+<header class="topbar">
+  <div class="topbar-logo">
+    <span class="dot-live" id="apidot2"></span>
+    WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.0</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-meta">
+    <span class="pill" id="latencyPill">— мс</span>
+    <span id="statusBadge2"></span>
+    <span id="swBadge"></span>
+    <button class="icon-btn" onclick="checkApi()">⟳ API</button>
+    <button class="icon-btn success" onclick="termuxUpdate()">↑ Update</button>
+    <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
+    <button class="icon-btn danger" onclick="deleteDownload()">✕</button>
+  </div>
+</header>
+
+<!-- ── Main ── -->
 <div class="main">
-<div class="panel">
-  <div class="panel-title">⚙️ Настройки</div>
 
-  <div class="field-row">
-    <div class="field"><label>Символ</label><input type="text" id="wf_symbol" value="BTC_USDT"></div>
-    <div class="field"><label>Таймфрейм</label>
-      <select id="wf_tf_sel">
-        <option value="5m">5m</option><option value="15m" selected>15m</option>
-        <option value="30m">30m</option><option value="1h">1h</option>
-        <option value="4h">4h</option><option value="1d">1d</option>
-      </select>
-    </div>
-  </div>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
 
-  <div class="field">
-    <label>История: <b id="wfDaysV" style="color:var(--blue2)">3</b> дней</label>
-    <div class="slider-row">
-      <input type="range" id="wf_days" min="3" max="90" value="3" step="1" oninput="syncSlider('wf_days','wfDaysV','wfDaysV2')" onchange="syncSlider('wf_days','wfDaysV','wfDaysV2')">
-      <span class="slider-val" id="wfDaysV2">3</span>
-    </div>
-  </div>
+    <!-- Settings card -->
+    <div class="card">
+      <div class="card-title">Настройки</div>
 
-  <div class="field">
-    <label>Риск на сделку: <b id="wfRiskV" style="color:var(--purple)">20</b>%</label>
-    <div class="slider-row">
-      <input type="range" id="wf_risk" min="1" max="100" value="20" step="1" oninput="syncSlider('wf_risk','wfRiskV','wfRiskV2')" onchange="syncSlider('wf_risk','wfRiskV','wfRiskV2')">
-      <span class="slider-val" id="wfRiskV2">20%</span>
-    </div>
-  </div>
-
-  <div class="div"></div>
-
-  <!-- ∞ Бесконечный режим -->
-  <div class="toggle-row" onclick="toggleInfinite()" id="infiniteRow">
-    <span class="toggle-label">∞ Бесконечный режим <span style="color:var(--muted);font-size:.68rem">(рестарт без остановки)</span></span>
-    <div class="toggle-switch on" id="infiniteSwitch"></div>
-  </div>
-
-  <div class="div"></div>
-
-  <div class="div"></div>
-
-  <!-- Progress -->
-  <div class="prog-wrap" id="progWrap">
-    <div style="display:flex;justify-content:space-between">
-      <span style="font-size:.72rem;color:var(--blue2)" id="progLabel">Запуск...</span>
-      <span style="font-size:.72rem;color:var(--muted)" id="progTime">0с</span>
-    </div>
-    <div class="prog-track"><div class="prog-bar" id="progBar"></div></div>
-    <div style="font-size:.68rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="progParam"></div>
-  </div>
-
-  <button class="btn-run" id="wfBtn" onclick="startOpt()">🔍 Запустить оптимизацию</button>
-  <button class="btn-stop" id="wfStopBtn" onclick="stopOpt()">⏹ Остановить</button>
-<button class="btn-sw-stop" id="swStopBtn" onclick="stopSW()">⏹ Остановить скользящее окно</button>
-  <button class="btn-chart" id="chartBtn" onclick="openChart()">📊 Открыть график</button>
-
-  <div class="div"></div>
-
-  <!-- Save / Load -->
-  <div style="display:flex;gap:5px">
-    <button class="btn-icon" style="flex:1;padding:7px 0;font-size:.75rem" onclick="saveResult()">💾 Сохранить результат</button>
-    <button class="btn-icon" style="flex:1;padding:7px 0;font-size:.75rem" onclick="loadResult()">📂 Загрузить результат</button>
-  </div>
-  <div id="saveLoadStatus" style="font-size:.68rem;margin-top:4px;display:none"></div>
-
-  <div class="div"></div>
-
-  <!-- Best result -->
-  <div id="bestSection" style="display:none">
-    <div class="panel-title" style="margin-bottom:6px">🏆 Лучший результат</div>
-    <div class="best-grid" id="bestGrid"></div>
-    <div id="bestParamsWrap" style="margin-top:8px;display:none">
-      <div style="font-size:.68rem;color:var(--muted);margin-bottom:4px;cursor:pointer" onclick="toggleParams()">▶ Параметры стратегии</div>
-      <div id="bestParams" style="display:none;font-size:.66rem;font-family:monospace;background:var(--bg);padding:8px;border-radius:6px;border:1px solid var(--border);line-height:1.8;max-height:160px;overflow-y:auto"></div>
-    </div>
-  </div>
-
-  <div class="div"></div>
-
-  <!-- Email alerts -->
-  <details>
-    <summary style="cursor:pointer;font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;list-style:none">🔔 Алерты в Telegram</summary>
-    <div style="margin-top:10px">
-      <div class="alert-field"><label>Токен бота</label><input type="text" id="al_tg_token" placeholder="123456789:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA"></div>
-      <div class="alert-field"><label>Ваш Chat ID</label><input type="text" id="al_tg_chat" placeholder="123456789" value="181970023"></div>
-      <div style="margin-top:8px">
-        <button class="btn-run" id="testMailBtn" onclick="sendTestEmail()" style="width:100%;padding:6px 0;font-size:.75rem">📨 Отправить тестовое сообщение</button>
+      <div class="field-row" style="margin-bottom:10px">
+        <div class="field">
+          <label>Символ</label>
+          <input type="text" id="wf_symbol" value="BTC_USDT">
+        </div>
+        <div class="field">
+          <label>Таймфрейм</label>
+          <select id="wf_tf_sel">
+            <option value="5m">5m</option>
+            <option value="15m" selected>15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
       </div>
-      <div id="alertStatusMsg" style="font-size:.7rem;color:var(--muted);margin-top:4px;line-height:1.5"></div>
-    </div>
-  </details>
 
-</div><!-- /panel -->
+      <div class="field" style="margin-bottom:10px">
+        <label>История · <b id="wfDV" style="color:var(--bark)">3</b> дней</label>
+        <div class="slider-wrap">
+          <input type="range" id="wf_days" min="3" max="90" value="3" step="1"
+            oninput="syncSlider(this,'wfDV','')" onchange="syncSlider(this,'wfDV','')">
+          <span class="slider-val" id="wfDV2">3</span>
+        </div>
+      </div>
 
-<div class="right">
-  <div class="logwrap">
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <span class="panel-title">📋 Лог</span>
-      <div style="display:flex;gap:6px">
-        <span id="swStatus" style="font-size:.7rem;color:var(--muted)"></span>
-        <button class="btn-icon" onclick="_resetLog()">очистить</button>
+      <div class="field">
+        <label>Риск на сделку · <b id="wfRV" style="color:var(--bark)">20</b>%</label>
+        <div class="slider-wrap">
+          <input type="range" id="wf_risk" min="1" max="100" value="20" step="1"
+            oninput="syncSlider(this,'wfRV','%')" onchange="syncSlider(this,'wfRV','%')">
+          <span class="slider-val" id="wfRV2">20%</span>
+        </div>
       </div>
     </div>
-    <div id="wfLog"><div class="cc-strip" id="ccStrip"></div></div>
-  </div>
-  <div class="top20-wrap" id="top20Wrap" style="display:none">
-    <div class="top20-hdr">📊 Топ-7 комбинаций <span style="color:var(--muted);font-weight:400;font-size:.7rem;margin-left:auto" id="top20Count"></span></div>
-    <div style="overflow-x:auto">
-      <table id="top20Table">
-        <thead><tr><th>#</th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th></tr></thead>
+
+    <!-- Mode toggle -->
+    <div class="toggle-wrap" onclick="toggleInfinite()" id="infiniteRow">
+      <div class="toggle-text">
+        ∞ Бесконечный режим
+        <small>рестарт без остановки</small>
+      </div>
+      <div class="toggle-sw on" id="infiniteSwitch"></div>
+    </div>
+
+    <!-- Progress (hidden by default) -->
+    <div class="prog-wrap" id="progWrap" style="display:none">
+      <div class="prog-meta">
+        <span id="progLabel" style="color:var(--bark);font-size:.72rem;font-weight:500">Запуск...</span>
+        <span id="progTime">0с</span>
+      </div>
+      <div class="prog-track"><div class="prog-fill" id="progBar"></div></div>
+      <div class="prog-param" id="progParam"></div>
+    </div>
+
+    <!-- Main action buttons -->
+    <button class="btn-primary" id="wfBtn" onclick="startOpt()">
+      <span>🔍</span> Запустить оптимизацию
+    </button>
+
+    <div class="action-row">
+      <button class="btn-ghost red" id="wfStopBtn" style="display:none" onclick="stopOpt()">
+        ⏹ Стоп
+      </button>
+      <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
+        ⏹ SW
+      </button>
+      <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="openChart()">
+        📊 График
+      </button>
+    </div>
+
+    <!-- Save / load -->
+    <div class="save-row">
+      <button class="btn-ghost" onclick="saveResult()">💾 Сохранить</button>
+      <button class="btn-ghost" onclick="loadResult()">📂 Загрузить</button>
+    </div>
+    <div class="save-status" id="saveLoadStatus" style="display:none"></div>
+
+    <!-- Best result -->
+    <div id="bestSection" style="display:none">
+      <div class="div"></div>
+      <div class="card-title" style="margin-bottom:8px">Лучший результат</div>
+      <div class="stats-grid" id="bestGrid"></div>
+      <div id="bestParamsWrap" style="display:none;margin-top:8px">
+        <div class="params-toggle" onclick="toggleParams()">› Параметры стратегии</div>
+        <div class="params-box" id="bestParams"></div>
+      </div>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- Telegram alerts -->
+    <details>
+      <summary>🔔 Telegram алерты</summary>
+      <div style="margin-top:10px" class="tg-grid">
+        <div class="field">
+          <label>Токен бота</label>
+          <input type="text" id="al_tg_token" placeholder="123456:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA">
+        </div>
+        <div class="field">
+          <label>Chat ID</label>
+          <div class="tg-row">
+            <input type="text" id="al_tg_chat" placeholder="123456789" value="181970023">
+            <button class="btn-tg-test" id="testMailBtn" onclick="sendTestEmail()">Тест</button>
+          </div>
+        </div>
+        <div class="alert-msg" id="alertStatusMsg"></div>
+      </div>
+    </details>
+
+  </aside>
+
+  <!-- ── Right panel ── -->
+  <div class="right">
+
+    <!-- Cycle cards -->
+    <div class="cycles-bar">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span class="cycles-label">Циклы</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="swStatus2" style="font-size:.68rem;color:var(--text3)"></span>
+          <button class="icon-btn" style="font-size:.7rem;padding:4px 9px" onclick="_resetLog()">очистить</button>
+        </div>
+      </div>
+      <div class="cc-strip" id="ccStrip"></div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-area" id="wfLog"></div>
+
+    <!-- Top-7 table -->
+    <div class="table-panel" id="top20Wrap" style="display:none">
+      <div class="table-hdr">
+        Топ-7 комбинаций
+        <span id="top20Count" style="font-weight:400;color:var(--text3)"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Депозит</th><th>WR%</th>
+            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
+          </tr>
+        </thead>
         <tbody id="top20Body"></tbody>
       </table>
     </div>
-  </div>
-</div>
-</div>
+
+  </div><!-- /right -->
+</div><!-- /main -->
+</div><!-- /app -->
 
 <script>
 let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=0;
 let infiniteMode=true;
 
-function syncSlider(id,v1,v2){
-  const el=document.getElementById(id);
-  if(!el) return;
+/* ── Slider sync ── */
+function syncSlider(el, vId, suffix){
   const v=el.value;
-  const e1=document.getElementById(v1); if(e1) e1.textContent=v;
-  const e2=document.getElementById(v2); if(e2) e2.textContent=(id==='wf_risk'?v+'%':v);
+  const max=parseFloat(el.max), min=parseFloat(el.min);
+  const pct=((v-min)/(max-min)*100)+'%';
+  el.style.setProperty('--pct',pct);
+  const e1=document.getElementById(vId); if(e1) e1.textContent=v;
+  const id2=vId+'2'; const e2=document.getElementById(id2);
+  if(e2) e2.textContent=v+(suffix||'');
 }
+
+/* Init sliders */
+document.addEventListener('DOMContentLoaded',()=>{
+  ['wf_days','wf_risk'].forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    const max=parseFloat(el.max),min=parseFloat(el.min),v=parseFloat(el.value);
+    el.style.setProperty('--pct',((v-min)/(max-min)*100)+'%');
+  });
+});
 
 function toggleInfinite(){
   infiniteMode=!infiniteMode;
   document.getElementById('infiniteSwitch').classList.toggle('on',infiniteMode);
 }
 
+/* ── API check ── */
 function checkApi(){
-  if(document.hidden)return;
-  const dot=document.getElementById('apidot'),lat=document.getElementById('latency');
-  dot.className='dot';lat.textContent='...';
+  const pill=document.getElementById('latencyPill');
+  pill.textContent='...';pill.className='pill';
   fetch('/ping').then(r=>r.json()).then(d=>{
-    if(d.ok){dot.className='dot ok';lat.textContent=d.ms+'мс';}
-    else{dot.className='dot err';lat.textContent=d.error||'ошибка';}
-  }).catch(()=>{dot.className='dot err';lat.textContent='нет связи';});
+    if(d.ok){pill.textContent=d.ms+'мс';pill.className='pill green';}
+    else{pill.textContent=d.error||'err';pill.className='pill';}
+  }).catch(()=>{pill.textContent='офлайн';pill.className='pill';});
 }
 checkApi();setInterval(checkApi,60000);
 
-
-// SMTP removed, using Telegram alerts
-
 function getAlertCfg(){
-  const token=document.getElementById('al_tg_token').value.trim();
-  const chat=document.getElementById('al_tg_chat').value.trim();
-  if(!token||!chat) return null;
-  return {tg_token:token,tg_chat_id:chat};
+  const t=document.getElementById('al_tg_token').value.trim();
+  const c=document.getElementById('al_tg_chat').value.trim();
+  return (t&&c)?{tg_token:t,tg_chat_id:c}:null;
 }
 
 function sendTestEmail(){
   const cfg=getAlertCfg();
-  const statusEl=document.getElementById('alertStatusMsg');
+  const st=document.getElementById('alertStatusMsg');
   const btn=document.getElementById('testMailBtn');
-  if(!cfg){
-    statusEl.style.color='var(--red)';
-    statusEl.textContent='⚠️ Заполните токен бота и Chat ID';
-    return;
-  }
-  btn.disabled=true; btn.textContent='⏳ Отправка...';
-  statusEl.style.color='var(--muted)'; statusEl.textContent='';
+  if(!cfg){st.className='alert-msg err';st.textContent='Заполните токен и Chat ID';return;}
+  btn.disabled=true;btn.textContent='...';
   fetch('/test_email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_cfg:cfg})})
     .then(r=>r.json()).then(d=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
-      if(d.ok){statusEl.style.color='#4caf50';statusEl.textContent='✅ Сообщение отправлено в Telegram!';}
-      else{statusEl.style.color='var(--red)';statusEl.textContent='❌ Ошибка: '+(d.msg||'неизвестно');}
-    }).catch(e=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
-      statusEl.style.color='var(--red)'; statusEl.textContent='❌ Ошибка сети: '+e;
-    });
+      btn.disabled=false;btn.textContent='Тест';
+      if(d.ok){st.className='alert-msg ok';st.textContent='✓ Отправлено!';}
+      else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
+    }).catch(e=>{btn.disabled=false;btn.textContent='Тест';st.className='alert-msg err';st.textContent='✕ '+e;});
 }
 
-function _slStatus(msg, ok){
-  const els=[document.getElementById('saveLoadStatus')];
-  els.forEach(el=>{if(!el)return;el.style.display='block';el.style.color=ok?'#4caf50':'var(--red)';el.textContent=msg;});
+/* ── Save / Load ── */
+function _slStatus(msg,ok){
+  const el=document.getElementById('saveLoadStatus');
+  if(!el)return;el.style.display='block';
+  el.className='save-status '+(ok?'ok':'err');el.textContent=msg;
 }
 function saveResult(){
-  const best=window._lastBest; const top20=window._lastTop20;
+  const best=window._lastBest,top20=window._lastTop20;
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
-  if(!best){_slStatus('❌ Нет результата для сохранения',false);return;}
-  // Скачиваем JSON прямо на устройство
+  if(!best){_slStatus('Нет результата',false);return;}
   const data={best,top20:top20||[],symbol:sym,tf,saved_at:new Date().toLocaleString()};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download=`wickfill_${sym.replace('/','_')}_${tf}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  _slStatus('✅ Файл скачан на устройство',true);
+  const a=document.createElement('a');a.href=url;a.download=`wickfill_${sym}_${tf}.json`;a.click();
+  URL.revokeObjectURL(url);_slStatus('✓ Скачан файл',true);
 }
 function loadResult(){
-  const input=document.createElement('input');
-  input.type='file';
-  input.accept='.json';
+  const input=document.createElement('input');input.type='file';input.accept='.json';
   input.onchange=function(e){
-    const file=e.target.files[0];
-    if(!file)return;
+    const file=e.target.files[0];if(!file)return;
     const reader=new FileReader();
     reader.onload=function(ev){
       try{
         const d=JSON.parse(ev.target.result);
-        if(!d.best){_slStatus('❌ Неверный формат файла',false);return;}
+        if(!d.best){_slStatus('Неверный формат',false);return;}
         window._loadedSeed={best:d.best,top20:d.top20};
-        if(d.best) renderBest(d.best, d.top20||[]);
-        const eq=d.best?.equity?.toFixed(2)||'?';
-        const wr=d.best?.winrate?.toFixed(1)||'?';
-        _slStatus(`✅ Загружено: $${eq} WR ${wr}% | Запустите оптимизацию — начнёт с этой точки`,true);
-      }catch(err){_slStatus('❌ Ошибка файла: '+err,false);}
-    };
-    reader.readAsText(file);
-  };
-  input.click();
+        if(d.best) renderBest(d.best,d.top20||[]);
+        _slStatus(`✓ $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}%`,true);
+      }catch(err){_slStatus('Ошибка: '+err,false);}
+    };reader.readAsText(file);
+  };input.click();
 }
 
+/* ── Start / Stop ── */
 function startOpt(){
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
@@ -1933,31 +2313,30 @@ function startOpt(){
   const alertCfg=getAlertCfg();
   const seed=window._loadedSeed||null;
   const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,infinite:infiniteMode,alert_cfg:alertCfg,seed});
-  fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body}).then(r=>r.json()).then(d=>{
-    if(!d.ok){logLine('[--] '+(d.msg||'Ошибка'),'error');return;}
-    lastLogCount=0;chartOpened=false;lastChartTs=0;
-    _resetLog();
-    document.getElementById('bestSection').style.display='none';
-    document.getElementById('bestGrid').innerHTML='';
-    document.getElementById('bestParamsWrap').style.display='none';
-    document.getElementById('top20Wrap').style.display='none';
-    document.getElementById('top20Body').innerHTML='';
-    document.getElementById('progBar').style.width='0%';
-    document.getElementById('progParam').textContent='';
-    document.getElementById('chartBtn').style.display='none';
-    document.getElementById('swStopBtn').style.display='none';
-    document.getElementById('wfBtn').disabled=true;
-    document.getElementById('wfStopBtn').style.display='block';
-    document.getElementById('progWrap').style.display='flex';
-    startTs=Date.now();
-    function scheduleNext(){
-      const interval=document.hidden?5000:1500;
-      polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
-    }
-    scheduleNext();
-    if(alertCfg) document.getElementById('alertStatusMsg').innerHTML='<span style="color:var(--green2)">✅ Алерты настроены: Telegram chat '+alertCfg.tg_chat_id+'</span>';
-    else document.getElementById('alertStatusMsg').textContent='Email не настроен — алерты отключены';
-  }).catch(e=>logLine('[!!] '+e,'error'));
+  fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
+      lastLogCount=0;chartOpened=false;lastChartTs=0;
+      _resetLog();
+      document.getElementById('bestSection').style.display='none';
+      document.getElementById('top20Wrap').style.display='none';
+      document.getElementById('progBar').style.width='0%';
+      document.getElementById('progParam').textContent='';
+      document.getElementById('chartBtn').style.display='none';
+      document.getElementById('swStopBtn').style.display='none';
+      document.getElementById('wfBtn').disabled=true;
+      document.getElementById('wfStopBtn').style.display='flex';
+      document.getElementById('progWrap').style.display='flex';
+      startTs=Date.now();
+      function scheduleNext(){
+        const interval=document.hidden?5000:1500;
+        polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
+      }
+      scheduleNext();
+      const st=document.getElementById('alertStatusMsg');
+      if(alertCfg){st.className='alert-msg ok';st.textContent='✓ Алерты: chat '+alertCfg.tg_chat_id;}
+      else{st.className='alert-msg';st.textContent='Алерты не настроены';}
+    }).catch(e=>addLogLine('[!!] '+e,'error'));
 }
 
 function stopOpt(){
@@ -1965,277 +2344,206 @@ function stopOpt(){
   if(polling){clearTimeout(polling);polling=null;}
   document.getElementById('wfBtn').disabled=false;
   document.getElementById('wfStopBtn').style.display='none';
-  document.getElementById('swStopBtn').style.display='block';
-  logLine('⏹ Оптимизатор остановлен. Скользящее окно продолжает работать.','warn');
+  document.getElementById('swStopBtn').style.display='flex';
+  addLogLine('⏹ Остановлен','warn');
 }
 function stopSW(){
   fetch('/sw_stop').then(()=>{});
   document.getElementById('swStopBtn').style.display='none';
-  logLine('⏹ Скользящее окно остановлено','warn');
+  addLogLine('⏹ Скользящее окно остановлено','warn');
 }
-
 function openChart(){window.open('/chart','_blank');}
 
+/* ── Poll ── */
 function poll(){
   fetch('/opt_status').then(r=>r.json()).then(d=>{
     const elapsed=Math.round((Date.now()-startTs)/1000);
     document.getElementById('progTime').textContent=elapsed+'с';
     const pct=d.total>0?Math.round(d.progress/d.total*100):0;
     document.getElementById('progBar').style.width=pct+'%';
-    const cycleStr=d.infinite?` | Цикл #${d.cycle}`:'';
-    document.getElementById('progLabel').textContent=`Круг #${d.pass_num} · ${d.progress}/${d.total} (${pct}%)${cycleStr}`;
+    const cycleStr=d.infinite?` · Цикл #${d.cycle}`:'';
+    document.getElementById('progLabel').textContent=`Круг #${d.pass_num} · ${pct}%${cycleStr}`;
     if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
 
-    // Статус скользящего окна
-    const swEl=document.getElementById('swStatus');
+    // SW status
+    const sw2=document.getElementById('swStatus2');
     if(d.sw_running){
       const upd=d.sw_last_update?new Date(d.sw_last_update*1000).toLocaleTimeString('ru'):'—';
-      swEl.innerHTML=`<span style="color:var(--green2)">🔄 SW: ${d.sw_candle_count} св. · ${upd}</span>`;
-    } else swEl.textContent='';
+      sw2.textContent=`SW: ${d.sw_candle_count} св · ${upd}`;
+      sw2.style.color='var(--green)';
+    } else {sw2.textContent='';sw2.style.color='';}
 
-    // Badge
-    const badge=document.getElementById('statusBadge');
-    if(d.running&&d.infinite) badge.innerHTML='<span class="inf-badge">∞ БЕСКОНЕЧНЫЙ</span>';
-    else if(d.sw_running) badge.innerHTML='<span class="sw-badge">🔄 SW активен</span>';
+    // Badges
+    const badge=document.getElementById('statusBadge2');
+    const swb=document.getElementById('swBadge');
+    if(d.running&&d.infinite) badge.innerHTML='<span class="pill blue pulse">∞ бесконечный</span>';
     else badge.innerHTML='';
-    if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='block';
+    if(d.sw_running) swb.innerHTML='<span class="pill green">🔄 SW</span>';
+    else swb.innerHTML='';
+    if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='flex';
     if(!d.sw_running) document.getElementById('swStopBtn').style.display='none';
 
     const logs=d.logs||[];
-    if(logs.length>lastLogCount){for(let i=lastLogCount;i<logs.length;i++)logLine(logs[i].msg,logs[i].level);lastLogCount=logs.length;}
-
+    if(logs.length>lastLogCount){
+      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
+      lastLogCount=logs.length;
+    }
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
     if(d.top20&&d.top20.length) renderTop20(d.top20);
-
-    // Показываем кнопку графика как только chart_path есть
     if(d.chart_path){
-      document.getElementById('chartBtn').style.display='block';
+      document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){lastChartTs=d.chart_updated_at;window.open('/chart','_blank');}
     }
-
-    // Alert info
-    if(d.alert_sent!==undefined){
-      const msg=document.getElementById('alertStatusMsg');
-      if(d.alert_sent>0) msg.innerHTML=`<span style="color:var(--green2)">✅ Отправлено сигналов: ${d.alert_sent}</span>`;
-    }
-
     if(d.done&&!d.running&&!d.infinite){
       clearTimeout(polling);polling=null;
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
-      document.getElementById('progLabel').textContent=`✅ Готово за ${d.elapsed}с`;
+      document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
     }
   }).catch(()=>{});
 }
 
-/* ── Cycle-cards log renderer ───────────────────────────────── */
-let _cc = {};          // cycle cards map
-let _ccCur = null;     // current running card el
-let _prevEq = null;    // last finished cycle equity (for delta)
-let _startBuf = null;  // best {eq,wr,dd} seen during current cycle's starts
+/* ── Cycle cards ── */
+let _cc={}, _ccPrevEq=null, _startBuf=null;
 
 function _resetLog(){
-  document.getElementById('wfLog').innerHTML='<div class="cc-strip" id="ccStrip"></div>';
-  lastLogCount=0;
-  _cc={}; _prevEq=null; _startBuf=null;
+  document.getElementById('ccStrip').innerHTML='';
+  document.getElementById('wfLog').innerHTML='';
+  lastLogCount=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
-function _strip(){ return document.getElementById('ccStrip'); }
 
-// ── Activity spinner (below the strip) ───────────────────────
+function addLogLine(msg,level){
+  const el=document.createElement('div');
+  el.className='log-line '+(level||'info');
+  el.textContent=msg;
+  document.getElementById('wfLog').appendChild(el);
+  el.scrollIntoView({block:'nearest'});
+}
+
 function _setActivity(text){
   let el=document.getElementById('ccActivity');
-  if(!el){ el=document.createElement('div'); el.id='ccActivity'; el.className='cc-activity'; document.getElementById('wfLog').appendChild(el); }
-  el.innerHTML=`<span class="spin">⟳</span><span>${text}</span>`;
+  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';document.getElementById('wfLog').appendChild(el);}
+  el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
+  el.scrollIntoView({block:'nearest'});
 }
-function _clearActivity(){ const el=document.getElementById('ccActivity'); if(el) el.remove(); }
+function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
-function _statusLine(text, cls){
-  _clearActivity();
-  const el=document.createElement('div'); el.className='cc-status '+(cls||'');
-  el.textContent=text; document.getElementById('wfLog').appendChild(el);
-}
-
-// ── Create or update a cycle card ────────────────────────────
-function _cycleCard(n, eq, wr, dd, elapsed, done){
-  const isPos = eq > 100;
-  const delta = (_prevEq !== null) ? (eq - _prevEq) : null;
-
-  // bar width = % gain relative to best ever seen
-  const allEqs = Object.values(_cc).map(c=>parseFloat(c.dataset.eq||'100'));
+function _cycleCard(n,eq,wr,dd,elapsed,done){
+  const isPos=eq>100;
+  const delta=(_ccPrevEq!==null)?(eq-_ccPrevEq):null;
+  const allEqs=Object.values(_cc).map(c=>parseFloat(c.dataset.eq||'100'));
   allEqs.push(eq);
-  const maxEq = Math.max(...allEqs);
-  const minEq = Math.min(100, Math.min(...allEqs));
-  const range = maxEq - minEq || 1;
-  const barPct = Math.min(100, Math.max(3, ((eq - minEq) / range) * 100));
-
-  let card = _cc[n];
+  const maxEq=Math.max(...allEqs),minEq=Math.min(100,...allEqs),range=maxEq-minEq||1;
+  const barPct=Math.min(100,Math.max(3,((eq-minEq)/range)*100));
+  let card=_cc[n];
   if(!card){
-    card = document.createElement('div');
-    card.dataset.n = n;
-    _cc[n] = card;
-    _strip().appendChild(card);
+    card=document.createElement('div');card.dataset.n=n;
+    _cc[n]=card;document.getElementById('ccStrip').appendChild(card);
   }
-  card.dataset.eq = eq;
-  card.className = 'cc ' + (done ? (isPos?'pos':'neg') : 'running');
-
-  const dStr = delta===null ? '' : (delta>=0?'↑ +':'↓ ')+Math.abs(delta).toFixed(0)+'$';
-  const dCls = delta===null?'flat':delta>=0?'pos':'neg';
-  const eqCls = done ? (isPos?'pos':'neg') : 'run';
-
-  card.innerHTML =
-    `<div class="cc-num">Цикл ${n}</div>`+
+  card.dataset.eq=eq;
+  card.className='cc '+(done?(isPos?'pos':'neg'):'running');
+  const dStr=delta===null?'':(delta>=0?'↑ +':'↓ ')+Math.abs(delta).toFixed(0)+'$';
+  const dCls=delta===null?'flat':delta>=0?'pos':'neg';
+  const eqCls=done?(isPos?'pos':'neg'):'run';
+  card.innerHTML=
+    `<div class="cc-n">Цикл ${n}</div>`+
     `<div class="cc-eq ${eqCls}">$${eq.toFixed(0)}</div>`+
-    (delta!==null ? `<div class="cc-delta ${dCls}">${dStr}</div>` : `<div class="cc-delta flat">—</div>`)+
-    `<div class="cc-meta">WR ${wr.toFixed(0)}%`+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
-    (elapsed ? `<div class="cc-meta">${elapsed}с</div>` : '')+
+    (delta!==null?`<div class="cc-d ${dCls}">${dStr}</div>`:`<div class="cc-d flat">—</div>`)+
+    `<div class="cc-m">WR ${wr.toFixed(0)}%`+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
+    (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
     `<div class="cc-bar ${isPos?'':'neg'}" style="width:${barPct}%"></div>`;
-
-  if(done) _prevEq = eq;
+  if(done) _ccPrevEq=eq;
 }
 
-function logLine(msg, level){
-  if(!msg || !msg.trim()) return;
-
-  // ── System init lines (shown once, plain) ─────────────────
+function logLine(msg,level){
+  if(!msg||!msg.trim()) return;
   if(/WickFill Optimizer|загрузка свечей|загружено \d+/i.test(msg)){
-    _statusLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''));
-    return;
+    addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
   }
-
-  // ── Cycle start banner ────────────────────────────────────
-  const cycleM = msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
-  if(cycleM){
-    _startBuf = null;
-    const n = parseInt(cycleM[1]);
-    _cycleCard(n, 100, 0, 0, null, false);
-    _setActivity(`Цикл ${n} — идёт оптимизация...`);
-    return;
-  }
-
-  // ── Start within cycle (show in spinner only) ─────────────
-  const startM = msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
-  if(startM){ _setActivity(`${startM[1].trim()} — перебор...`); return; }
-
-  // ── Pass (Круг) ───────────────────────────────────────────
-  const passM = msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
-  if(passM){ _setActivity(`Круг #${passM[1]} · $${passM[2]}`); return; }
-
-  // ── Param improvement — track live best and update card ───
-  const foundM = msg.match(/✅\s*.+?→\s*\$([\d.]+)\s*\(\+?([-\d.]+)\$\)\s*\|\s*WR\s*([\d.]+)%\s*\|\s*Сд\s*(\d+)\s*\|\s*DD\s*([\d.]+)%/);
+  const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
+  if(cycleM){_startBuf=null;_cycleCard(parseInt(cycleM[1]),100,0,0,null,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
+  const startM=msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
+  if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}
+  const passM=msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
+  if(passM){_setActivity('Круг #'+passM[1]+' · $'+passM[2]);return;}
+  const foundM=msg.match(/✅\s*.+?→\s*\$([\d.]+)\s*\(\+?([-\d.]+)\$\)\s*\|\s*WR\s*([\d.]+)%\s*\|\s*Сд\s*(\d+)\s*\|\s*DD\s*([\d.]+)%/);
   if(foundM){
-    const eq=parseFloat(foundM[1]), wr=parseFloat(foundM[3]), dd=parseFloat(foundM[5]);
-    if(!_startBuf || eq > _startBuf.eq) _startBuf={eq,wr,dd};
-    // live-update the running card
-    const ns = Object.keys(_cc);
-    if(ns.length){
-      const lastN = parseInt(ns[ns.length-1]);
-      if(!_cc[lastN].classList.contains('pos') && !_cc[lastN].classList.contains('neg'))
-        _cycleCard(lastN, eq, wr, dd, null, false);
-    }
+    const eq=parseFloat(foundM[1]),wr=parseFloat(foundM[3]),dd=parseFloat(foundM[5]);
+    if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};
+    const ns=Object.keys(_cc);
+    if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false);}
     return;
   }
-
-  // ── Start result ──────────────────────────────────────────
-  const endM = msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
-  if(endM){
-    const eq=parseFloat(endM[1]), wr=parseFloat(endM[2]), dd=parseFloat(endM[3]);
-    if(!_startBuf || eq > _startBuf.eq) _startBuf={eq,wr,dd};
-    return;
-  }
-
-  // ── Cycle done ────────────────────────────────────────────
-  const doneM = msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*🏆\s*\$([\d.]+)\s+WR\s+([\d.]+)%/);
+  const endM=msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
+  if(endM){const eq=parseFloat(endM[1]),wr=parseFloat(endM[2]),dd=parseFloat(endM[3]);if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};return;}
+  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*🏆\s*\$([\d.]+)\s+WR\s+([\d.]+)%/);
   if(doneM){
     _clearActivity();
-    const n=parseInt(doneM[1]), elapsed=doneM[2], eq=parseFloat(doneM[3]), wr=parseFloat(doneM[4]);
-    _cycleCard(n, eq, wr, _startBuf?.dd||0, elapsed, true);
-    _startBuf = null;
-    return;
+    _cycleCard(parseInt(doneM[1]),parseFloat(doneM[3]),parseFloat(doneM[4]),_startBuf?.dd||0,doneM[2],true);
+    _startBuf=null;return;
   }
-
-  // ── Stop ──────────────────────────────────────────────────
-  if(/остановлен|остановлено/i.test(msg)){
-    _clearActivity();
-    _statusLine('⏹ '+msg.replace(/^[⏹\s]+/,''), 'warn');
-    return;
-  }
-
-  // ── Errors ────────────────────────────────────────────────
-  if(level==='error') _statusLine(msg, 'err');
+  if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn');return;}
+  if(level==='error') addLogLine(msg,'error');
 }
 
 function renderBest(b){
   document.getElementById('bestSection').style.display='block';
   const eq=b.equity??100,wr=b.winrate??0,dd=b.max_dd??0,pf=b.profit_factor??0,tr=b.trades??0;
   const stats=[
-    {val:'$'+eq.toFixed(2),lbl:'Депозит',cls:eq>100?'good':eq<100?'bad':''},
-    {val:wr.toFixed(1)+'%',lbl:'Winrate',cls:wr>=55?'good':wr<45?'bad':''},
-    {val:tr,lbl:'Сделок',cls:''},
-    {val:dd.toFixed(1)+'%',lbl:'Max DD',cls:dd<15?'good':dd>30?'bad':''},
-    {val:pf===999?'∞':pf.toFixed(2),lbl:'Profit F',cls:pf>=1.5?'good':'bad'},
-    {val:(b.params?.sl_pct??'—')+'%',lbl:'SL',cls:''},
-    {val:(b.params?.tp_pct??'—')+'%',lbl:'TP',cls:''},
-    {val:b.params?.rsi_len??'—',lbl:'RSI len',cls:''},
+    {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>100?'good':eq<100?'bad':''},
+    {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=55?'good':wr<45?'bad':''},
+    {v:tr,l:'Сделок',c:''},
+    {v:dd.toFixed(1)+'%',l:'Max DD',c:dd<15?'good':dd>30?'bad':''},
+    {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.5?'good':'bad'},
+    {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
+    {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
+    {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
-  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat ${s.cls}"><div class="stat-val">${s.val}</div><div class="stat-lbl">${s.lbl}</div></div>`).join('');
+  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell"><div class="stat-v ${s.c}">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
   if(b.params){
     document.getElementById('bestParamsWrap').style.display='block';
     const lines=Object.entries(b.params).map(([k,v])=>{
-      let vs=typeof v==='boolean'?(v?'да':'нет'):typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):v;
-      return `<span style="color:var(--muted)">${k}:</span> <b>${vs}</b>`;
+      const vs=typeof v==='boolean'?(v?'да':'нет'):typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):v;
+      return `<span>${k}:</span> <b>${vs}</b>`;
     });
     document.getElementById('bestParams').innerHTML=lines.join('<br>');
   }
 }
-
 function toggleParams(){
-  const el=document.getElementById('bestParams'),btn=el.previousElementSibling,vis=el.style.display!=='none';
-  el.style.display=vis?'none':'block';btn.textContent=(vis?'▶':'▼')+' Параметры стратегии';
+  const el=document.getElementById('bestParams'),vis=el.style.display!=='none';
+  el.style.display=vis?'none':'block';
 }
 
 function renderTop20(list){
   document.getElementById('top20Wrap').style.display='block';
   document.getElementById('top20Count').textContent=list.length+' вариантов';
   document.getElementById('top20Body').innerHTML=list.map((r,i)=>{
-    const eq=(r.equity??100).toFixed(2),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
+    const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
-    const c=i===0?'color:var(--yellow);font-weight:700':'';
-    return `<tr><td style="${c}">${i+1}</td><td style="${c}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
+    return `<tr><td>${i+1}</td><td>$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
-      <td style="color:${parseFloat(pf)>=1.5?'var(--green2)':'inherit'}">${pf}</td>
+      <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td></tr>`;
   }).join('');
 }
 
 function deleteDownload(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  const btn=event.target;btn.disabled=true;btn.textContent='...';
   fetch('/delete_download').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅':'❌';
-    setTimeout(()=>{btn.disabled=false;btn.textContent='🗑';},2000);
-  }).catch(e=>{btn.textContent='❌';setTimeout(()=>{btn.disabled=false;btn.textContent='🗑';},2000);});
+    btn.textContent=d.ok?'✓':'✕';
+    setTimeout(()=>{btn.disabled=false;btn.textContent='✕';},2000);
+  }).catch(()=>{btn.textContent='✕';setTimeout(()=>{btn.disabled=false;btn.textContent='✕';},2000);});
 }
 function renameDownload(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  const btn=event.target;btn.disabled=true;btn.textContent='...';
   fetch('/rename_download').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅':'❌';
-    if(!d.ok) alert(d.msg||'Ошибка');
+    btn.textContent=d.ok?'✓':'✕';if(!d.ok)alert(d.msg||'Ошибка');
     setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);
-  }).catch(e=>{btn.textContent='❌';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
+  }).catch(()=>{btn.textContent='✕';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
 }
 function termuxUpdate(){
-  // Сначала сбрасываем зависший флаг оптимизации
-  fetch('/reset_running').then(()=>{
-    setTimeout(()=>location.reload(), 500);
-  });
-}
-function termuxUpdate_orig(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳ wake-lock...';
-  fetch('/termux_update').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅ Перезапуск...':'❌ '+d.msg;
-    if(d.ok) setTimeout(()=>location.reload(),4000);
-    else setTimeout(()=>{btn.disabled=false;btn.textContent='⬆ Update';},4000);
-  }).catch(e=>{btn.textContent='❌ '+e;setTimeout(()=>{btn.disabled=false;btn.textContent='⬆ Update';},4000);});
+  fetch('/reset_running').then(()=>setTimeout(()=>location.reload(),500));
 }
 </script></body></html>"""
 
