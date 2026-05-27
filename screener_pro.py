@@ -682,9 +682,11 @@ def _fetch_candles(symbol, tf, days):
     LIMIT = 999          # Gate.io futures максимум за один запрос
     now   = int(time.time())
     since = now - days * 86400
-    total_needed = (now - since) // interval_sec + 2   # +2 на граничные свечи
+    total_needed = (now - since) // interval_sec + 2
     all_candles = []
     current_from = since
+    last_http_error = None
+    last_exception  = None
     print(f"[fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
@@ -694,30 +696,34 @@ def _fetch_candles(symbol, tf, days):
                 params={"contract": symbol, "interval": tf,
                         "from": current_from, "limit": LIMIT}, timeout=15)
             if r.status_code != 200:
-                print("\n[fetch] HTTP {} — прерываем".format(r.status_code), flush=True); break
+                last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                print(f"\n[fetch] {last_http_error}", flush=True); break
             data = r.json()
-            if not isinstance(data, list) or not data: break
-            added = 0
+            if not isinstance(data, list):
+                last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
+                print(f"\n[fetch] {last_http_error}", flush=True); break
+            if not data: break
             for c in data:
                 t = int(c.get("t", 0))
-                if t < since: continue          # отбрасываем свечи раньше окна
-                if t > now:   continue          # и будущие (на всякий случай)
+                if t < since - interval_sec: continue  # мягкий порог
                 all_candles.append({"t": t, "open": float(c["o"]),
                     "high": float(c["h"]), "low": float(c["l"]), "close": float(c["c"])})
-                added += 1
             last_t = int(data[-1].get("t", 0))
             next_from = last_t + interval_sec
-            # Останавливаемся если нет прогресса или вышли за now
             if next_from <= current_from: break
-            if last_t >= now - interval_sec: break   # последняя свеча уже закрытая — всё
+            if last_t >= now - interval_sec: break
             current_from = next_from
             time.sleep(0.05)
         except Exception as e:
-            print("\n[fetch] err: {}".format(e), flush=True); break
+            last_exception = str(e)
+            print(f"\n[fetch] err: {e}", flush=True); break
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    print("\n[fetch] Готово: {} свечей (ожидалось ~{})".format(len(result), total_needed), flush=True)
+    print(f"\n[fetch] Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
+    # Возвращаем причину ошибки вместе с результатом через глобал (для лога оптимизатора)
+    global _last_fetch_error
+    _last_fetch_error = last_http_error or last_exception or None
     return result
 
 def _fetch_latest_candle(symbol, tf):
@@ -1340,6 +1346,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
 # ═══════════════════════════════════════════════════════════════
 _opt_stop_flag = threading.Event()
 _opt_thread = None
+_last_fetch_error = None
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
                    prev_best_params=None, prev_top20=None):
@@ -1473,7 +1480,8 @@ def run_optimizer(params):
     olog(f"📡 Загрузка свечей...")
     candles = _fetch_candles(symbol, tf, days)
     if len(candles) < 30:
-        olog(f"❌ Мало свечей: {len(candles)}", "error")
+        reason = _last_fetch_error or "нет данных от биржи"
+        olog(f"❌ Мало свечей: {len(candles)} — {reason}", "error")
         with opt_lock: opt_state["running"]=False; opt_state["error"]=f"Мало свечей: {len(candles)}"
         return
     # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
