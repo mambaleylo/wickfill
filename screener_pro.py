@@ -843,7 +843,7 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
 
         # Проверяем — for по параметрам прервался из-за stop_flag?
         if stop_flag and stop_flag():
-            olog(f"  [DBG] Круг #{pass_num} прерван stop_flag внутри параметров","warn"); break
+            print(f"[DBG] Круг #{pass_num} прерван stop_flag", flush=True); break
 
         if not improved_in_pass:
             # RSI control sweep
@@ -862,9 +862,9 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
                     current[k]=rsi_best["params"][k]
                 best_result=rsi_best; olog("  RSI-контроль улучшил -> продолжаю","ok")
             else:
-                olog(f"  [DBG] Круг #{pass_num} стоп: RSI не помог (fitness={best_result['fitness']:.4f})","warn"); break
+                print(f"[DBG] Круг #{pass_num} стоп: RSI не помог fitness={best_result['fitness']:.4f}", flush=True); break
         if pass_num>=max_passes:
-            olog(f"  [DBG] Круг #{pass_num} стоп: max_passes={max_passes} достигнут","warn"); break
+            print(f"[DBG] Круг #{pass_num} стоп: max_passes={max_passes}", flush=True); break
 
     return best_result, current, top20_global
 
@@ -1548,7 +1548,7 @@ def run_optimizer(params):
 
         if _opt_stop_flag.is_set(): break
 
-        olog(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}","warn")
+        print(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}", flush=True)
         if final_result:
             elapsed = round(time.time()-t0, 1)
 
@@ -2815,6 +2815,7 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             global _opt_thread
+            print(f"[SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
             # Если тред жив — не перезапускаем, чтобы не сбрасывать циклы
             if _opt_thread and _opt_thread.is_alive():
                 self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
