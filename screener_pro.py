@@ -846,45 +846,32 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
 # ═══════════════════════════════════════════════════════════════
 # EMAIL
 # ═══════════════════════════════════════════════════════════════
-def _send_email(cfg, subject, body_html):
+def _send_telegram(cfg, text):
     try:
-        msg=email.mime.multipart.MIMEMultipart("alternative")
-        msg["From"]=cfg["from_email"]; msg["To"]=cfg["to_email"]; msg["Subject"]=subject
-        msg.attach(email.mime.text.MIMEText(body_html,"html","utf-8"))
-        port=int(cfg["smtp_port"]); host=cfg["smtp_host"]
-        if port==465:
-            with smtplib.SMTP_SSL(host,port,timeout=15) as s:
-                s.login(cfg["from_email"],cfg["smtp_pass"]); s.send_message(msg)
-        else:
-            with smtplib.SMTP(host,port,timeout=15) as s:
-                s.ehlo(); s.starttls(); s.ehlo()
-                s.login(cfg["from_email"],cfg["smtp_pass"]); s.send_message(msg)
-        return True
+        token = cfg.get("tg_token","")
+        chat_id = cfg.get("tg_chat_id","")
+        if not token or not chat_id: return False
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        if not resp.ok:
+            with opt_lock: opt_state["error"]=f"Telegram: {resp.text}"
+        return resp.ok
     except Exception as e:
-        with opt_lock: opt_state["error"]=f"SMTP: {e}"
+        with opt_lock: opt_state["error"]=f"Telegram: {e}"
         return False
 
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
-    dir_color="#58a6ff" if direction==1 else "#e3b341"
     dt=time.strftime("%Y-%m-%d %H:%M", time.localtime(candle_t))
-    body=f"""
-    <div style="background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;padding:20px;border-radius:10px;max-width:480px">
-      <h2 style="color:{dir_color};margin-bottom:10px">🔔 WickFill Сигнал: {dir_str}</h2>
-      <p style="color:#8b949e;margin-bottom:16px">Символ: <b style="color:#e6edf3">{symbol}</b> · ТФ: <b>{tf}</b> · Время: <b>{dt}</b></p>
-      <table style="border-collapse:collapse;width:100%;background:#161b22;border-radius:8px">
-        <tr><td style="padding:9px 14px;color:#8b949e;border-bottom:1px solid #21262d">Направление</td>
-            <td style="padding:9px 14px;color:{dir_color};font-weight:700;border-bottom:1px solid #21262d">{dir_str}</td></tr>
-        <tr><td style="padding:9px 14px;color:#8b949e;border-bottom:1px solid #21262d">Вход</td>
-            <td style="padding:9px 14px;font-weight:700;border-bottom:1px solid #21262d">{entry:.6g}</td></tr>
-        <tr><td style="padding:9px 14px;color:#8b949e;border-bottom:1px solid #21262d">Тейк-профит</td>
-            <td style="padding:9px 14px;color:#3fb950;font-weight:700;border-bottom:1px solid #21262d">{tp:.6g}</td></tr>
-        <tr><td style="padding:9px 14px;color:#8b949e">Стоп-лосс</td>
-            <td style="padding:9px 14px;color:#f85149;font-weight:700">{sl:.6g}</td></tr>
-      </table>
-      <p style="color:#8b949e;margin-top:14px;font-size:11px">WickFill Optimizer · Gate.io USDT Perpetual</p>
-    </div>"""
-    return _send_email(cfg, f"[WickFill] {dir_str} {symbol} {tf}", body)
+    text = (
+        f"🔔 <b>WickFill Сигнал</b>\n\n"
+        f"{dir_str} <b>{symbol}</b> {tf}\n"
+        f"🕐 {dt}\n\n"
+        f"📥 Вход: <b>{entry:.6g}</b>\n"
+        f"✅ Тейк-профит: <b>{tp:.6g}</b>\n"
+        f"❌ Стоп-лосс: <b>{sl:.6g}</b>"
+    )
+    return _send_telegram(cfg, text)
 
 # ═══════════════════════════════════════════════════════════════
 # CHART HTML (live — читается с диска каждый раз)
@@ -1792,26 +1779,12 @@ select:focus,input:focus{outline:none;border-color:var(--blue)}
 
   <!-- Email alerts -->
   <details>
-    <summary style="cursor:pointer;font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;list-style:none">🔔 Алерты на Email</summary>
+    <summary style="cursor:pointer;font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;list-style:none">🔔 Алерты в Telegram</summary>
     <div style="margin-top:10px">
-      <div class="alert-field">
-        <label>Провайдер</label>
-        <select id="al_provider" onchange="fillSmtp(this.value)" style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:.82rem">
-          <option value="">— выбрать —</option>
-          <option value="gmail">Gmail</option>
-          <option value="yandex" selected>Яндекс</option>
-          <option value="mail_ru">Mail.ru</option>
-          <option value="custom">Другой</option>
-        </select>
-      </div>
-      <div class="alert-field"><label>SMTP сервер</label><input type="text" id="al_host" value="smtp.yandex.ru"></div>
-      <div class="alert-field"><label>SMTP порт</label><input type="text" id="al_port" value="465"></div>
-      <div id="al_hint" style="font-size:.68rem;color:var(--muted);margin-bottom:5px;line-height:1.5"></div>
-      <div class="alert-field"><label>Email отправителя</label><input type="text" id="al_from" value="wickfill@yandex.by" placeholder="bot@yandex.ru"></div>
-      <div class="alert-field"><label>Пароль приложения</label><input type="password" id="al_pass" placeholder="..."></div>
-      <div class="alert-field"><label>Получатель</label><input type="text" id="al_to" value="kovtikandrey@yandex.by"></div>
+      <div class="alert-field"><label>Токен бота</label><input type="text" id="al_tg_token" placeholder="123456789:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA"></div>
+      <div class="alert-field"><label>Ваш Chat ID</label><input type="text" id="al_tg_chat" placeholder="123456789" value="181970023"></div>
       <div style="margin-top:8px">
-        <button class="btn-run" id="testMailBtn" onclick="sendTestEmail()" style="width:100%;padding:6px 0;font-size:.75rem">📨 Отправить тестовое письмо</button>
+        <button class="btn-run" id="testMailBtn" onclick="sendTestEmail()" style="width:100%;padding:6px 0;font-size:.75rem">📨 Отправить тестовое сообщение</button>
       </div>
       <div id="alertStatusMsg" style="font-size:.7rem;color:var(--muted);margin-top:4px;line-height:1.5"></div>
     </div>
@@ -1881,13 +1854,10 @@ function fillSmtp(p){const pr=SMTP_PRESETS[p];if(!pr)return;document.getElementB
 fillSmtp('yandex');
 
 function getAlertCfg(){
-  const host=document.getElementById('al_host').value.trim();
-  const port=document.getElementById('al_port').value.trim();
-  const from=document.getElementById('al_from').value.trim();
-  const pass=document.getElementById('al_pass').value;
-  const to=document.getElementById('al_to').value.trim();
-  if(!host||!port||!from||!pass||!to) return null;
-  return {smtp_host:host,smtp_port:port,from_email:from,smtp_pass:pass,to_email:to};
+  const token=document.getElementById('al_tg_token').value.trim();
+  const chat=document.getElementById('al_tg_chat').value.trim();
+  if(!token||!chat) return null;
+  return {tg_token:token,tg_chat_id:chat};
 }
 
 function sendTestEmail(){
@@ -1896,18 +1866,18 @@ function sendTestEmail(){
   const btn=document.getElementById('testMailBtn');
   if(!cfg){
     statusEl.style.color='var(--red)';
-    statusEl.textContent='⚠️ Заполните все поля почты (хост, порт, отправитель, пароль, получатель)';
+    statusEl.textContent='⚠️ Заполните токен бота и Chat ID';
     return;
   }
   btn.disabled=true; btn.textContent='⏳ Отправка...';
   statusEl.style.color='var(--muted)'; statusEl.textContent='';
   fetch('/test_email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_cfg:cfg})})
     .then(r=>r.json()).then(d=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое письмо';
-      if(d.ok){statusEl.style.color='#4caf50';statusEl.textContent='✅ Письмо отправлено на '+cfg.to_email;}
+      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
+      if(d.ok){statusEl.style.color='#4caf50';statusEl.textContent='✅ Сообщение отправлено в Telegram!';}
       else{statusEl.style.color='var(--red)';statusEl.textContent='❌ Ошибка: '+(d.msg||'неизвестно');}
     }).catch(e=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое письмо';
+      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
       statusEl.style.color='var(--red)'; statusEl.textContent='❌ Ошибка сети: '+e;
     });
 }
@@ -1986,7 +1956,7 @@ function startOpt(){
       polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
     }
     scheduleNext();
-    if(alertCfg) document.getElementById('alertStatusMsg').innerHTML='<span style="color:var(--green2)">✅ Алерты настроены: '+alertCfg.to_email+'</span>';
+    if(alertCfg) document.getElementById('alertStatusMsg').innerHTML='<span style="color:var(--green2)">✅ Алерты настроены: Telegram chat '+alertCfg.tg_chat_id+'</span>';
     else document.getElementById('alertStatusMsg').textContent='Email не настроен — алерты отключены';
   }).catch(e=>logLine('[!!] '+e,'error'));
 }
@@ -2481,25 +2451,10 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             cfg=params.get("alert_cfg",{})
-            if not cfg: self._json({"ok":False,"msg":"Нет конфига почты"}); return
-            try:
-                import email.mime.text, email.mime.multipart, smtplib
-                msg=email.mime.multipart.MIMEMultipart()
-                msg["From"]=cfg["from_email"]; msg["To"]=cfg["to_email"]
-                msg["Subject"]="✅ WickFill — тестовое письмо"
-                msg.attach(email.mime.text.MIMEText(
-                    "Если вы получили это письмо — настройки почты работают корректно.\n\nWickFill Screener Pro",
-                    "plain","utf-8"))
-                port=int(cfg["smtp_port"])
-                if port==465:
-                    with smtplib.SMTP_SSL(cfg["smtp_host"],port,timeout=15) as s:
-                        s.login(cfg["from_email"],cfg["smtp_pass"]); s.send_message(msg)
-                else:
-                    with smtplib.SMTP(cfg["smtp_host"],port,timeout=15) as s:
-                        s.ehlo(); s.starttls(); s.login(cfg["from_email"],cfg["smtp_pass"]); s.send_message(msg)
-                self._json({"ok":True})
-            except Exception as e:
-                self._json({"ok":False,"msg":str(e)})
+            if not cfg: self._json({"ok":False,"msg":"Нет конфига"}); return
+            ok = _send_telegram(cfg, "✅ WickFill — тест алерта работает!")
+            if ok: self._json({"ok":True})
+            else: self._json({"ok":False,"msg":opt_state.get("error","Ошибка Telegram")})
             return
 
         if parsed.path == "/scan":
