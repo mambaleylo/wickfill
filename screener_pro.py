@@ -1478,7 +1478,7 @@ def run_optimizer(params):
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
 
     t0 = time.time()
-    olog(f"🔍 WickFill Optimizer v3.0 | {'∞ БЕСКОНЕЧНЫЙ РЕЖИМ' if infinite else 'Одиночный запуск'}")
+
     olog(f"   {symbol} | {tf} | {days}д | риск {risk_pct:.0f}%")
 
     # Загрузка свечей
@@ -1784,7 +1784,7 @@ body>*{position:relative;z-index:1}
 }
 
 /* Field */
-.field{display:flex;flex-direction:column;gap:4px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .field label{font-size:.72rem;color:var(--text3);font-weight:500}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 
@@ -1803,9 +1803,9 @@ input[type=text],input[type=password],select{
 input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
 
 /* Slider */
-.slider-wrap{display:flex;align-items:center;gap:10px}
+.slider-wrap{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
 .slider-wrap input[type=range]{
-  flex:1;height:3px;accent-color:var(--bark);
+  flex:1;min-width:0;height:3px;accent-color:var(--bark);
   -webkit-appearance:none;appearance:none;
   background:linear-gradient(to right, var(--bark) 0%, var(--bark) var(--pct,50%), var(--cream3) var(--pct,50%), var(--cream3) 100%);
   border-radius:2px;cursor:pointer;
