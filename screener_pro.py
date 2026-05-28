@@ -1658,10 +1658,10 @@ HTML = r"""<!DOCTYPE html>
   --sand:#c9bfb0;
   --sand2:#b5a896;
   --warm:#8c7b6b;
-  --bark:#5c4f43;
-  --text:#2d2520;
-  --text2:#6b5f55;
-  --text3:#9c8f84;
+  --bark:#4a3f34;
+  --text:#1a1310;
+  --text2:#504438;
+  --text3:#7a6e63;
   --glass:rgba(247,243,238,0.72);
   --glass2:rgba(237,232,224,0.55);
   --blur:saturate(180%) blur(20px);
