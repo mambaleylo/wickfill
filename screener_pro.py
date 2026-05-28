@@ -933,20 +933,20 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green:#3a7d52;--red:#a03030;--yellow:#8a6a1a;
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
-html,body{{height:100%;background:var(--cream);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
+html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
 #tooltip{{position:absolute;display:none;pointer-events:none;
-  background:rgba(247,243,238,.97);border:1px solid var(--border);
+  background:rgba(30,26,23,.97);border:1px solid rgba(255,255,255,.12);
   border-radius:10px;padding:7px 11px;font-size:.7rem;line-height:1.75;
-  white-space:nowrap;z-index:20;color:var(--text);
-  box-shadow:0 4px 16px rgba(92,79,67,.12)}}
+  white-space:nowrap;z-index:20;color:#d4c8bc;
+  box-shadow:0 4px 16px rgba(0,0,0,.4)}}
 .legend{{position:absolute;bottom:36px;left:10px;font-size:.66rem;
-  color:var(--text3);line-height:2;
-  background:rgba(247,243,238,.85);
+  color:#9a8e83;line-height:2;
+  background:rgba(30,26,23,.85);
   padding:5px 9px;border-radius:8px;
-  border:1px solid var(--border2);
+  border:1px solid rgba(255,255,255,.1);
   pointer-events:none}}
 .legend span{{display:inline-block;width:11px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}}
 .live-badge{{padding:2px 7px;
@@ -967,9 +967,9 @@ canvas{{display:block;width:100%;height:100%}}
       <div><span style="background:var(--green)"></span>TP</div>
       <div><span style="background:var(--text3)"></span>SL</div>
     </div>
-    <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:var(--text3)">
+    <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:#9a8e83">
       <span class="live-badge" id="liveBadge">⬤ LIVE</span>
-      <span style="font-weight:600;color:var(--bark)">{symbol} · {tf}</span>
+      <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
       <span>{len(candles)} св. · {trades} сд.</span>
     </div>
   </div>
@@ -998,20 +998,21 @@ function render(){{
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
-  ctx.clearRect(0,0,W,H);
   // Background fill chart area
-  ctx.fillStyle='rgba(247,243,238,1)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#1e1a17';ctx.fillRect(0,0,W,H);
   // Time axis separator
-  ctx.strokeStyle='rgba(92,79,67,.2)';ctx.lineWidth=1;
+  ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(PAD_L,H-PAD_B);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   // Price axis separator
   ctx.beginPath();ctx.moveTo(W-PAD_R,PAD_T);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='rgba(92,79,67,.08)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#7a6e63';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
+    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle='#9a8e83';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
+  // Only draw TP/SL labels for the active (open) trade
+  const activeSig=SIGNALS.find(s=>s.open_end===true&&s.bar_i<end&&s.bar_i>=viewStart-(viewLen*2));
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
@@ -1024,18 +1025,30 @@ function render(){{
     ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
     ctx.setLineDash([]);
     ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
-    // TP label on price axis
-    const tpY=py(s.tp),slY=py(s.sl);
-    ctx.font='bold 9px system-ui';ctx.textAlign='left';
-    // TP badge
-    ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
-    ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
-    ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
-    // SL badge
-    ctx.fillStyle='rgba(140,120,100,0.75)';
-    ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
-    ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
-    ctx.font='10px system-ui';
+    // TP/SL labels only for active trade
+    if(activeSig===s){{
+      const tpY=py(s.tp),slY=py(s.sl);
+      ctx.font='bold 9px system-ui';ctx.textAlign='left';
+      ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
+      ctx.fillStyle='rgba(140,120,100,0.75)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
+      ctx.font='10px system-ui';
+    }}
+  }}
+  // Current price label — always visible
+  const lastC=vis[vis.length-1];
+  if(lastC){{
+    const curPrice=lastC.c,curY=py(curPrice),isUp=lastC.c>=lastC.o;
+    const cpCol=isUp?'#3a7d52':'#a03030';
+    ctx.setLineDash([2,3]);ctx.strokeStyle=cpCol+'80';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(PAD_L,curY);ctx.lineTo(W-PAD_R,curY);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=cpCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,curY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY+3);
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
@@ -1074,9 +1087,17 @@ function render(){{
   }}
   ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
   const step=Math.max(1,Math.floor(vis.length/8));
+  const isMobile=W<500;
+  const mskOffset=3*3600*1000;
   for(let i=0;i<vis.length;i+=step){{
-    const t=new Date(vis[i].t*1000);
-    const lbl=(t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+    const t=new Date(vis[i].t*1000+mskOffset);
+    let lbl;
+    if(isMobile){{
+      // On mobile: just HH:MM to avoid overlap
+      lbl=t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
+    }}else{{
+      lbl=(t.getUTCMonth()+1)+'/'+t.getUTCDate()+' '+t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
+    }}
     ctx.fillText(lbl,cx(i),H-PAD_B+16);
   }}
 }}
@@ -1924,7 +1945,7 @@ input[type=number]{-moz-appearance:textfield}
   display:flex;flex-direction:row;min-height:0;
   border-bottom:1px solid var(--border2);
   flex-shrink:0;
-  height:130px;
+  height:110px;
 }
 .cycles-col{
   flex-shrink:0;
@@ -1978,12 +1999,13 @@ input[type=number]{-moz-appearance:textfield}
 .cc-strip::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
 
 .cc{
-  flex-shrink:0;width:96px;
+  flex-shrink:0;width:96px;height:76px;
   background:var(--glass2);
   border:1px solid var(--border);
   border-radius:12px;padding:7px 9px;
   position:relative;overflow:hidden;
   transition:all .2s;
+  display:flex;flex-direction:column;justify-content:space-between;
 }
 .cc.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
 .cc.pos{border-color:rgba(74,124,89,.3);background:rgba(232,242,235,.5)}
@@ -2164,8 +2186,8 @@ details summary::-webkit-details-marker{display:none}
   .log-col{max-height:80px;}
 
   /* График — под таблицей */
-  .chart-area{min-height:320px;flex:none;}
-  #chartFrame{min-height:320px;}
+  .chart-area{min-height:260px;flex:none;}
+  #chartFrame{min-height:260px;}
 
   /* Циклы — компактная лента */
   .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
