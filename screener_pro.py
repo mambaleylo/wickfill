@@ -1926,6 +1926,29 @@ input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
 /* ── Right panel ── */
 .right{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
+/* Inner split: left-col (cycles+table+log) | right-col (chart) */
+.right-body{
+  flex:1;display:flex;min-height:0;overflow:hidden;
+}
+.right-left{
+  width:380px;flex-shrink:0;
+  display:flex;flex-direction:column;min-height:0;
+  border-right:1px solid var(--border2);
+}
+.right-chart{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  background:var(--cream2);
+  position:relative;
+}
+.chart-placeholder{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:8px;
+  color:var(--text3);font-size:.78rem;
+}
+#chartFrame{
+  width:100%;flex:1;border:none;display:none;
+}
+
 /* Cycles strip */
 .cycles-bar{
   padding:14px 18px 10px;
@@ -2118,6 +2141,10 @@ details summary::-webkit-details-marker{display:none}
 
   /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
   .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+  .right-body{flex-direction:column;}
+  .right-left{width:100%;border-right:none;border-bottom:none;}
+  .right-chart{min-height:320px;flex:none;}
+  #chartFrame{min-height:320px;}
 
   /* Циклы — компактная лента */
   .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
@@ -2133,14 +2160,14 @@ details summary::-webkit-details-marker{display:none}
   .log-area{flex:1;padding:8px 12px}
   #wfLog.mob-hidden{display:none}
 
-  /* Таблица топ — поверх через абс позицию */
+  /* Таблица топ — обычный блок на мобилке */
   #top20Wrap{
     display:none;
-    position:fixed;bottom:0;left:0;right:0;
-    max-height:55vh;overflow-y:auto;
+    position:static;
+    max-height:none;
     background:var(--cream);
-    border-top:2px solid var(--border);
-    z-index:100;
+    border-top:1px solid var(--border2);
+    z-index:auto;
   }
 }
 </style></head><body>
@@ -2305,7 +2332,7 @@ details summary::-webkit-details-marker{display:none}
   <!-- ── Right panel ── -->
   <div class="right">
 
-    <!-- Cycle cards -->
+    <!-- Cycles bar (full width, above split) -->
     <div class="cycles-bar">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <span class="cycles-label">Циклы</span>
@@ -2317,24 +2344,41 @@ details summary::-webkit-details-marker{display:none}
       <div class="cc-strip" id="ccStrip"></div>
     </div>
 
-    <!-- Top-1 table -->
-    <div class="table-panel" id="top20Wrap" style="display:none">
-      <div class="table-hdr">
-        Лучшая комбинация
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Депозит</th><th>WR%</th>
-            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
-          </tr>
-        </thead>
-        <tbody id="top20Body"></tbody>
-      </table>
-    </div>
+    <!-- Body: left col + chart col -->
+    <div class="right-body">
 
-    <!-- Log -->
-    <div class="log-area" id="wfLog"></div>
+      <!-- Left: table + log -->
+      <div class="right-left">
+
+        <!-- Top-1 table -->
+        <div class="table-panel" id="top20Wrap" style="display:none">
+          <div class="table-hdr">Лучшая комбинация</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Депозит</th><th>WR%</th>
+                <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
+              </tr>
+            </thead>
+            <tbody id="top20Body"></tbody>
+          </table>
+        </div>
+
+        <!-- Log -->
+        <div class="log-area" id="wfLog"></div>
+
+      </div><!-- /right-left -->
+
+      <!-- Right: chart iframe -->
+      <div class="right-chart">
+        <div class="chart-placeholder" id="chartPlaceholder">
+          <span style="font-size:2rem;opacity:.25">📊</span>
+          <span>График появится после первого цикла</span>
+        </div>
+        <iframe id="chartFrame" src="about:blank"></iframe>
+      </div><!-- /right-chart -->
+
+    </div><!-- /right-body -->
 
   </div><!-- /right -->
 </div><!-- /main -->
@@ -2476,6 +2520,14 @@ function stopSW(){
   document.getElementById('swStopBtn').style.display='none';
   addLogLine('⏹ Скользящее окно остановлено','warn');
 }
+function _loadChartFrame(){
+  const frame=document.getElementById('chartFrame');
+  const ph=document.getElementById('chartPlaceholder');
+  if(!frame) return;
+  frame.src='/chart?t='+Date.now();
+  frame.style.display='block';
+  if(ph) ph.style.display='none';
+}
 function openChart(){window.open('/chart','_blank');}
 
 /* ── Poll ── */
@@ -2516,7 +2568,10 @@ function poll(){
     if(d.top20&&d.top20.length) renderTop20(d.top20);
     if(d.chart_path){
       document.getElementById('chartBtn').style.display='flex';
-      if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){lastChartTs=d.chart_updated_at;if(!chartOpened){chartOpened=true;window.open('/chart','_blank');}}
+      if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){
+        lastChartTs=d.chart_updated_at;
+        _loadChartFrame();
+      }
     }
     if(d.done&&!d.running&&!d.infinite){
       clearTimeout(polling);polling=null;
