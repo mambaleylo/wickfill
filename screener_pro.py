@@ -8,9 +8,10 @@ WickFill Optimizer v3.0
 """
 
 import json, time, threading, random, math, os
+import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import requests
 import smtplib, email.mime.text, email.mime.multipart
 
@@ -250,7 +251,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         return None
     n = len(candles_list)
 
-    closes = [c["close"] for c in candles_list]
+    # Используем предвычисленный массив closes если доступен (worker-процесс)
+    global _worker_closes
+    if _worker_closes is not None and len(_worker_closes) == n and days_limit == 0:
+        closes = _worker_closes
+    else:
+        closes = [c["close"] for c in candles_list]
     def _rsi(closes, period):
         if len(closes) < period + 1: return [50.0]*len(closes)
         gains, losses = [], []
@@ -626,10 +632,23 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 _worker_candles = None
 _worker_days    = None
 _worker_risk    = 20.0
+# Предвычисленные массивы (закэшированы один раз на процесс)
+_worker_opens   = None
+_worker_highs   = None
+_worker_lows    = None
+_worker_closes  = None
 
 def _worker_init(candles, days, risk):
     global _worker_candles, _worker_days, _worker_risk
-    _worker_candles = candles; _worker_days = days; _worker_risk = risk
+    global _worker_opens, _worker_highs, _worker_lows, _worker_closes
+    _worker_candles = candles
+    _worker_days    = days
+    _worker_risk    = risk
+    # Предвычисляем массивы цен один раз — не надо делать list comprehension в каждой симуляции
+    _worker_opens  = [c["open"]  for c in candles]
+    _worker_highs  = [c["high"]  for c in candles]
+    _worker_lows   = [c["low"]   for c in candles]
+    _worker_closes = [c["close"] for c in candles]
 
 def _worker_evaluate(ind):
     r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk)
@@ -1341,18 +1360,18 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     global _sw_params
 
     n_workers = max(1, os.cpu_count() or 1)
-    olog(f"   ThreadPool: {n_workers} потоков")
-    _pool = ThreadPoolExecutor(max_workers=n_workers)
-
-    _c = candles; _r = risk_pct
-    def _eval_thread(ind):
-        res = _simulate(_c, ind, 0, risk_pct=_r)
-        if res: return res
-        return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
-                "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
+    olog(f"   ProcessPool: {n_workers} процессов (все ядра CPU)")
+    _pool = ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_worker_init,
+        initargs=(candles, 0, risk_pct)
+    )
 
     def pmap(candidates):
-        return list(_pool.map(_eval_thread, candidates))
+        if not candidates:
+            return []
+        chunk = max(1, len(candidates) // (n_workers * 2))
+        return list(_pool.map(_worker_evaluate, candidates, chunksize=chunk))
 
     def stop_flag():
         return _opt_stop_flag.is_set()
@@ -2837,6 +2856,12 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError,ConnectionResetError): pass
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    # spawn — безопаснее для multiprocessing на всех платформах
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
     port=8080
     import socket as _sock
     def _get_local_ip():
