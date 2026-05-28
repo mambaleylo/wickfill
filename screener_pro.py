@@ -1926,19 +1926,38 @@ input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
 /* ── Right panel ── */
 .right{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
-/* Inner split: left-col (cycles+table+log) | right-col (chart) */
-.right-body{
-  flex:1;display:flex;min-height:0;overflow:hidden;
+/* Top strip: cycles cards LEFT + logs RIGHT, single row */
+.top-strip{
+  display:flex;flex-direction:row;min-height:0;
+  border-bottom:1px solid var(--border2);
+  flex-shrink:0;
+  height:130px;
 }
-.right-left{
-  width:380px;flex-shrink:0;
-  display:flex;flex-direction:column;min-height:0;
+.cycles-col{
+  flex-shrink:0;
+  display:flex;flex-direction:column;
+  padding:8px 14px 8px;
   border-right:1px solid var(--border2);
+  gap:5px;min-width:0;
+  max-width:50%;
 }
-.right-chart{
-  flex:1;display:flex;flex-direction:column;min-height:0;
+.cycles-col-header{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0;
+}
+.log-col{
+  flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;
+}
+.log-col-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 12px 4px;flex-shrink:0;
+  font-size:.65rem;color:var(--text3);font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;
+}
+
+/* Chart area — fills all remaining space */
+.chart-area{
+  flex:1;display:flex;flex-direction:column;min-height:0;position:relative;
   background:var(--cream2);
-  position:relative;
 }
 .chart-placeholder{
   flex:1;display:flex;align-items:center;justify-content:center;
@@ -1946,26 +1965,30 @@ input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
   color:var(--text3);font-size:.78rem;
 }
 #chartFrame{
-  width:100%;flex:1;border:none;display:none;
+  width:100%;flex:1;border:none;display:none;min-height:0;
 }
 
-/* Cycles strip */
-.cycles-bar{
-  padding:14px 18px 10px;
-  border-bottom:1px solid var(--border2);
-  display:flex;flex-direction:column;gap:8px;
+/* Best combination table — inside log-col below log */
+#top20Wrap.in-strip{
+  border-top:1px solid var(--border2);
   flex-shrink:0;
 }
-.cycles-label{font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
-.cc-strip{display:flex;gap:8px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+#top20Wrap.in-strip .table-hdr{padding:5px 12px;font-size:.62rem;}
+#top20Wrap.in-strip table{font-size:.72rem;}
+#top20Wrap.in-strip th,#top20Wrap.in-strip td{padding:4px 8px;}
+
+/* Cycles strip */
+.cycles-bar{display:none} /* legacy — replaced by cycles-col */
+.cycles-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
+.cc-strip{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;flex:1;align-items:flex-start;}
 .cc-strip::-webkit-scrollbar{height:3px}
 .cc-strip::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
 
 .cc{
-  flex-shrink:0;width:108px;
+  flex-shrink:0;width:96px;
   background:var(--glass2);
   border:1px solid var(--border);
-  border-radius:14px;padding:10px 11px;
+  border-radius:12px;padding:7px 9px;
   position:relative;overflow:hidden;
   transition:all .2s;
 }
@@ -2140,10 +2163,15 @@ details summary::-webkit-details-marker{display:none}
   #mob-save-row{display:flex !important}
 
   /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
-  .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
-  .right-body{flex-direction:column;}
-  .right-left{width:100%;border-right:none;border-bottom:none;}
-  .right-chart{min-height:320px;flex:none;}
+  .right{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
+
+  /* Top strip — вертикально на мобилке */
+  .top-strip{flex-direction:column;height:auto;flex-shrink:0;}
+  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;}
+  .log-col{max-height:80px;}
+
+  /* График — под таблицей */
+  .chart-area{min-height:320px;flex:none;}
   #chartFrame{min-height:320px;}
 
   /* Циклы — компактная лента */
@@ -2157,16 +2185,14 @@ details summary::-webkit-details-marker{display:none}
   #mob-top-toggle{display:flex !important;flex-shrink:0}
 
   /* Лог */
-  .log-area{flex:1;padding:8px 12px}
-  #wfLog.mob-hidden{display:none}
+  .log-area{padding:4px 10px;}
 
-  /* Таблица топ — обычный блок на мобилке */
+  /* Таблица топ — обычный блок */
   #top20Wrap{
     display:none;
     position:static;
     max-height:none;
     background:var(--cream);
-    border-top:1px solid var(--border2);
     z-index:auto;
   }
 }
@@ -2332,53 +2358,51 @@ details summary::-webkit-details-marker{display:none}
   <!-- ── Right panel ── -->
   <div class="right">
 
-    <!-- Cycles bar (full width, above split) -->
-    <div class="cycles-bar">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <span class="cycles-label">Циклы</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span id="swStatus2" style="font-size:.68rem;color:var(--text3)"></span>
-          <button class="icon-btn" style="font-size:.7rem;padding:4px 9px" onclick="_resetLog()">очистить</button>
+    <!-- Top strip: cycles | logs -->
+    <div class="top-strip">
+
+      <!-- Cycles column -->
+      <div class="cycles-col">
+        <div class="cycles-col-header">
+          <span class="cycles-label">Циклы</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
+            <button class="icon-btn" style="font-size:.65rem;padding:3px 7px" onclick="_resetLog()">очистить</button>
+          </div>
         </div>
+        <div class="cc-strip" id="ccStrip"></div>
       </div>
-      <div class="cc-strip" id="ccStrip"></div>
+
+      <!-- Log column -->
+      <div class="log-col">
+        <div class="log-col-header">Логи</div>
+        <div class="log-area" id="wfLog" style="flex:1;padding:4px 12px 6px;"></div>
+      </div>
+
+    </div><!-- /top-strip -->
+
+    <!-- Best combination table (below top-strip) -->
+    <div class="table-panel in-strip" id="top20Wrap" style="display:none">
+      <div class="table-hdr">Лучшая комбинация</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Депозит</th><th>WR%</th>
+            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
+          </tr>
+        </thead>
+        <tbody id="top20Body"></tbody>
+      </table>
     </div>
 
-    <!-- Body: left col + chart col -->
-    <div class="right-body">
-
-      <!-- Left: table + log -->
-      <div class="right-left">
-
-        <!-- Top-1 table -->
-        <div class="table-panel" id="top20Wrap" style="display:none">
-          <div class="table-hdr">Лучшая комбинация</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Депозит</th><th>WR%</th>
-                <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
-              </tr>
-            </thead>
-            <tbody id="top20Body"></tbody>
-          </table>
-        </div>
-
-        <!-- Log -->
-        <div class="log-area" id="wfLog"></div>
-
-      </div><!-- /right-left -->
-
-      <!-- Right: chart iframe -->
-      <div class="right-chart">
-        <div class="chart-placeholder" id="chartPlaceholder">
-          <span style="font-size:2rem;opacity:.25">📊</span>
-          <span>График появится после первого цикла</span>
-        </div>
-        <iframe id="chartFrame" src="about:blank"></iframe>
-      </div><!-- /right-chart -->
-
-    </div><!-- /right-body -->
+    <!-- Chart — fills remaining space -->
+    <div class="chart-area">
+      <div class="chart-placeholder" id="chartPlaceholder">
+        <span style="font-size:2rem;opacity:.2">📊</span>
+        <span>График появится после первого цикла</span>
+      </div>
+      <iframe id="chartFrame" src="about:blank"></iframe>
+    </div>
 
   </div><!-- /right -->
 </div><!-- /main -->
