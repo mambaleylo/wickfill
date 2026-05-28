@@ -2113,6 +2113,8 @@ details summary::-webkit-details-marker{display:none}
   .sidebar .div{display:none}
   .save-row{display:none}
   #saveLoadStatus{display:none !important}
+  /* Мобильные кнопки сохранить/загрузить */
+  #mob-save-row{display:flex !important}
 
   /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
   .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
@@ -2260,6 +2262,12 @@ details summary::-webkit-details-marker{display:none}
       <span style="font-size:.72rem;cursor:pointer;color:var(--text3);padding:0 8px" onclick="toggleParams()">⚙</span>
     </div>
 
+    <!-- Мобильные кнопки Сохранить / Загрузить -->
+    <div id="mob-save-row" style="display:none;gap:7px">
+      <button class="btn-ghost" style="flex:1;font-size:.78rem;padding:7px 10px" onclick="saveResult()">💾 Сохранить</button>
+      <button class="btn-ghost" style="flex:1;font-size:.78rem;padding:7px 10px" onclick="loadResult()">📂 Загрузить</button>
+    </div>
+
     <!-- Best result (desktop) -->
     <div id="bestSection" style="display:none">
       <div class="div"></div>
@@ -2309,16 +2317,15 @@ details summary::-webkit-details-marker{display:none}
       <div class="cc-strip" id="ccStrip"></div>
     </div>
 
-    <!-- Top-7 table -->
+    <!-- Top-1 table -->
     <div class="table-panel" id="top20Wrap" style="display:none">
       <div class="table-hdr">
-        Топ-7 комбинаций
-        <span id="top20Count" style="font-weight:400;color:var(--text3)"></span>
+        Лучшая комбинация
       </div>
       <table>
         <thead>
           <tr>
-            <th>#</th><th>Депозит</th><th>WR%</th>
+            <th>Депозит</th><th>WR%</th>
             <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
           </tr>
         </thead>
@@ -2347,10 +2354,10 @@ function syncSlider(el, vId, suffix){
 
 /* Init sliders */
 document.addEventListener('DOMContentLoaded',()=>{
-  ['wf_days','wf_risk'].forEach(id=>{
+  const sliders=[{id:'wf_days',vId:'wfDV',suffix:''},{id:'wf_risk',vId:'wfRV',suffix:'%'}];
+  sliders.forEach(({id,vId,suffix})=>{
     const el=document.getElementById(id); if(!el) return;
-    const max=parseFloat(el.max),min=parseFloat(el.min),v=parseFloat(el.value);
-    el.style.setProperty('--pct',((v-min)/(max-min)*100)+'%');
+    syncSlider(el,vId,suffix);
   });
 });
 
@@ -2645,12 +2652,12 @@ function toggleParams(){
 
 function renderTop20(list){
   document.getElementById('top20Wrap').style.display='block';
-  document.getElementById('top20Count').textContent=list.length+' вариантов';
-  document.getElementById('top20Body').innerHTML=list.map((r,i)=>{
+  const top=list.slice(0,1);
+  document.getElementById('top20Body').innerHTML=top.map((r)=>{
     const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
-    return `<tr><td>${i+1}</td><td>$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
+    return `<tr><td>$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td></tr>`;
