@@ -794,12 +794,11 @@ def _fetch_current_candle(symbol, tf):
 # ═══════════════════════════════════════════════════════════════
 # COORDINATE DESCENT
 # ═══════════════════════════════════════════════════════════════
-def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
+def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
                               stop_flag=None):
     current = dict(start_ind)
     best_result = pmap_fn([current])[0]
-    top20_global = _update_top20(top20_global, best_result)
     pass_num = 0
 
     while True:
@@ -834,38 +833,18 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
 
-            for r in results[:5]: top20_global=_update_top20(top20_global,r)
-            extra=1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0
-            step_in_pass+=len(grid)+extra
+            step_in_pass+=len(grid)+(1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0)
             with opt_lock:
                 opt_state["progress"]=step_in_pass
-                opt_state["top20"]=top20_global; opt_state["elapsed"]=round(time.time()-t0,1)
+                opt_state["elapsed"]=round(time.time()-t0,1)
 
-        # Проверяем — for по параметрам прервался из-за stop_flag?
-        if stop_flag and stop_flag():
-            print(f"[DBG] Круг #{pass_num} прерван stop_flag", flush=True); break
+        if stop_flag and stop_flag(): break
 
-        if not improved_in_pass:
-            # RSI control sweep
-            rsi_candidates=[]
-            for rl in [v for v in _GRIDS["rsi_len"] if 2<=v<=6]:
-                for rlmax in _GRIDS["rsi_long_max"]:
-                    for rsmin in _GRIDS["rsi_short_min"]:
-                        rsi_candidates.append({**current,"use_rsi_filter":True,"rsi_len":rl,"rsi_long_max":rlmax,"rsi_short_min":rsmin})
-            rsi_candidates.append({**current,"use_rsi_filter":False})
-            with opt_lock: opt_state["current_param"]="RSI контрольный перебор"
-            rsi_results=pmap_fn(rsi_candidates); rsi_results.sort(key=lambda x:-x["fitness"])
-            rsi_best=rsi_results[0]
-            for r in rsi_results[:5]: top20_global=_update_top20(top20_global,r)
-            if rsi_best["fitness"]>best_result["fitness"]:
-                for k in ("use_rsi_filter","rsi_len","rsi_long_max","rsi_short_min"):
-                    current[k]=rsi_best["params"][k]
-                best_result=rsi_best; olog("  RSI-контроль улучшил -> продолжаю","ok")
-            else:
-                print(f"[DBG] Круг #{pass_num} стоп: RSI не помог fitness={best_result['fitness']:.4f}", flush=True); break
-        if pass_num>=max_passes:
-            print(f"[DBG] Круг #{pass_num} стоп: max_passes={max_passes}", flush=True); break
+        if not improved_in_pass: break
+        if pass_num>=max_passes: break
 
+    # Обновляем top20 только финальным результатом старта
+    top20_global = _update_top20(top20_global, best_result)
     return best_result, current, top20_global
 
 # ═══════════════════════════════════════════════════════════════
@@ -1356,19 +1335,15 @@ _opt_stop_flag = threading.Event()
 _opt_thread = None
 _last_fetch_error = None
 
-def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
+def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
                    prev_best_params=None, prev_top20=None):
-    """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20).
-    prev_best_params/prev_top20 — передаются в бесконечном режиме для продолжения улучшения."""
+    """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
     n_workers = max(1, os.cpu_count() or 1)
     olog(f"   ThreadPool: {n_workers} потоков")
-
     _pool = ThreadPoolExecutor(max_workers=n_workers)
 
-    # Захватываем данные в замыкании — не нужен initializer
-    # days_limit=0: свечи уже обрезаны при загрузке, повторная фильтрация по времени не нужна
     _c = candles; _r = risk_pct
     def _eval_thread(ind):
         res = _simulate(_c, ind, 0, risk_pct=_r)
@@ -1384,29 +1359,26 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
 
     top20_global = list(prev_top20) if prev_top20 else []
 
+    # Фаза 1: многоточечный старт
     if prev_best_params:
-        n_random = max(1, n_restarts - 1)
-        start_points = [prev_best_params] + [_random_individual() for _ in range(n_random - 1)]
-        olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_random-1} случайных ━", "ok")
+        start_points = [prev_best_params] + [_random_individual() for _ in range(n_restarts - 1)]
+        olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
     else:
-        start_points = [_default_individual()] + [_random_individual() for _ in range(n_restarts-1)]
+        start_points = [_default_individual()] + [_random_individual() for _ in range(n_restarts - 1)]
         olog(f"━━ ФАЗА 1: {n_restarts} стартов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    local_bests  = []
 
+    local_bests = []
     for i, start_ind in enumerate(start_points):
         if stop_flag(): break
-        if i == 0 and prev_best_params:
-            label = "Старт #1 (лучший предыдущего цикла)"
-        else:
-            label = f"Старт #{i+1}" + (" (середина)" if (i==0 and not prev_best_params) else " (случайный)")
+        label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
         olog(f"── {label} ──", "ok")
         with opt_lock: opt_state["generation"]=i+1
         result, cur, top20_global = _coordinate_descent_from(
-            start_ind, candles, days, pmap, olog, t0, top20_global, label, max_passes=5, stop_flag=stop_flag)
+            start_ind, pmap, olog, t0, top20_global, label, max_passes=6, stop_flag=stop_flag)
         local_bests.append((result["fitness"], result, cur))
-        olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%","found" if result["equity"]>100 else "info")
+        olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
+             "found" if result["equity"]>100 else "info")
         with opt_lock:
-            # Всегда берём лучший из top20 — он же отображается в таблице
             best_so_far = top20_global[0] if top20_global else result
             opt_state["best"] = best_so_far
             opt_state["top20"] = top20_global
@@ -1418,16 +1390,10 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
     local_bests.sort(key=lambda x: -x[0])
     best_f, best_r1, best_p1 = local_bests[0]
 
-    olog(f"", "info")
-    olog(f"━━ ФАЗА 2: Финальный глубокий спуск ━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    final_result, final_params, top20_global = _coordinate_descent_from(
-        best_p1, candles, days, pmap, olog, t0, top20_global, "Финал", max_passes=20, stop_flag=stop_flag)
-
-    if stop_flag(): _pool.shutdown(wait=False); return final_result, final_params, top20_global
-
-    olog(f"━━ ФАЗА 3: Basin Hopping ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    bh_current=dict(final_params); bh_best=final_result
-    for bh_i in range(12):
+    # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
+    olog(f"━━ ФАЗА 2: Basin Hopping (20 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
+    bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
+    for bh_i in range(20):
         if stop_flag(): break
         perturbed=dict(bh_current)
         for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
@@ -1437,18 +1403,18 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        olog(f"  BH {bh_i+1}/12...", "info")
-        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/12"
-        bh_r, bh_p, top20_global=_coordinate_descent_from(
-            perturbed, candles, days, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
-        if bh_r["fitness"]>bh_best["fitness"]:
+        olog(f"  BH {bh_i+1}/20...", "info")
+        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
+        bh_r, bh_p, top20_global = _coordinate_descent_from(
+            perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
+        if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock: opt_state["best"]=final_result; _sw_params=dict(final_params)
 
-    if top20_global and top20_global[0]["fitness"]>final_result["fitness"]:
-        final_result=top20_global[0]
-        final_params=dict(final_result["params"])  # синхронизируем params с результатом
+    if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
+        final_result = top20_global[0]
+        final_params = dict(final_result["params"])
     _pool.shutdown(wait=False)
     return final_result, final_params, top20_global
 
