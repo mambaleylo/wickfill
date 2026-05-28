@@ -1547,7 +1547,8 @@ def run_optimizer(params):
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None)
 
-        if _opt_stop_flag.is_set(): break
+        if _opt_stop_flag.is_set():
+            print(f"[DBG] while-loop: stop_flag сработал на cycle={cycle}", flush=True); break
 
         print(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}", flush=True)
         if final_result:
@@ -1631,6 +1632,16 @@ def run_optimizer(params):
         opt_state["running"] = False
         opt_state["done"]    = True
     print("[opt] Завершён")
+
+def run_optimizer_safe(params):
+    import traceback
+    try:
+        run_optimizer(params)
+    except Exception as e:
+        print(f"[opt] ИСКЛЮЧЕНИЕ: {e}\n{traceback.format_exc()}", flush=True)
+        with opt_lock:
+            opt_state["running"] = False
+            opt_state["error"] = str(e)
 
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
@@ -2685,6 +2696,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e: result={"ok":False,"ms":None,"error":str(e)}
             self._json(result)
         elif parsed.path == "/scan_stop":
+            import traceback
+            print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/sw_stop":
@@ -2818,7 +2831,7 @@ class Handler(BaseHTTPRequestHandler):
             # Если тред жив — не перезапускаем, чтобы не сбрасывать циклы
             if _opt_thread and _opt_thread.is_alive():
                 self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
-            _opt_thread = threading.Thread(target=run_optimizer, args=(params,), daemon=True)
+            _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
             _opt_thread.start()
             self._json({"ok":True})
         else:
