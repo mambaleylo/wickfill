@@ -1492,6 +1492,100 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     _pool.shutdown(wait=False)
     return final_result, final_params, top20_global
 
+# ═══════════════════════════════════════════════════════════════
+# AUTO SAVE / LOAD CONFIG
+# ═══════════════════════════════════════════════════════════════
+_AUTO_DIRS = [
+    os.path.expanduser("~/downloads"),
+    os.path.expanduser("~/Download"),
+    "/sdcard/Download", "/sdcard/Downloads",
+    "/storage/emulated/0/Download",
+    "/storage/emulated/0/Downloads",
+    os.path.expanduser("~/Downloads"),
+]
+
+def _config_key(symbol, tf, days, risk_pct):
+    """Уникальный ключ набора параметров для имени файла."""
+    sym = symbol.replace("_","").replace("/","").lower()
+    return f"{sym}_{tf}_{days}d_r{int(round(risk_pct))}"
+
+def _config_filename(symbol, tf, days, risk_pct, equity):
+    """wickfill_btcusdt_15m_3d_$234_r20.json"""
+    sym = symbol.replace("_","").replace("/","").lower()
+    eq  = int(round(equity))
+    r   = int(round(risk_pct))
+    return f"wickfill_{sym}_{tf}_{days}d_${eq}_r{r}.json"
+
+def _find_auto_config(symbol, tf, days, risk_pct):
+    """Ищет лучший конфиг в Downloads по (symbol,tf,days,risk). Возвращает (path, data) или (None,None)."""
+    import glob as _glob
+    key = _config_key(symbol, tf, days, risk_pct)
+    # Паттерн: wickfill_{key_без_equity}_*.json  →  wickfill_{sym}_{tf}_{days}d_$*_r{r}.json
+    sym = symbol.replace("_","").replace("/","").lower()
+    r   = int(round(risk_pct))
+    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
+    best_path, best_data, best_eq = None, None, -1
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        for fpath in _glob.glob(os.path.join(d, pat)):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not (data.get("best") and data["best"].get("params")): continue
+                # Дополнительная проверка: days и risk совпадают
+                if data.get("days") != days: continue
+                if abs(data.get("risk_pct", risk_pct) - risk_pct) > 0.1: continue
+                eq = data["best"].get("equity", 0)
+                if eq > best_eq:
+                    best_eq = eq; best_path = fpath; best_data = data
+            except Exception:
+                pass
+    return best_path, best_data
+
+def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
+    """Сохраняет конфиг в Downloads. Удаляет предыдущий файл того же ключа если новый лучше."""
+    import glob as _glob
+    sym = symbol.replace("_","").replace("/","").lower()
+    r   = int(round(risk_pct))
+    eq  = best.get("equity", 100)
+    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
+    # Найти папку для записи
+    save_dir = None
+    for d in _AUTO_DIRS:
+        if os.path.isdir(d):
+            save_dir = d; break
+    if not save_dir:
+        save_dir = os.path.dirname(os.path.abspath(__file__))
+    # Удалить устаревшие файлы того же набора параметров
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        for old_f in _glob.glob(os.path.join(d, pat)):
+            try:
+                with open(old_f, "r", encoding="utf-8") as f:
+                    old_data = json.load(f)
+                old_eq = old_data.get("best", {}).get("equity", 0)
+                if old_eq <= eq:
+                    os.remove(old_f)
+            except Exception:
+                pass
+    fname = _config_filename(symbol, tf, days, risk_pct, eq)
+    fpath = os.path.join(save_dir, fname)
+    data  = {
+        "best": best, "top20": top20,
+        "symbol": symbol, "tf": tf,
+        "days": days, "risk_pct": risk_pct,
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        if olog: olog(f"💾 Автосохранение: {fname}", "ok")
+        print(f"[auto_save] {fpath}", flush=True)
+        return fpath
+    except Exception as e:
+        print(f"[auto_save] Ошибка: {e}", flush=True)
+        return None
+
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
     symbol       = params.get("wf_symbol", "BTC_USDT")
@@ -1558,6 +1652,16 @@ def run_optimizer(params):
     cycle = 0
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
+    _last_autosave_eq = 0.0   # equity последнего автосохранения
+
+    # Авто-загрузка конфига из Downloads (если нет ручного seed)
+    if not seed:
+        auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
+        if auto_data:
+            seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
+            _last_autosave_eq = auto_data["best"].get("equity", 0)
+            olog(f"🔍 Авто-загрузка: {os.path.basename(auto_path)}", "ok")
+            olog(f"   ${_last_autosave_eq:.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
@@ -1640,6 +1744,13 @@ def run_optimizer(params):
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
                 _sw_params = all_time_params
+
+            # Автосохранение в Downloads если результат улучшился
+            new_eq = all_time_best.get("equity", 0)
+            if new_eq > _last_autosave_eq:
+                saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
+                if saved:
+                    _last_autosave_eq = new_eq
 
             # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             with opt_lock:
