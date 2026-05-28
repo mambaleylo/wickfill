@@ -1826,12 +1826,7 @@ input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
 
 /* Toggle */
 .toggle-wrap{
-  display:flex;align-items:center;gap:10px;
-  padding:10px 12px;
-  background:rgba(247,243,238,0.8);
-  border:1px solid var(--border2);
-  border-radius:var(--radius-sm);
-  cursor:pointer;transition:background .18s;
+  display:none;
 }
 .toggle-wrap:hover{background:var(--cream2)}
 .toggle-text{flex:1;font-size:.82rem;color:var(--text2)}
