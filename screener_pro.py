@@ -1009,6 +1009,12 @@ function render(){{
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
     ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
     ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
+    // Полоски на границах TP/SL — строго в пределах ширины заливки
+    ctx.setLineDash([]);ctx.lineWidth=0.8;
+    ctx.strokeStyle=isLong?'rgba(58,125,82,0.45)':'rgba(160,48,48,0.45)';
+    ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
+    ctx.strokeStyle=isLong?'rgba(160,48,48,0.45)':'rgba(58,125,82,0.45)';
+    ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
     ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
     // TP/SL dashed lines and labels ONLY for active open trade
     if(activeSig===s){{
@@ -1053,25 +1059,29 @@ function render(){{
   }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
-    const x=cx(vi),isLong=s.dir===1,arrowPad=Math.max(5,cw*0.6);
+    const x=cx(vi),isLong=s.dir===1;
+    const c_sig=vis[vi];
+    const arrowSz=Math.max(5,Math.min(7,cw*0.45));
+    const arrowOff=Math.max(18,cw*2.2);
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
     ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
     ctx.strokeStyle=isOpenEnd?'#b0a090':s.win===null?'#b0a090':isWin?'#3a7d52':'#a03030';
     ctx.lineWidth=1.5;ctx.beginPath();
-    if(isLong){{const ay=py(s.ep)+arrowPad;ctx.moveTo(x,ay-arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
-    else{{const ay=py(s.ep)-arrowPad;ctx.moveTo(x,ay+arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
+    if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
+    else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
     if(!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
       const lbl=(pct>=0?'+':'')+pct.toFixed(2)+'%';
       const vi_exit=s.exit_bar-viewStart,x_exit=(vi_exit>=0&&vi_exit<vis.length)?cx(vi_exit):x;
-      const lx=(x+x_exit)/2,ly=isLong?py(s.ep)+arrowPad+14:py(s.ep)-arrowPad-5;
+      const lx=(x+x_exit)/2;
+      const ly=isLong?py(c_sig.l)+arrowOff+arrowSz+16:py(c_sig.h)-arrowOff-arrowSz-16;
       ctx.font=`bold ${{Math.max(9,Math.min(12,cw*1.5))}}px system-ui`;ctx.textAlign='center';
       const tw=ctx.measureText(lbl).width;
       ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
       ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
-      ctx.fillStyle=pct>=0?'#fff':'#fff';ctx.fillText(lbl,lx,ly);
+      ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
   ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
@@ -1183,6 +1193,43 @@ def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
 # ═══════════════════════════════════════════════════════════════
 # CHECK SIGNAL ON LAST CANDLE & SEND EMAIL
 # ═══════════════════════════════════════════════════════════════
+def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
+    """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
+    if not alert_cfg or not prev_signals or not new_signals:
+        return
+    # Карта открытых позиций из предыдущего прогона (exit_bar == None или open_end)
+    prev_open = {s["bar_i"]: s for s in prev_signals
+                 if s.get("exit_bar") is None or s.get("open_end")}
+    if not prev_open:
+        return
+    moscow_offset = 3 * 3600
+    for s in new_signals:
+        bar_i = s["bar_i"]
+        if bar_i not in prev_open:
+            continue
+        # Была открытой — теперь закрыта?
+        if s.get("exit_bar") is not None and not s.get("open_end"):
+            is_win   = s.get("win", False)
+            exit_p   = s.get("exit_p") or (s["tp"] if is_win else s["sl"])
+            is_long  = s["dir"] == 1
+            pct      = ((exit_p - s["ep"]) / s["ep"] * 100 if is_long
+                        else (s["ep"] - exit_p) / s["ep"] * 100)
+            dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
+            res_str  = "✅ Тейк-профит" if is_win else "❌ Стоп-лосс"
+            pct_str  = ("+" if pct >= 0 else "") + f"{pct:.2f}%"
+            dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(time.time()) + moscow_offset))
+            text = (
+                f"🔔 <b>WickFill — Сделка закрыта</b>\n\n"
+                f"{dir_str} <b>{symbol}</b> {tf}\n"
+                f"{res_str}  <b>{pct_str}</b>\n\n"
+                f"📥 Вход:   <b>{s['ep']:.6g}</b>\n"
+                f"📤 Выход:  <b>{exit_p:.6g}</b>\n"
+                f"🕐 {dt} (МСК)"
+            )
+            ok = _send_telegram(alert_cfg, text)
+            status = "✓" if ok else "✕"
+            print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
+
 def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
     """Проверяет последнюю свечу. Если сигнал — шлёт email."""
     if not best_params or not alert_cfg: return
@@ -1326,12 +1373,17 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
 
             with opt_lock:
+                prev_signals_for_close = list(opt_state.get("chart_signals") or [])
                 _sw_candles = new_candles
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
                 opt_state["sw_last_update"] = int(time.time())
                 opt_state["sw_candle_count"] = len(new_candles)
                 br = opt_state.get("best") or {}
+
+            # Уведомление о закрытии сделки
+            if alert_cfg and prev_signals_for_close:
+                _check_trade_close(prev_signals_for_close, chart_signals, alert_cfg, symbol, tf)
 
             chart_path = _save_chart(chart_candles_fmt, chart_signals, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
             if chart_path:
@@ -1512,6 +1564,28 @@ def run_optimizer(params):
         prev_best_params = dict(seed["best"]["params"])
         prev_top20       = list(seed.get("top20") or [])
         olog(f"📂 Загружен seed: ${seed['best'].get('equity',0):.2f} WR {seed['best'].get('winrate',0):.1f}% | top20: {len(prev_top20)} записей", "ok")
+        # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
+        try:
+            olog(f"📊 Строю предварительный график из конфига...", "info")
+            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct)
+            if sim_pre:
+                sigs_pre = sim_pre["_signals"] or []
+                cc_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in candles]
+                cur_pre = _fetch_current_candle(symbol, tf)
+                if cur_pre and cur_pre["t"] > candles[-1]["t"]:
+                    cc_fmt = cc_fmt + [{"t":cur_pre["t"],"o":cur_pre["open"],"h":cur_pre["high"],"l":cur_pre["low"],"c":cur_pre["close"],"live":True}]
+                pre_best = seed["best"]
+                cp = _save_chart(cc_fmt, sigs_pre, pre_best, symbol, tf, risk_pct)
+                with opt_lock:
+                    opt_state["chart_candles"]    = cc_fmt
+                    opt_state["chart_signals"]    = sigs_pre
+                    opt_state["chart_path"]       = cp or ""
+                    opt_state["chart_updated_at"] = int(time.time())
+                    opt_state["best"]             = pre_best
+                    opt_state["top20"]            = prev_top20
+                olog(f"✅ График готов: {len(sigs_pre)} сигналов", "ok")
+        except Exception as e:
+            olog(f"⚠ Предварительный график не удался: {e}", "warn")
 
     while True:
         if _opt_stop_flag.is_set(): break
