@@ -994,16 +994,23 @@ function render(){{
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
   const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;if(mx<=mn)mx=mn+1;
-  const PAD_L=6,PAD_R=62,PAD_T=14,PAD_B=34,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
+  const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=46,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
   ctx.clearRect(0,0,W,H);
+  // Background fill chart area
+  ctx.fillStyle='rgba(247,243,238,1)';ctx.fillRect(0,0,W,H);
+  // Time axis separator
+  ctx.strokeStyle='rgba(92,79,67,.2)';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(PAD_L,H-PAD_B);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
+  // Price axis separator
+  ctx.beginPath();ctx.moveTo(W-PAD_R,PAD_T);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='rgba(92,79,67,.1)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#7a6e63';ctx.fillText(price.toPrecision(5),W-PAD_R+4,y+3);
+    ctx.strokeStyle='rgba(92,79,67,.08)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle='#7a6e63';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
@@ -1013,10 +1020,22 @@ function render(){{
     ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
     ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
     ctx.setLineDash([4,3]);
-    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
-    ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
+    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
+    ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
     ctx.setLineDash([]);
     ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    // TP label on price axis
+    const tpY=py(s.tp),slY=py(s.sl);
+    ctx.font='bold 9px system-ui';ctx.textAlign='left';
+    // TP badge
+    ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
+    // SL badge
+    ctx.fillStyle='rgba(140,120,100,0.75)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
+    ctx.font='10px system-ui';
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
@@ -1057,7 +1076,8 @@ function render(){{
   const step=Math.max(1,Math.floor(vis.length/8));
   for(let i=0;i<vis.length;i+=step){{
     const t=new Date(vis[i].t*1000);
-    ctx.fillText((t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours().toString().padStart(2,'0')+':00',cx(i),H-PAD_B+14);
+    const lbl=(t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+    ctx.fillText(lbl,cx(i),H-PAD_B+16);
   }}
 }}
 wrap.addEventListener('wheel',e=>{{e.preventDefault();const delta=e.deltaY>0?1.18:0.84,ratio=(e.offsetX-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
@@ -1758,7 +1778,7 @@ body>*{position:relative;z-index:1}
 .field label{font-size:.72rem;color:var(--text3);font-weight:500}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 
-input[type=text],input[type=password],select{
+input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
   background:rgba(247,243,238,0.9);
   border:1px solid var(--border);
@@ -1771,6 +1791,9 @@ input[type=text],input[type=password],select{
   -webkit-appearance:none;appearance:none;
 }
 input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
 
 /* Slider */
 .slider-wrap{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
@@ -2093,7 +2116,7 @@ details summary::-webkit-details-marker{display:none}
   .card-title{display:none}
   .field-row{gap:6px;margin-bottom:6px !important}
   .field label{font-size:.65rem}
-  input[type=text],select{padding:6px 9px;font-size:.82rem}
+  input[type=text],input[type=number],select{padding:6px 9px;font-size:.82rem}
 
   /* Слайдеры — убрать лейблы, только значение */
   .slider-wrap{gap:6px}
