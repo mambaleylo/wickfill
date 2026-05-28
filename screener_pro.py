@@ -942,13 +942,7 @@ canvas{{display:block;width:100%;height:100%}}
   border-radius:10px;padding:7px 11px;font-size:.7rem;line-height:1.75;
   white-space:nowrap;z-index:20;color:#d4c8bc;
   box-shadow:0 4px 16px rgba(0,0,0,.4)}}
-.legend{{position:absolute;bottom:36px;left:10px;font-size:.66rem;
-  color:#9a8e83;line-height:2;
-  background:rgba(30,26,23,.85);
-  padding:5px 9px;border-radius:8px;
-  border:1px solid rgba(255,255,255,.1);
-  pointer-events:none}}
-.legend span{{display:inline-block;width:11px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}}
+.legend{{display:none}}
 .live-badge{{padding:2px 7px;
   background:var(--green-light);border:1px solid rgba(58,125,82,.3);
   border-radius:10px;font-size:.65rem;color:var(--green);
@@ -961,12 +955,7 @@ canvas{{display:block;width:100%;height:100%}}
   <div id="canvas-wrap">
     <canvas id="c"></canvas>
     <div id="tooltip"></div>
-    <div class="legend">
-      <div><span style="background:#4a7fc1"></span>Лонг</div>
-      <div><span style="background:#c8902a"></span>Шорт</div>
-      <div><span style="background:var(--green)"></span>TP</div>
-      <div><span style="background:var(--text3)"></span>SL</div>
-    </div>
+
     <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:#9a8e83">
       <span class="live-badge" id="liveBadge">⬤ LIVE</span>
       <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
@@ -1020,13 +1009,13 @@ function render(){{
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
     ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
     ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
-    ctx.setLineDash([4,3]);
-    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
-    ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
-    // TP/SL labels only for active trade
+    ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    // TP/SL dashed lines and labels ONLY for active open trade
     if(activeSig===s){{
+      ctx.setLineDash([4,3]);
+      ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
+      ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
+      ctx.setLineDash([]);
       const tpY=py(s.tp),slY=py(s.sl);
       ctx.font='bold 9px system-ui';ctx.textAlign='left';
       ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
@@ -1945,7 +1934,9 @@ input[type=number]{-moz-appearance:textfield}
   display:flex;flex-direction:row;min-height:0;
   border-bottom:1px solid var(--border2);
   flex-shrink:0;
-  height:110px;
+  height:auto;
+  min-height:90px;
+  max-height:130px;
 }
 .cycles-col{
   flex-shrink:0;
@@ -1970,7 +1961,7 @@ input[type=number]{-moz-appearance:textfield}
 
 /* Chart area — fills all remaining space */
 .chart-area{
-  flex:1;display:flex;flex-direction:column;min-height:0;position:relative;
+  flex:1;display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - 280px);position:relative;
   background:var(--cream2);
 }
 .chart-placeholder{
@@ -2182,12 +2173,13 @@ details summary::-webkit-details-marker{display:none}
 
   /* Top strip — вертикально на мобилке */
   .top-strip{flex-direction:column;height:auto;flex-shrink:0;}
-  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;}
-  .log-col{max-height:80px;}
+  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;}
+  .cc-strip{flex-wrap:nowrap;overflow-x:auto;}
+  .log-col{max-height:70px;}
 
-  /* График — под таблицей */
-  .chart-area{min-height:260px;flex:none;}
-  #chartFrame{min-height:260px;}
+  /* График — под таблицей, компактнее */
+  .chart-area{height:220px;flex:none;}
+  #chartFrame{height:220px;min-height:0;}
 
   /* Циклы — компактная лента */
   .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
@@ -2198,6 +2190,9 @@ details summary::-webkit-details-marker{display:none}
 
   /* Мобильные кнопки Топ / Логи */
   #mob-top-toggle{display:flex !important;flex-shrink:0}
+
+  /* На мобиле осветляем тёмный график */
+  #chartFrame{filter:brightness(1.35) contrast(0.92);}
 
   /* Лог */
   .log-area{padding:4px 10px;}
