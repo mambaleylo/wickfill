@@ -1543,48 +1543,61 @@ def _find_auto_config(symbol, tf, days, risk_pct):
     return best_path, best_data
 
 def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
-    """Сохраняет конфиг в Downloads. Удаляет предыдущий файл того же ключа если новый лучше."""
-    import glob as _glob
+    """Сохраняет конфиг в Downloads. Атомарная замена — никаких копий с (1)."""
+    import glob as _glob, tempfile
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
     eq  = best.get("equity", 100)
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
-    # Найти папку для записи
+
+    # Найти папку для записи (первая существующая)
     save_dir = None
     for d in _AUTO_DIRS:
         if os.path.isdir(d):
             save_dir = d; break
     if not save_dir:
         save_dir = os.path.dirname(os.path.abspath(__file__))
-    # Удалить устаревшие файлы того же набора параметров
-    for d in _AUTO_DIRS:
-        if not os.path.isdir(d): continue
-        for old_f in _glob.glob(os.path.join(d, pat)):
-            try:
-                with open(old_f, "r", encoding="utf-8") as f:
-                    old_data = json.load(f)
-                old_eq = old_data.get("best", {}).get("equity", 0)
-                if old_eq <= eq:
-                    os.remove(old_f)
-            except Exception:
-                pass
+
     fname = _config_filename(symbol, tf, days, risk_pct, eq)
     fpath = os.path.join(save_dir, fname)
-    data  = {
+
+    data = {
         "best": best, "top20": top20,
         "symbol": symbol, "tf": tf,
         "days": days, "risk_pct": risk_pct,
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+    # Атомарная запись: пишем во временный файл рядом, потом os.replace()
+    # os.replace() гарантирует замену без создания копий (1)
     try:
-        with open(fpath, "w", encoding="utf-8") as f:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        if olog: olog(f"💾 Автосохранение: {fname}", "ok")
-        print(f"[auto_save] {fpath}", flush=True)
-        return fpath
+        os.replace(tmp_path, fpath)   # атомарная замена — перезапишет если уже есть
     except Exception as e:
-        print(f"[auto_save] Ошибка: {e}", flush=True)
+        print(f"[auto_save] Ошибка записи: {e}", flush=True)
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
         return None
+
+    # Удалить ВСЕ старые файлы того же набора параметров (кроме только что сохранённого)
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        for old_f in _glob.glob(os.path.join(d, pat)):
+            if os.path.abspath(old_f) == os.path.abspath(fpath):
+                continue  # это наш новый файл — не трогаем
+            try:
+                os.remove(old_f)
+                print(f"[auto_save] Удалён старый: {old_f}", flush=True)
+            except Exception as e:
+                print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
+
+    if olog: olog(f"💾 Автосохранение: {fname}", "ok")
+    print(f"[auto_save] Сохранён: {fpath}", flush=True)
+    return fpath
 
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
