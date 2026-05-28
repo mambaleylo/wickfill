@@ -2691,11 +2691,9 @@ class Handler(BaseHTTPRequestHandler):
             with opt_lock: opt_state["sw_running"]=False
             self._json({"ok":True})
         elif parsed.path == "/reset_running":
+            # Только сбрасываем флаги UI — не трогаем оптимизатор
             with opt_lock:
-                opt_state["running"]=False
-                opt_state["done"]=False
                 opt_state["error"]=""
-            _opt_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
