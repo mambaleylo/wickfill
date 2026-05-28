@@ -607,16 +607,19 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     else:
         import math as _math
         net_return=equity-100.0
-        expected_dd=p["sl_pct"]*(1.0-wr_val/100.0)*_math.sqrt(max(trades,1))
-        effective_dd=max(max_dd,expected_dd,1.0)
+        # Пол просадки растёт при малом числе сделок — защита от случайных WR=100% на 3 сделках
+        min_dd_floor=max(1.0, 15.0/_math.sqrt(max(trades,1)))
+        effective_dd=max(max_dd,min_dd_floor)
         calmar=net_return/effective_dd
+        # Бонус за абсолютную прибыль (log2): $234→~8, $2500→~17 — выравнивает calmar vs реальные деньги
+        profit_bonus=_math.log2(max(net_return,0)+1)*3.0
         if trades<=200: trade_bonus=_math.log(max(trades/8.0,1.0)+1)*4.0
         else: trade_bonus=_math.log(200/8.0+1)*4.0-(trades-200)*0.01
-        wr_bonus=max(0.0,wr_val-50.0)*0.1
+        wr_bonus=max(0.0,wr_val-50.0)*0.08
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
-        pf_bonus=pf_val*2.0
+        pf_bonus=pf_val*1.5
         dd_penalty=max(0.0,max_dd-15.0)*0.5
-        fitness=calmar*5.0+trade_bonus+wr_bonus+pf_bonus-dd_penalty
+        fitness=calmar*4.0+profit_bonus+trade_bonus+wr_bonus+pf_bonus-dd_penalty
 
     return {
         "equity": round(equity,2), "trades": trades, "wins": wins, "losses": losses_n,
