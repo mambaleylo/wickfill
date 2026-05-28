@@ -691,7 +691,7 @@ def _update_top20(top20_list, result):
     top20_list.sort(key=lambda x: -x["fitness"])
     seen=set(); deduped=[]
     for item in top20_list:
-        key=round(item["equity"],2)
+        key=round(item["fitness"], 6)
         if key not in seen: seen.add(key); deduped.append(item)
     return deduped[:7]
 
@@ -1484,7 +1484,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
         if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
-            with opt_lock: opt_state["best"]=final_result; _sw_params=dict(final_params)
+            with opt_lock: opt_state["best"]=final_result; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
 
     if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
         final_result = top20_global[0]
@@ -1496,11 +1496,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
 # AUTO SAVE / LOAD CONFIG
 # ═══════════════════════════════════════════════════════════════
 _AUTO_DIRS = [
-    os.path.expanduser("~/downloads"),
-    os.path.expanduser("~/Download"),
-    "/sdcard/Download", "/sdcard/Downloads",
+    "/sdcard/Download",
+    "/sdcard/Downloads",
     "/storage/emulated/0/Download",
     "/storage/emulated/0/Downloads",
+    os.path.expanduser("~/downloads"),
+    os.path.expanduser("~/Download"),
     os.path.expanduser("~/Downloads"),
 ]
 
@@ -1550,10 +1551,16 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     eq  = best.get("equity", 100)
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
 
-    # Найти папку для записи (первая существующая)
+    # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
+    for d in ("/sdcard/Download", "/sdcard/Downloads"):
+        if not os.path.isdir(d):
+            try: os.makedirs(d, exist_ok=True)
+            except Exception: pass
+
+    # Найти папку для записи (первая существующая и доступная для записи)
     save_dir = None
     for d in _AUTO_DIRS:
-        if os.path.isdir(d):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
             save_dir = d; break
     if not save_dir:
         save_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1570,6 +1577,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
 
     # Атомарная запись: пишем во временный файл рядом, потом os.replace()
     # os.replace() гарантирует замену без создания копий (1)
+    tmp_path = None
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
@@ -1577,10 +1585,11 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         os.replace(tmp_path, fpath)   # атомарная замена — перезапишет если уже есть
     except Exception as e:
         print(f"[auto_save] Ошибка записи: {e}", flush=True)
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
         return None
 
     # Удалить ВСЕ старые файлы того же набора параметров (кроме только что сохранённого)
@@ -1595,7 +1604,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
             except Exception as e:
                 print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
 
-    if olog: olog(f"💾 Автосохранение: {fname}", "ok")
+    if olog: olog(f"💾 Сохранено: {fpath}", "ok")
     print(f"[auto_save] Сохранён: {fpath}", flush=True)
     return fpath
 
