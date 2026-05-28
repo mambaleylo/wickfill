@@ -585,11 +585,10 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
         rr_r=move/t_orig_sl if t_orig_sl>0 else 0
         pnl_ot=t_pos*risk_pct/100*rr_r
-        # Засчитываем открытую позицию в статистику (по текущей цене)
-        equity+=pnl_ot; pnls.append(pnl_ot); trades+=1
+        # Не засчитываем незакрытую позицию в статистику — она ещё не завершена
+        # Добавляем в pnls только для equity, но не в trades/wins
+        equity+=pnl_ot; pnls.append(pnl_ot)
         is_win_ot=pnl_ot>0
-        if is_win_ot: wins+=1
-        else: losses_n+=1
         if equity>max_eq: max_eq=equity
         dd_ot=(max_eq-equity)/max_eq*100 if max_eq>0 else 0
         if dd_ot>max_dd: max_dd=dd_ot
@@ -924,83 +923,54 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
     return f"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>WickFill Live · {symbol} · {tf}</title>
+<title>WickFill · {symbol} · {tf}</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--blue:#58a6ff;
-  --green:#3fb950;--red:#f85149;--yellow:#e3b341;--muted:#8b949e;--text:#e6edf3}}
-html,body{{height:100%;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
-.topbar{{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}}
-.topbar-title{{font-size:.9rem;font-weight:700;flex:1;min-width:160px}}
-.stats{{display:flex;gap:14px;font-size:.72rem;flex-wrap:wrap}}
-.stats .g b{{color:var(--green)}}.stats .r b{{color:var(--red)}}.stats .y b{{color:var(--yellow)}}
-.btn{{padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:.73rem}}
+:root{{
+  --cream:#f7f3ee;--cream2:#ede8e0;--cream3:#e2dbd0;
+  --bark:#4a3f34;--text:#1a1310;--text2:#504438;--text3:#7a6e63;
+  --border:rgba(92,79,67,.15);--border2:rgba(92,79,67,.08);
+  --green:#3a7d52;--red:#a03030;--yellow:#8a6a1a;
+  --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
+}}
+html,body{{height:100%;background:var(--cream);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
-#sidebar{{width:240px;background:var(--bg2);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;transition:width .2s}}
-#sidebar.hidden{{width:0;overflow:hidden}}
-.sidebar-inner{{padding:10px 12px;min-width:240px}}
-.sidebar-inner h3{{font-size:.75rem;color:var(--blue);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}}
-#paramTable{{width:100%;border-collapse:collapse;font-size:.68rem}}
-#paramTable td{{padding:3px 4px;border-bottom:1px solid var(--bg3);vertical-align:top}}
-#paramTable td:first-child{{color:var(--muted);padding-right:8px}}
-.result-card{{margin-top:14px;background:var(--bg3);border-radius:8px;padding:9px 11px}}
-.result-card h3{{font-size:.73rem;color:var(--blue);text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px}}
-.rc-grid{{display:grid;grid-template-columns:1fr 1fr;gap:5px}}
-.rc-item{{background:var(--bg2);border-radius:5px;padding:5px 7px;text-align:center}}
-.rc-val{{font-size:.95rem;font-weight:700;color:var(--blue)}}.rc-val.g{{color:var(--green)}}.rc-val.r{{color:var(--red)}}
-.rc-lbl{{font-size:.6rem;color:var(--muted);margin-top:1px}}
-#tooltip{{position:absolute;display:none;pointer-events:none;background:rgba(13,17,23,.95);border:1px solid var(--border);border-radius:7px;padding:7px 11px;font-size:.7rem;line-height:1.75;white-space:nowrap;z-index:20}}
-.legend{{position:absolute;bottom:36px;left:10px;font-size:.66rem;color:var(--muted);line-height:2;background:rgba(13,17,23,.7);padding:5px 9px;border-radius:6px;pointer-events:none}}
+#tooltip{{position:absolute;display:none;pointer-events:none;
+  background:rgba(247,243,238,.97);border:1px solid var(--border);
+  border-radius:10px;padding:7px 11px;font-size:.7rem;line-height:1.75;
+  white-space:nowrap;z-index:20;color:var(--text);
+  box-shadow:0 4px 16px rgba(92,79,67,.12)}}
+.legend{{position:absolute;bottom:36px;left:10px;font-size:.66rem;
+  color:var(--text3);line-height:2;
+  background:rgba(247,243,238,.85);
+  padding:5px 9px;border-radius:8px;
+  border:1px solid var(--border2);
+  pointer-events:none}}
 .legend span{{display:inline-block;width:11px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}}
-.live-badge{{padding:2px 7px;background:#0f2a0f;border:1px solid var(--green);border-radius:10px;font-size:.65rem;color:var(--green);animation:pulse 2s infinite}}
+.live-badge{{padding:2px 7px;
+  background:var(--green-light);border:1px solid rgba(58,125,82,.3);
+  border-radius:10px;font-size:.65rem;color:var(--green);
+  animation:pulse 2s infinite;display:inline-block}}
 @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.5}}}}
-::-webkit-scrollbar{{width:5px}}::-webkit-scrollbar-thumb{{background:var(--border);border-radius:3px}}
+::-webkit-scrollbar{{width:5px}}
+::-webkit-scrollbar-thumb{{background:var(--cream3);border-radius:3px}}
 </style></head><body>
-<div class="topbar">
-  <div class="topbar-title">📊 WickFill · {symbol} · {tf}
-    &nbsp;<span class="live-badge" id="liveBadge">⬤ LIVE</span>
-    &nbsp;<span style="color:var(--muted);font-size:.7rem">Обновлено: {updated} · {len(candles)} св. · {trades} сделок</span>
-  </div>
-  <div class="stats">
-    <span class="{'g' if wr>=55 else 'r' if wr<45 else ''}">WR <b>{wr}%</b></span>
-    <span>Сделок <b>{trades}</b></span>
-    <span class="{'g' if eq>100 else 'r'}">Депозит <b>${eq:.2f}</b></span>
-    <span class="{'g' if dd<15 else 'r'}">DD <b>{dd:.1f}%</b></span>
-    <span class="{'g' if (pf if pf!=999 else 99)>=1.5 else 'r'}">PF <b>{'∞' if pf==999 else f'{pf:.2f}'}</b></span>
-    <span class="y">SL <b>{p.get('sl_pct','—')}%</b></span>
-    <span style="color:var(--green)">TP <b>{p.get('tp_pct','—')}%</b></span>
-    <span style="color:#a78bfa">Риск <b>{risk_pct_ui:.0f}%</b></span>
-  </div>
-  <button class="btn" onclick="location.reload()">↻ Обновить</button>
-  <button class="btn" onclick="toggleSidebar()">⚙ Параметры</button>
-</div>
 <div class="body">
   <div id="canvas-wrap">
     <canvas id="c"></canvas>
     <div id="tooltip"></div>
     <div class="legend">
-      <div><span style="background:var(--blue)"></span>Лонг</div>
-      <div><span style="background:var(--yellow)"></span>Шорт</div>
+      <div><span style="background:#4a7fc1"></span>Лонг</div>
+      <div><span style="background:#c8902a"></span>Шорт</div>
       <div><span style="background:var(--green)"></span>TP</div>
-      <div><span style="background:#444"></span>SL</div>
+      <div><span style="background:var(--text3)"></span>SL</div>
     </div>
-  </div>
-  <div id="sidebar">
-    <div class="sidebar-inner">
-      <div class="result-card">
-        <h3>Результат</h3>
-        <div class="rc-grid">
-          <div class="rc-item"><div class="rc-val {'g' if eq>100 else 'r'}">${eq:.2f}</div><div class="rc-lbl">Депозит</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if wr>=55 else 'r'}">{wr}%</div><div class="rc-lbl">Winrate</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if dd<15 else 'r'}">{dd:.1f}%</div><div class="rc-lbl">Max DD</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if (pf if pf!=999 else 99)>=1.5 else 'r'}">{'∞' if pf==999 else f'{pf:.2f}'}</div><div class="rc-lbl">PF</div></div>
-        </div>
-      </div>
-      <br>
-      <h3>Параметры</h3>
-      <table id="paramTable">{params_rows}</table>
+    <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:var(--text3)">
+      <span class="live-badge" id="liveBadge">⬤ LIVE</span>
+      <span style="font-weight:600;color:var(--bark)">{symbol} · {tf}</span>
+      <span>{len(candles)} св. · {trades} сд.</span>
     </div>
   </div>
 </div>
@@ -1032,25 +1002,25 @@ function render(){{
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='#1e2530';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#8b949e';ctx.fillText(price.toPrecision(5),W-PAD_R+4,y+3);
+    ctx.strokeStyle='rgba(92,79,67,.1)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle='#7a6e63';ctx.fillText(price.toPrecision(5),W-PAD_R+4,y+3);
   }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
     const ei=Math.min(Math.max(viC,eiR),vis.length-1);
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
-    ctx.fillStyle='rgba(63,185,80,0.07)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
-    ctx.fillStyle='rgba(248,81,73,0.07)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
+    ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
+    ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
     ctx.setLineDash([4,3]);
-    ctx.strokeStyle=isLong?'#3fb950':'#f85149';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
-    ctx.strokeStyle='#556';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
+    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
+    ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
     ctx.setLineDash([]);
-    ctx.strokeStyle=isLong?'#58a6ff':'#e3b341';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
-    const col=bull?'#3fb950':'#f85149';
+    const col=bull?'#3a7d52':'#a03030';
     ctx.globalAlpha=isLive?0.55:1.0;
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,cw*0.1);
     if(isLive) ctx.setLineDash([3,2]);
@@ -1064,8 +1034,8 @@ function render(){{
     const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
     const x=cx(vi),isLong=s.dir===1,arrowPad=Math.max(5,cw*0.6);
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
-    ctx.fillStyle=isLong?'#58a6ff':'#e3b341';
-    ctx.strokeStyle=isOpenEnd?'#555':s.win===null?'#aaa':isWin?'#3fb950':'#f85149';
+    ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
+    ctx.strokeStyle=isOpenEnd?'#b0a090':s.win===null?'#b0a090':isWin?'#3a7d52':'#a03030';
     ctx.lineWidth=1.5;ctx.beginPath();
     if(isLong){{const ay=py(s.ep)+arrowPad;ctx.moveTo(x,ay-arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
     else{{const ay=py(s.ep)-arrowPad;ctx.moveTo(x,ay+arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
@@ -1078,12 +1048,12 @@ function render(){{
       const lx=(x+x_exit)/2,ly=isLong?py(s.ep)+arrowPad+14:py(s.ep)-arrowPad-5;
       ctx.font=`bold ${{Math.max(9,Math.min(12,cw*1.5))}}px system-ui`;ctx.textAlign='center';
       const tw=ctx.measureText(lbl).width;
-      ctx.fillStyle=pct>=0?'rgba(20,50,20,0.85)':'rgba(60,15,15,0.85)';
+      ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
       ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
-      ctx.fillStyle=pct>=0?'#3fb950':'#f85149';ctx.fillText(lbl,lx,ly);
+      ctx.fillStyle=pct>=0?'#fff':'#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
-  ctx.fillStyle='#8b949e';ctx.font='10px system-ui';ctx.textAlign='center';
+  ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
   const step=Math.max(1,Math.floor(vis.length/8));
   for(let i=0;i<vis.length;i+=step){{
     const t=new Date(vis[i].t*1000);
@@ -2250,19 +2220,11 @@ details summary::-webkit-details-marker{display:none}
       <div class="field-row" style="margin-bottom:0">
         <div class="field">
           <label>История (дни)</label>
-          <div class="slider-wrap">
-            <input type="range" id="wf_days" min="3" max="90" value="3" step="1"
-              oninput="syncSlider(this,'wfDV','')" onchange="syncSlider(this,'wfDV','')">
-            <span class="slider-val" id="wfDV"><b>3</b></span>
-          </div>
+          <input type="number" id="wf_days" min="3" max="90" value="3" step="1" style="width:100%">
         </div>
         <div class="field">
           <label>Риск %</label>
-          <div class="slider-wrap">
-            <input type="range" id="wf_risk" min="1" max="100" value="20" step="1"
-              oninput="syncSlider(this,'wfRV','%')" onchange="syncSlider(this,'wfRV','%')">
-            <span class="slider-val" id="wfRV">20%</span>
-          </div>
+          <input type="number" id="wf_risk" min="1" max="100" value="20" step="1" style="width:100%">
         </div>
       </div>
     </div>
@@ -2411,24 +2373,6 @@ details summary::-webkit-details-marker{display:none}
 <script>
 let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=0;
 const infiniteMode=true;
-/* ── Slider sync ── */
-function syncSlider(el, vId, suffix){
-  const v=el.value;
-  const max=parseFloat(el.max), min=parseFloat(el.min);
-  const pct=((v-min)/(max-min)*100)+'%';
-  el.style.setProperty('--pct',pct);
-  const e1=document.getElementById(vId); if(e1) e1.innerHTML='<b>'+v+'</b>'+(suffix||'');
-}
-
-/* Init sliders */
-document.addEventListener('DOMContentLoaded',()=>{
-  const sliders=[{id:'wf_days',vId:'wfDV',suffix:''},{id:'wf_risk',vId:'wfRV',suffix:'%'}];
-  sliders.forEach(({id,vId,suffix})=>{
-    const el=document.getElementById(id); if(!el) return;
-    syncSlider(el,vId,suffix);
-  });
-});
-
 function toggleInfinite(){} // режим всегда бесконечный
 
 /* ── API check ── */
