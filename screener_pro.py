@@ -887,7 +887,10 @@ def _send_telegram(cfg, text):
 
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
-    dt=time.strftime("%Y-%m-%d %H:%M", time.localtime(candle_t))
+    # Показываем время ЗАКРЫТИЯ свечи (открытие + интервал), в московском времени (UTC+3)
+    close_t = candle_t + TF_SECONDS.get(tf, 3600)
+    moscow_offset = 3 * 3600  # UTC+3
+    dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
     text = (
         f"🔔 <b>WickFill Сигнал</b>\n\n"
         f"{dir_str} <b>{symbol}</b> {tf}\n"
@@ -1213,7 +1216,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
                     alert_state["signals"].insert(0, {
                         "symbol": symbol, "tf": tf, "dir": direction,
                         "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
-                        "ts": time.strftime("%H:%M:%S", time.localtime(candle_t))
+                        "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
                     })
                     alert_state["signals"] = alert_state["signals"][:50]
                 print(f"[alert] Сигнал отправлен: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g}")
@@ -1576,15 +1579,20 @@ def run_optimizer(params):
             with opt_lock:
                 _sw_params = all_time_params
 
-            # Обновляем chart — всегда показываем all-time best
+            # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             with opt_lock:
                 current_candles2 = list(_sw_candles)
-            sim = _simulate(current_candles2, all_time_params, 0, _collect=True, risk_pct=risk_pct)
+            # Обрезаем свечи по тому же days_limit что и оптимизатор
+            cutoff = time.time() - days * 86400
+            chart_candles_window = [c for c in current_candles2 if c.get("t", 0) >= cutoff]
+            if len(chart_candles_window) < 10:
+                chart_candles_window = current_candles2  # fallback
+            sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
             chart_signals = sim["_signals"] if sim else []
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in current_candles2]
+            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
-            if cur_c and cur_c["t"] > current_candles2[-1]["t"]:
+            if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
             chart_path = _save_chart(chart_candles_fmt, chart_signals, all_time_best, symbol, tf, risk_pct)
             with opt_lock:
