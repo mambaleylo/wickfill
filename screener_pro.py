@@ -2062,10 +2062,47 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── Responsive mobile ── */
 @media(max-width:700px){
+  /* Шапка — скрыта полностью */
+  .topbar{display:none}
+
+  /* Компоновка — в колонку */
   .main{flex-direction:column}
-  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border)}
-  .topbar{padding:8px 12px}
-  .sidebar{padding:12px}
+
+  /* Сайдбар — на всю ширину, компактный */
+  .sidebar{
+    width:100%;border-right:none;border-bottom:1px solid var(--border);
+    padding:10px 12px;gap:10px
+  }
+
+  /* Топ-результат: 1 строка вместо карточки */
+  #bestSection .stats-grid{display:none}
+  #bestSection .card-title{display:none}
+  #bestSection{padding:0;margin:0}
+  #bestSection .div{display:none}
+  #mob-best-row{display:flex !important}
+
+  /* Таблица top-7 — скрыта, показывается кнопкой */
+  #top20Wrap{display:none !important}
+  #mob-top-toggle{display:flex !important}
+
+  /* Логи — скрыты по умолчанию */
+  .log-area{max-height:160px}
+  #mob-log-toggle{display:flex !important}
+  #wfLog.mob-hidden{display:none}
+
+  /* Карточки циклов — горизонтальная лента компактнее */
+  .cycles-bar{padding:8px 12px 6px}
+  .cc{width:90px}
+
+  /* Кнопки — крупнее для пальца */
+  .btn-primary{padding:13px 16px;font-size:.95rem}
+  .btn-ghost{padding:10px 12px}
+
+  /* Убираем дублирующий слайдер-val */
+  .slider-val{min-width:28px;font-size:.78rem}
+
+  /* Правая панель — лог не занимает всё */
+  .right{min-height:200px}
 }
 </style></head><body>
 
@@ -2180,7 +2217,19 @@ details summary::-webkit-details-marker{display:none}
     </div>
     <div class="save-status" id="saveLoadStatus" style="display:none"></div>
 
-    <!-- Best result -->
+    <!-- Мобильная строка топ-результата (1 строка, видна только на телефоне) -->
+    <div id="mob-best-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 2px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
+      <span id="mob-eq" style="font-weight:700;font-family:'DM Mono',monospace;font-size:1rem;color:var(--green);padding:0 8px">—</span>
+      <span id="mob-wr" style="font-size:.78rem;color:var(--text2)">WR —</span>
+      <span id="mob-dd" style="font-size:.78rem;color:var(--text2)">DD —</span>
+      <span id="mob-tr" style="font-size:.78rem;color:var(--text3)">— сд</span>
+      <span id="mob-sl" style="font-size:.78rem;color:var(--text3)">SL —</span>
+      <span id="mob-tp" style="font-size:.78rem;color:var(--text3)">TP —</span>
+      <span style="flex:1"></span>
+      <span style="font-size:.72rem;cursor:pointer;color:var(--text3);padding:0 8px" onclick="toggleParams()">⚙</span>
+    </div>
+
+    <!-- Best result (desktop) -->
     <div id="bestSection" style="display:none">
       <div class="div"></div>
       <div class="card-title" style="margin-bottom:8px">Лучший результат</div>
@@ -2216,6 +2265,12 @@ details summary::-webkit-details-marker{display:none}
 
   <!-- ── Right panel ── -->
   <div class="right">
+
+    <!-- Мобильные кнопки (скрыты на десктопе через CSS) -->
+    <div id="mob-top-toggle" style="display:none;gap:6px;padding:8px 12px 4px;flex-shrink:0">
+      <button class="btn-ghost" style="font-size:.78rem;padding:7px 12px" onclick="toggleMobTop()">📊 Топ-7</button>
+      <button class="btn-ghost" id="mob-log-btn" style="font-size:.78rem;padding:7px 12px" onclick="toggleMobLog()">📋 Логи</button>
+    </div>
 
     <!-- Cycle cards -->
     <div class="cycles-bar">
@@ -2435,7 +2490,7 @@ function poll(){
     if(d.top20&&d.top20.length) renderTop20(d.top20);
     if(d.chart_path){
       document.getElementById('chartBtn').style.display='flex';
-      if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){lastChartTs=d.chart_updated_at;window.open('/chart','_blank');}
+      if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){lastChartTs=d.chart_updated_at;if(!chartOpened){chartOpened=true;window.open('/chart','_blank');}}
     }
     if(d.done&&!d.running&&!d.infinite){
       clearTimeout(polling);polling=null;
@@ -2532,6 +2587,18 @@ function logLine(msg,level){
 function renderBest(b){
   document.getElementById('bestSection').style.display='block';
   const eq=b.equity??100,wr=b.winrate??0,dd=b.max_dd??0,pf=b.profit_factor??0,tr=b.trades??0;
+  // Мобильная строка
+  const mobRow=document.getElementById('mob-best-row');
+  if(mobRow){
+    document.getElementById('mob-eq').textContent='$'+eq.toFixed(0);
+    document.getElementById('mob-eq').style.color=eq>100?'var(--green)':eq<100?'var(--red)':'var(--bark)';
+    document.getElementById('mob-wr').textContent='WR '+wr.toFixed(0)+'%';
+    document.getElementById('mob-dd').textContent='DD '+dd.toFixed(0)+'%';
+    document.getElementById('mob-dd').style.color=dd>25?'var(--red)':'var(--text2)';
+    document.getElementById('mob-tr').textContent=tr+' сд';
+    document.getElementById('mob-sl').textContent='SL '+(b.params?.sl_pct??'—')+'%';
+    document.getElementById('mob-tp').textContent='TP '+(b.params?.tp_pct??'—')+'%';
+  }
   const stats=[
     {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>100?'good':eq<100?'bad':''},
     {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=55?'good':wr<45?'bad':''},
@@ -2587,6 +2654,21 @@ function renameDownload(){
 }
 function termuxUpdate(){
   fetch('/reset_running').then(()=>setTimeout(()=>location.reload(),500));
+}
+
+/* ── Mobile toggles ── */
+let _mobTopVisible=false, _mobLogVisible=false;
+function toggleMobTop(){
+  _mobTopVisible=!_mobTopVisible;
+  const el=document.getElementById('top20Wrap');
+  if(el){el.style.display=_mobTopVisible?'block':'none';}
+}
+function toggleMobLog(){
+  _mobLogVisible=!_mobLogVisible;
+  const el=document.getElementById('wfLog');
+  if(el){el.classList.toggle('mob-hidden',!_mobLogVisible);}
+  const btn=document.getElementById('mob-log-btn');
+  if(btn) btn.textContent=_mobLogVisible?'📋 Скрыть':'📋 Логи';
 }
 </script></body></html>"""
 
