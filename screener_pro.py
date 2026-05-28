@@ -2062,47 +2062,89 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── Responsive mobile ── */
 @media(max-width:700px){
-  /* Шапка — скрыта полностью */
+  /* Шапка — скрыта */
   .topbar{display:none}
 
-  /* Компоновка — в колонку */
-  .main{flex-direction:column}
+  /* Весь интерфейс — flex-колонка на весь экран */
+  .app{height:100dvh;height:100vh}
+  .main{flex-direction:column;flex:1;min-height:0}
 
-  /* Сайдбар — на всю ширину, компактный */
+  /* ── САЙДБАР: компактный верхний блок, не скроллится ── */
   .sidebar{
     width:100%;border-right:none;border-bottom:1px solid var(--border);
-    padding:10px 12px;gap:10px
+    padding:8px 10px;gap:6px;
+    overflow:visible;
+    flex-shrink:0;
   }
 
-  /* Топ-результат: 1 строка вместо карточки */
-  #bestSection .stats-grid{display:none}
-  #bestSection .card-title{display:none}
-  #bestSection{padding:0;margin:0}
-  #bestSection .div{display:none}
+  /* Карточка настроек — 2 поля + 2 слайдера ужаты */
+  .card{padding:8px 10px}
+  .card-title{display:none}
+  .field-row{gap:6px;margin-bottom:6px !important}
+  .field label{font-size:.65rem}
+  input[type=text],select{padding:6px 9px;font-size:.82rem}
+
+  /* Слайдеры — убрать лейблы, только значение */
+  .slider-wrap{gap:6px}
+  .slider-val{min-width:26px;font-size:.75rem}
+  .field .slider-wrap{margin-top:0}
+  /* Лейбл слайдеров — сжать */
+  .field>label{margin-bottom:1px;line-height:1.2}
+
+  /* Прогресс бар */
+  .prog-wrap{gap:3px}
+  .prog-meta{font-size:.65rem}
+  .prog-param{font-size:.62rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* Кнопки — чуть меньше чем стандарт, но удобные */
+  .btn-primary{padding:10px 14px;font-size:.88rem}
+  .btn-ghost{padding:8px 10px;font-size:.8rem}
+  .action-row{gap:5px}
+  /* SW кнопка — скрыть на мобилке (редко нужна) */
+  #swStopBtn{display:none !important}
+
+  /* Save row */
+  .save-row .btn-ghost{padding:7px 8px;font-size:.75rem}
+
+  /* Бесконечный тоггл — скрыт (он всегда on) */
+  #infiniteRow{display:none}
+
+  /* Топ-результат: 1 строка */
+  #bestSection{display:none !important}
   #mob-best-row{display:flex !important}
 
-  /* Таблица top-7 — скрыта, показывается кнопкой */
-  #top20Wrap{display:none !important}
-  #mob-top-toggle{display:flex !important}
+  /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
+  .sidebar details{display:none}
+  .sidebar .div{display:none}
+  .save-row{display:none}
+  #saveLoadStatus{display:none !important}
 
-  /* Логи — скрыты по умолчанию */
-  .log-area{max-height:160px}
-  #mob-log-toggle{display:flex !important}
+  /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
+  .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+
+  /* Циклы — компактная лента */
+  .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
+  .cycles-label{display:none}
+  .cc{width:82px;padding:7px 8px}
+  .cc-eq{font-size:.9rem}
+  .cc-n{font-size:.55rem}
+
+  /* Мобильные кнопки Топ / Логи */
+  #mob-top-toggle{display:flex !important;flex-shrink:0}
+
+  /* Лог */
+  .log-area{flex:1;padding:8px 12px}
   #wfLog.mob-hidden{display:none}
 
-  /* Карточки циклов — горизонтальная лента компактнее */
-  .cycles-bar{padding:8px 12px 6px}
-  .cc{width:90px}
-
-  /* Кнопки — крупнее для пальца */
-  .btn-primary{padding:13px 16px;font-size:.95rem}
-  .btn-ghost{padding:10px 12px}
-
-  /* Убираем дублирующий слайдер-val */
-  .slider-val{min-width:28px;font-size:.78rem}
-
-  /* Правая панель — лог не занимает всё */
-  .right{min-height:200px}
+  /* Таблица топ — поверх через абс позицию */
+  #top20Wrap{
+    display:none;
+    position:fixed;bottom:0;left:0;right:0;
+    max-height:55vh;overflow-y:auto;
+    background:var(--cream);
+    border-top:2px solid var(--border);
+    z-index:100;
+  }
 }
 </style></head><body>
 
@@ -2155,33 +2197,27 @@ details summary::-webkit-details-marker{display:none}
         </div>
       </div>
 
-      <div class="field" style="margin-bottom:10px">
-        <label>История · <b id="wfDV" style="color:var(--bark)">3</b> дней</label>
-        <div class="slider-wrap">
-          <input type="range" id="wf_days" min="3" max="90" value="3" step="1"
-            oninput="syncSlider(this,'wfDV','')" onchange="syncSlider(this,'wfDV','')">
-          <span class="slider-val" id="wfDV2">3</span>
+      <div class="field-row" style="margin-bottom:0">
+        <div class="field">
+          <label>История (дни)</label>
+          <div class="slider-wrap">
+            <input type="range" id="wf_days" min="3" max="90" value="3" step="1"
+              oninput="syncSlider(this,'wfDV','')" onchange="syncSlider(this,'wfDV','')">
+            <span class="slider-val" id="wfDV"><b>3</b></span>
+          </div>
         </div>
-      </div>
-
-      <div class="field">
-        <label>Риск на сделку · <b id="wfRV" style="color:var(--bark)">20</b>%</label>
-        <div class="slider-wrap">
-          <input type="range" id="wf_risk" min="1" max="100" value="20" step="1"
-            oninput="syncSlider(this,'wfRV','%')" onchange="syncSlider(this,'wfRV','%')">
-          <span class="slider-val" id="wfRV2">20%</span>
+        <div class="field">
+          <label>Риск %</label>
+          <div class="slider-wrap">
+            <input type="range" id="wf_risk" min="1" max="100" value="20" step="1"
+              oninput="syncSlider(this,'wfRV','%')" onchange="syncSlider(this,'wfRV','%')">
+            <span class="slider-val" id="wfRV">20%</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Mode toggle -->
-    <div class="toggle-wrap" onclick="toggleInfinite()" id="infiniteRow">
-      <div class="toggle-text">
-        ∞ Бесконечный режим
-        <small>рестарт без остановки</small>
-      </div>
-      <div class="toggle-sw on" id="infiniteSwitch"></div>
-    </div>
+    <!-- Бесконечный режим всегда включён -->
 
     <!-- Progress (hidden by default) -->
     <div class="prog-wrap" id="progWrap" style="display:none">
@@ -2310,17 +2346,14 @@ details summary::-webkit-details-marker{display:none}
 
 <script>
 let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=0;
-let infiniteMode=true;
-
+const infiniteMode=true;
 /* ── Slider sync ── */
 function syncSlider(el, vId, suffix){
   const v=el.value;
   const max=parseFloat(el.max), min=parseFloat(el.min);
   const pct=((v-min)/(max-min)*100)+'%';
   el.style.setProperty('--pct',pct);
-  const e1=document.getElementById(vId); if(e1) e1.textContent=v;
-  const id2=vId+'2'; const e2=document.getElementById(id2);
-  if(e2) e2.textContent=v+(suffix||'');
+  const e1=document.getElementById(vId); if(e1) e1.innerHTML='<b>'+v+'</b>'+(suffix||'');
 }
 
 /* Init sliders */
@@ -2332,10 +2365,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
 });
 
-function toggleInfinite(){
-  infiniteMode=!infiniteMode;
-  document.getElementById('infiniteSwitch').classList.toggle('on',infiniteMode);
-}
+function toggleInfinite(){} // режим всегда бесконечный
 
 /* ── API check ── */
 function checkApi(){
