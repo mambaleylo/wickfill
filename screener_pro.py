@@ -983,7 +983,7 @@ function render(){{
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
   const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;if(mx<=mn)mx=mn+1;
-  const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=46,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
+  const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=54,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
@@ -1762,7 +1762,7 @@ html,body{
   color:var(--text);
   font-family:'DM Sans',sans-serif;
   font-size:14px;
-  overflow-x:hidden;
+  overflow:hidden;
 }
 
 /* Subtle noise texture */
@@ -1775,7 +1775,7 @@ body::before{
 body>*{position:relative;z-index:1}
 
 /* ── Layout ── */
-.app{display:flex;flex-direction:column;height:100vh;gap:0}
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;gap:0;overflow:hidden}
 
 /* ── Topbar ── */
 .topbar{
@@ -2035,7 +2035,7 @@ input[type=number]{-moz-appearance:textfield}
 
 /* Chart area — fills all remaining space */
 .chart-area{
-  flex:1;display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - 280px);position:relative;
+  flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
   background:var(--cream2);
 }
 .chart-placeholder{
@@ -2044,7 +2044,7 @@ input[type=number]{-moz-appearance:textfield}
   color:var(--text3);font-size:.78rem;
 }
 #chartFrame{
-  width:100%;flex:1;border:none;display:none;min-height:0;
+  width:100%;height:100%;flex:1;border:none;display:none;min-height:0;
 }
 
 /* Best combination table — inside log-col below log */
