@@ -2297,12 +2297,6 @@ details summary::-webkit-details-marker{display:none}
   <!-- ── Right panel ── -->
   <div class="right">
 
-    <!-- Мобильные кнопки (скрыты на десктопе через CSS) -->
-    <div id="mob-top-toggle" style="display:none;gap:6px;padding:8px 12px 4px;flex-shrink:0">
-      <button class="btn-ghost" style="font-size:.78rem;padding:7px 12px" onclick="toggleMobTop()">📊 Топ-7</button>
-      <button class="btn-ghost" id="mob-log-btn" style="font-size:.78rem;padding:7px 12px" onclick="toggleMobLog()">📋 Логи</button>
-    </div>
-
     <!-- Cycle cards -->
     <div class="cycles-bar">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2561,7 +2555,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done){
   let card=_cc[n];
   if(!card){
     card=document.createElement('div');card.dataset.n=n;
-    _cc[n]=card;document.getElementById('ccStrip').appendChild(card);
+    _cc[n]=card;const strip=document.getElementById('ccStrip');strip.insertBefore(card,strip.firstChild);
   }
   card.dataset.eq=eq;
   card.className='cc '+(done?(isPos?'pos':'neg'):'running');
