@@ -12,6 +12,14 @@ import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import sys as _sys
+# python3.14t (free-threaded, no GIL) не поддерживает ProcessPoolExecutor
+if hasattr(_sys, '_is_gil_enabled') and not _sys._is_gil_enabled():
+    from concurrent.futures import ThreadPoolExecutor as PoolExecutor
+    _POOL_TYPE = "thread"
+else:
+    from concurrent.futures import ProcessPoolExecutor as PoolExecutor
+    _POOL_TYPE = "process"
 import requests
 import smtplib, email.mime.text, email.mime.multipart
 
@@ -1441,8 +1449,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     global _sw_params
 
     n_workers = max(1, os.cpu_count() or 1)
-    olog(f"   ProcessPool: {n_workers} процессов (все ядра CPU)")
-    _pool = ProcessPoolExecutor(
+    olog(f"   {'Thread' if _POOL_TYPE=='thread' else 'Process'}Pool: {n_workers} {'потоков' if _POOL_TYPE=='thread' else 'процессов'} (все ядра CPU)")
+    _pool = PoolExecutor(
         max_workers=n_workers,
         initializer=_worker_init,
         initargs=(candles, 0, risk_pct)
