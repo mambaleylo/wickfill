@@ -123,7 +123,7 @@ opt_state = {
     "running": False, "done": False, "infinite": False,
     "cycle": 0,       # номер цикла бесконечного режима
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
-    "current_param": "", "logs": [], "best": None, "top20": [], "valid": None,
+    "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
     "started_at": "", "elapsed": 0.0, "error": "",
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
@@ -1657,7 +1657,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "top20": [], "valid": None,
+            "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
@@ -1795,42 +1795,77 @@ def run_optimizer(params):
             with opt_lock:
                 _sw_params = all_time_params
 
-            # --- Walk-forward валидация ---
-            # Оптимизация на 70% окна, проверка на последних 30%
-            valid_days = days * 0.30
-            train_days = days * 0.70
+            # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
             now_ts = time.time()
-            valid_cutoff  = now_ts - valid_days * 86400   # начало валид. окна
-            train_cutoff  = now_ts - days * 86400          # начало трейн. окна
-            # Берём свежие свечи из _sw_candles (обновляются скользящим окном)
-            # а не current_candles которые могли загрузиться минуты назад
+            valid_days = days * 0.30
             with opt_lock:
                 _fresh_candles = list(_sw_candles) if _sw_candles else list(current_candles)
-            valid_candles = [c for c in _fresh_candles if c.get("t", 0) >= valid_cutoff]
-            if len(valid_candles) >= 10:
-                valid_sim = _simulate(valid_candles, all_time_params, 0, risk_pct=risk_pct)
-                if valid_sim:
-                    valid_result = {
-                        "equity":      round(valid_sim["equity"], 2),
-                        "winrate":     round(valid_sim["winrate"], 1),
-                        "max_dd":      round(valid_sim["max_dd"], 1),
-                        "trades":      valid_sim["trades"],
-                        "profit_factor": min(round(valid_sim.get("profit_factor", 0), 2), 999.0),
-                        "days":        round(valid_days, 1),
-                    }
-                    with opt_lock:
-                        opt_state["valid"] = valid_result
-                    olog(
-                        f"🔍 Валидация ({valid_result['days']}д): "
-                        f"${valid_result['equity']:.2f} | "
-                        f"WR {valid_result['winrate']:.1f}% | "
-                        f"DD {valid_result['max_dd']:.1f}% | "
-                        f"Сд {valid_result['trades']}",
-                        "ok" if valid_result["winrate"] >= all_time_best["winrate"] * 0.75 else "warn"
-                    )
+            train_wr = all_time_best["winrate"]
+
+            def _wf_sim(d_from, d_to=None):
+                """Прогоняет конфиг на отрезке [now - d_from*86400 .. now - (d_to or 0)*86400]."""
+                cutoff_from = now_ts - d_from * 86400
+                cutoff_to   = now_ts - (d_to or 0) * 86400
+                sl = [c for c in _fresh_candles if cutoff_from <= c.get("t", 0) < cutoff_to]
+                if len(sl) < 10: return None
+                return _simulate(sl, all_time_params, 0, risk_pct=risk_pct)
+
+            # 1) Валидация на последних 30%
+            valid_sim = _wf_sim(valid_days, 0)
+            valid_result = None
+            if valid_sim:
+                valid_result = {
+                    "equity":        round(valid_sim["equity"], 2),
+                    "winrate":       round(valid_sim["winrate"], 1),
+                    "max_dd":        round(valid_sim["max_dd"], 1),
+                    "trades":        valid_sim["trades"],
+                    "profit_factor": min(round(valid_sim.get("profit_factor", 0), 2), 999.0),
+                    "days":          round(valid_days, 1),
+                }
+                olog(
+                    f"🔍 Валидация ({valid_result['days']}д): "
+                    f"${valid_result['equity']:.2f} | "
+                    f"WR {valid_result['winrate']:.1f}% | "
+                    f"DD {valid_result['max_dd']:.1f}% | "
+                    f"Сд {valid_result['trades']}",
+                    "ok" if valid_result["winrate"] >= train_wr * 0.75 else "warn"
+                )
+
+            # 2) Скользящие окна — 5 равных отрезков по всей истории
+            window_size = days / 5.0
+            windows = []
+            for wi in range(5):
+                d_from = days - wi * window_size
+                d_to   = days - (wi + 1) * window_size
+                ws = _wf_sim(d_from, d_to)
+                if ws:
+                    windows.append({
+                        "i":      wi + 1,
+                        "winrate": round(ws["winrate"], 1),
+                        "equity":  round(ws["equity"], 2),
+                        "trades":  ws["trades"],
+                        "ok":      ws["winrate"] >= train_wr * 0.75,
+                    })
+            if windows:
+                ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
+                olog(f"📊 Окна: {ww_str}", "ok")
+
+            # 3) Минимальный стабильный период
+            min_stable_days = None
+            for pct in [0.70, 0.50, 0.33, 0.20, 0.10]:
+                test_days = days * pct
+                ts = _wf_sim(test_days, 0)
+                if ts and ts["winrate"] >= train_wr * 0.75 and ts["trades"] >= 3:
+                    min_stable_days = round(test_days, 1)
                 else:
-                    with opt_lock:
-                        opt_state["valid"] = None
+                    break
+            if min_stable_days is not None:
+                olog(f"📐 Мин. стабильный период: {min_stable_days}д", "ok")
+
+            with opt_lock:
+                opt_state["valid"] = valid_result
+                opt_state["windows"] = windows
+                opt_state["min_stable_days"] = min_stable_days
 
             # Автосохранение в Downloads если результат улучшился
             new_eq = all_time_best.get("equity", 0)
@@ -2848,7 +2883,7 @@ function poll(){
     }
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
     if(d.top20&&d.top20.length) renderTop20(d.top20);
-    if(d.valid!==undefined) renderValid(d.valid, d.best);
+    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
     if(d.chart_path){
       document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){
@@ -2988,31 +3023,50 @@ function toggleParams(){
   el.style.display=vis?'none':'block';
 }
 
-function renderValid(v, best){
+function renderValid(v, best, windows, minDays){
   const wrap=document.getElementById('validSection');
   if(!wrap) return;
-  if(!v){wrap.style.display='none';return;}
+  if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
-  const ratio=trainWr>0?(v.winrate/trainWr):1;
+  const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
   const ok=ratio>=0.75;
   const color=ok?'var(--green)':'var(--red)';
   const icon=ok?'✅':'⚠️';
   const stab=ok?'Стабильный':'Нестабильный';
-  wrap.innerHTML=`
-    <div style="margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid ${color};background:var(--card)">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:6px">
-        🔍 Валидация (последние ${v.days}д из окна оптимизации)
-      </div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
-        <span style="color:${color};font-weight:600;font-size:15px">${icon} ${stab}</span>
-        <span style="color:var(--text2);font-size:13px">$${v.equity.toFixed(0)}</span>
-        <span style="color:${v.winrate>=55?'var(--green)':'var(--red)'};font-size:13px">WR ${v.winrate.toFixed(1)}%</span>
-        <span style="color:var(--text2);font-size:13px">DD ${v.max_dd.toFixed(1)}%</span>
-        <span style="color:var(--text2);font-size:13px">${v.trades} сд</span>
-        <span style="color:var(--text2);font-size:12px;opacity:0.7">(Train WR: ${trainWr.toFixed(1)}%)</span>
-      </div>
+
+  // Строка 1: валидация 30%
+  let html=`<div style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid ${color};background:var(--card);font-size:13px">`;
+  if(v){
+    html+=`<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:${windows&&windows.length?'6px':'0'}">
+      <span style="color:${color};font-weight:600">${icon} ${stab}</span>
+      <span style="color:var(--text2)">Валид ${v.days}д:</span>
+      <span style="color:var(--text2)">$${v.equity.toFixed(0)}</span>
+      <span style="color:${v.winrate>=55?'var(--green)':'var(--red)'}">WR ${v.winrate.toFixed(1)}%</span>
+      <span style="color:var(--text2)">DD ${v.max_dd.toFixed(1)}%</span>
+      <span style="color:var(--text2)">${v.trades}сд</span>
+      <span style="color:var(--text2);opacity:0.6">train ${trainWr.toFixed(0)}%</span>
     </div>`;
+  }
+
+  // Строка 2: скользящие окна
+  if(windows&&windows.length){
+    const dots=windows.map(w=>{
+      const c=w.ok?'var(--green)':'var(--red)';
+      return `<span style="color:${c};white-space:nowrap">#${w.i} WR${w.winrate}%</span>`;
+    }).join('<span style="color:var(--text2);opacity:0.4"> | </span>');
+    html+=`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:${minDays?'6px':'0'}">
+      <span style="color:var(--text2);opacity:0.7">📊</span>${dots}
+    </div>`;
+  }
+
+  // Строка 3: минимальный период
+  if(minDays!=null){
+    html+=`<div style="color:var(--text2);font-size:12px">📐 Мин. стабильный период: <b style="color:var(--green)">${minDays}д</b></div>`;
+  }
+
+  html+='</div>';
+  wrap.innerHTML=html;
 }
 
 function renderTop20(list){
@@ -3089,6 +3143,8 @@ class Handler(BaseHTTPRequestHandler):
                     "best":           opt_state["best"],
                     "top20":          opt_state["top20"],
                     "valid":          opt_state.get("valid", None),
+                    "windows":        opt_state.get("windows", []),
+                    "min_stable_days":opt_state.get("min_stable_days", None),
                     "elapsed":        opt_state["elapsed"],
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
