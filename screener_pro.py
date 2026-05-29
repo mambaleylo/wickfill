@@ -123,7 +123,7 @@ opt_state = {
     "running": False, "done": False, "infinite": False,
     "cycle": 0,       # номер цикла бесконечного режима
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
-    "current_param": "", "logs": [], "best": None, "top20": [],
+    "current_param": "", "logs": [], "best": None, "top20": [], "valid": None,
     "started_at": "", "elapsed": 0.0, "error": "",
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
@@ -1652,7 +1652,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "top20": [],
+            "logs": [], "best": None, "top20": [], "valid": None,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
@@ -1789,6 +1789,39 @@ def run_optimizer(params):
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
                 _sw_params = all_time_params
+
+            # --- Walk-forward валидация ---
+            # Оптимизация на 70% окна, проверка на последних 30%
+            valid_days = days * 0.30
+            train_days = days * 0.70
+            now_ts = time.time()
+            valid_cutoff  = now_ts - valid_days * 86400   # начало валид. окна
+            train_cutoff  = now_ts - days * 86400          # начало трейн. окна
+            valid_candles = [c for c in current_candles if c.get("t", 0) >= valid_cutoff]
+            if len(valid_candles) >= 10:
+                valid_sim = _simulate(valid_candles, all_time_params, 0, risk_pct=risk_pct)
+                if valid_sim:
+                    valid_result = {
+                        "equity":      round(valid_sim["equity"], 2),
+                        "winrate":     round(valid_sim["winrate"], 1),
+                        "max_dd":      round(valid_sim["max_dd"], 1),
+                        "trades":      valid_sim["trades"],
+                        "profit_factor": round(valid_sim["profit_factor"], 2) if valid_sim["profit_factor"] != float("inf") else 999.0,
+                        "days":        round(valid_days, 1),
+                    }
+                    with opt_lock:
+                        opt_state["valid"] = valid_result
+                    olog(
+                        f"🔍 Валидация ({valid_result['days']}д): "
+                        f"${valid_result['equity']:.2f} | "
+                        f"WR {valid_result['winrate']:.1f}% | "
+                        f"DD {valid_result['max_dd']:.1f}% | "
+                        f"Сд {valid_result['trades']}",
+                        "ok" if valid_result["winrate"] >= all_time_best["winrate"] * 0.75 else "warn"
+                    )
+                else:
+                    with opt_lock:
+                        opt_state["valid"] = None
 
             # Автосохранение в Downloads если результат улучшился
             new_eq = all_time_best.get("equity", 0)
@@ -2563,6 +2596,7 @@ details summary::-webkit-details-marker{display:none}
         <div class="params-box" id="bestParams"></div>
       </div>
     </div>
+    <div id="validSection" style="display:none"></div>
 
     <div class="div"></div>
 
@@ -2804,6 +2838,7 @@ function poll(){
     }
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
     if(d.top20&&d.top20.length) renderTop20(d.top20);
+    if(d.valid!==undefined) renderValid(d.valid, d.best);
     if(d.chart_path){
       document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){
@@ -2943,6 +2978,33 @@ function toggleParams(){
   el.style.display=vis?'none':'block';
 }
 
+function renderValid(v, best){
+  const wrap=document.getElementById('validSection');
+  if(!wrap) return;
+  if(!v){wrap.style.display='none';return;}
+  wrap.style.display='block';
+  const trainWr=best?.winrate??0;
+  const ratio=trainWr>0?(v.winrate/trainWr):1;
+  const ok=ratio>=0.75;
+  const color=ok?'var(--green)':'var(--red)';
+  const icon=ok?'✅':'⚠️';
+  const stab=ok?'Стабильный':'Нестабильный';
+  wrap.innerHTML=`
+    <div style="margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid ${color};background:var(--card)">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px">
+        🔍 Валидация (последние ${v.days}д из окна оптимизации)
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+        <span style="color:${color};font-weight:600;font-size:15px">${icon} ${stab}</span>
+        <span style="color:var(--text2);font-size:13px">$${v.equity.toFixed(0)}</span>
+        <span style="color:${v.winrate>=55?'var(--green)':'var(--red)'};font-size:13px">WR ${v.winrate.toFixed(1)}%</span>
+        <span style="color:var(--text2);font-size:13px">DD ${v.max_dd.toFixed(1)}%</span>
+        <span style="color:var(--text2);font-size:13px">${v.trades} сд</span>
+        <span style="color:var(--text2);font-size:12px;opacity:0.7">(Train WR: ${trainWr.toFixed(1)}%)</span>
+      </div>
+    </div>`;
+}
+
 function renderTop20(list){
   document.getElementById('top20Wrap').style.display='block';
   const top=list.slice(0,1);
@@ -3016,6 +3078,7 @@ class Handler(BaseHTTPRequestHandler):
                     "current_param":  opt_state.get("current_param",""),
                     "best":           opt_state["best"],
                     "top20":          opt_state["top20"],
+                    "valid":          opt_state.get("valid", None),
                     "elapsed":        opt_state["elapsed"],
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
