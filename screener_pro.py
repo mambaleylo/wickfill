@@ -585,10 +585,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
         rr_r=move/t_orig_sl if t_orig_sl>0 else 0
         pnl_ot=t_pos*risk_pct/100*rr_r
-        # Не засчитываем незакрытую позицию в статистику — она ещё не завершена
-        # Добавляем в pnls только для equity, но не в trades/wins
+        # Незакрытая позиция — засчитываем полностью чтобы avg_pnl и PF были корректны
         equity+=pnl_ot; pnls.append(pnl_ot)
         is_win_ot=pnl_ot>0
+        trades+=1
+        if is_win_ot: wins+=1
+        else: losses_n+=1
         if equity>max_eq: max_eq=equity
         dd_ot=(max_eq-equity)/max_eq*100 if max_eq>0 else 0
         if dd_ot>max_dd: max_dd=dd_ot
@@ -1372,7 +1374,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             print("[sw] Не удалось загрузить новую свечу"); continue
 
         with opt_lock:
-            candles = _sw_candles
+            candles = list(_sw_candles)  # копия под блокировкой — защита от race condition
             best_p  = dict(_sw_params) if _sw_params else None
 
         if not candles:
@@ -1490,7 +1492,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
     olog(f"━━ ФАЗА 2: Basin Hopping (20 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
-    for bh_i in range(20):
+    try:
+      for bh_i in range(20):
         if stop_flag(): break
         perturbed=dict(bh_current)
         for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
@@ -1509,10 +1512,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock: opt_state["best"]=final_result; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
 
+    finally:
+        _pool.shutdown(wait=False)
+
     if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
         final_result = top20_global[0]
         final_params = dict(final_result["params"])
-    _pool.shutdown(wait=False)
     return final_result, final_params, top20_global
 
 # ═══════════════════════════════════════════════════════════════
@@ -1797,7 +1802,11 @@ def run_optimizer(params):
             now_ts = time.time()
             valid_cutoff  = now_ts - valid_days * 86400   # начало валид. окна
             train_cutoff  = now_ts - days * 86400          # начало трейн. окна
-            valid_candles = [c for c in current_candles if c.get("t", 0) >= valid_cutoff]
+            # Берём свежие свечи из _sw_candles (обновляются скользящим окном)
+            # а не current_candles которые могли загрузиться минуты назад
+            with opt_lock:
+                _fresh_candles = list(_sw_candles) if _sw_candles else list(current_candles)
+            valid_candles = [c for c in _fresh_candles if c.get("t", 0) >= valid_cutoff]
             if len(valid_candles) >= 10:
                 valid_sim = _simulate(valid_candles, all_time_params, 0, risk_pct=risk_pct)
                 if valid_sim:
@@ -1806,7 +1815,7 @@ def run_optimizer(params):
                         "winrate":     round(valid_sim["winrate"], 1),
                         "max_dd":      round(valid_sim["max_dd"], 1),
                         "trades":      valid_sim["trades"],
-                        "profit_factor": round(valid_sim["profit_factor"], 2) if valid_sim["profit_factor"] != float("inf") else 999.0,
+                        "profit_factor": min(round(valid_sim.get("profit_factor", 0), 2), 999.0),
                         "days":        round(valid_days, 1),
                     }
                     with opt_lock:
@@ -2421,6 +2430,7 @@ details summary::-webkit-details-marker{display:none}
 
   /* Топ-результат: 1 строка */
   #bestSection{display:none !important}
+  #validSection{display:none !important}
   #mob-best-row{display:flex !important}
 
   /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
@@ -3244,8 +3254,14 @@ class Handler(BaseHTTPRequestHandler):
             qs=parse_qs(parsed.query)
             symbol=qs.get("symbol",["BTC_USDT"])[0]; tf=qs.get("tf",["1h"])[0]
             fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-            fpath=os.path.join(os.path.dirname(os.path.abspath(__file__)),fname)
-            if not os.path.exists(fpath):
+            # Ищем файл во всех возможных папках (Downloads + рядом со скриптом)
+            search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
+            fpath = None
+            for d in search_dirs:
+                candidate = os.path.join(d, fname)
+                if os.path.exists(candidate):
+                    fpath = candidate; break
+            if not fpath:
                 self._json({"ok":False,"msg":f"Файл не найден: {fname}"}); return
             try:
                 with open(fpath,"r",encoding="utf-8") as f: data=json.load(f)
