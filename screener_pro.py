@@ -2568,11 +2568,11 @@ details summary::-webkit-details-marker{display:none}
       <div class="field-row" style="margin-bottom:0">
         <div class="field">
           <label>История (дни)</label>
-          <input type="number" id="wf_days" min="3" max="90" value="3" step="1" style="width:100%">
+          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" style="width:100%">
         </div>
         <div class="field">
           <label>Риск %</label>
-          <input type="number" id="wf_risk" min="1" max="100" value="20" step="1" style="width:100%">
+          <input type="number" id="wf_risk" min="1" max="100" value="10" step="1" style="width:100%">
         </div>
       </div>
     </div>
@@ -2735,25 +2735,28 @@ function checkApi(){
 }
 checkApi();setInterval(checkApi,60000);
 
-// Авто-загрузка конфига при открытии страницы
+// Авто-загрузка конфига при вводе поля "История (дни)"
+function _tryAutoLoad(){
+  const days=parseInt(document.getElementById('wf_days').value);
+  if(!days||days<1) return;
+  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const tf=document.getElementById('wf_tf_sel').value;
+  const risk=parseFloat(document.getElementById('wf_risk').value)||10;
+  fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok) return; // нет конфига — тихо игнорируем
+      window._loadedSeed={best:d.best,top20:d.top20||[]};
+      if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
+      if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
+      if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
+      if(d.best) renderBest(d.best,d.top20||[]);
+      _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+    }).catch(()=>{});
+}
 window.addEventListener('DOMContentLoaded', function(){
-  setTimeout(function(){
-    const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
-    const tf=document.getElementById('wf_tf_sel').value;
-    const days=parseInt(document.getElementById('wf_days').value)||3;
-    const risk=parseFloat(document.getElementById('wf_risk').value)||20;
-    fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
-      .then(r=>r.json()).then(d=>{
-        if(!d.ok) return; // нет конфига — тихо игнорируем
-        window._loadedSeed={best:d.best,top20:d.top20||[]};
-        if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
-        if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
-        if(d.days) document.getElementById('wf_days').value=d.days;
-        if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
-        if(d.best) renderBest(d.best,d.top20||[]);
-        _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
-      }).catch(()=>{});
-  }, 500);
+  const daysEl=document.getElementById('wf_days');
+  daysEl.addEventListener('blur', _tryAutoLoad);
+  daysEl.addEventListener('keydown', function(e){ if(e.key==='Enter') _tryAutoLoad(); });
 });
 
 function getAlertCfg(){
