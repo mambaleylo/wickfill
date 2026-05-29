@@ -1691,11 +1691,19 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
             except Exception as e:
                 print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
 
-    if olog: olog(f"💾 Сохранено: {fpath}", "ok")
+    # Обновляем MediaStore на Android чтобы файл появился в файловых менеджерах
+    try:
+        import subprocess
+        subprocess.Popen(["termux-media-scan", fpath],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    if olog: olog(f"💾 Сохранено в {time.strftime('%H:%M:%S')}: {fpath}", "found")
     else:
         # Логируем напрямую в opt_state если olog не передан (напр. из /save_result)
         with opt_lock:
-            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "ok"})
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено в {time.strftime('%H:%M:%S')}: {fpath}", "level": "found"})
     print(f"[auto_save] Сохранён: {fpath}", flush=True)
     return fpath
 
@@ -1947,7 +1955,6 @@ def run_optimizer(params):
                 saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
                 if saved:
                     _last_autosave_vfit = new_vfit
-                    olog(f"📁 Путь: {saved}", "ok")
                 else:
                     olog(f"⚠ Авто-сохранение не удалось (проверь папку Download)", "warn")
 
