@@ -864,6 +864,10 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
     best_result = pmap_fn([current])[0]
     pass_num = 0
 
+    # Если стартовая точка не набирает минимум сделок — пробуем найти хоть что-то
+    # за один быстрый круг, иначе пропускаем этот старт
+    _dead_start = best_result["fitness"] <= -9000
+
     while True:
         if stop_flag and stop_flag(): break
         pass_num += 1
@@ -904,6 +908,9 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
         if stop_flag and stop_flag(): break
 
         if not improved_in_pass: break
+        # Мёртвый старт: если за первый круг не нашли ни одной валидной стратегии — уходим
+        if _dead_start and best_result["fitness"] <= -9000: break
+        _dead_start = False  # после первого улучшения снимаем флаг
         if pass_num>=max_passes: break
 
     # Обновляем top20 только финальным результатом старта
