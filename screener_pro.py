@@ -1724,6 +1724,8 @@ def run_optimizer(params):
     t0 = time.time()
 
     olog(f"   {symbol} | {tf} | {days}д | риск {risk_pct:.0f}%")
+    _nw = max(1, os.cpu_count() or 1)
+    olog(f"⚙ {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'}: {_nw} {'потоков' if _POOL_TYPE=='thread' else 'процессов'}", "ok")
 
     # Загрузка свечей
     olog(f"📡 Загрузка свечей...")
