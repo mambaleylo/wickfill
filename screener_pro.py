@@ -3087,7 +3087,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done){
 
 function logLine(msg,level){
   if(!msg||!msg.trim()) return;
-  if(/WickFill Optimizer|загрузка свечей|загружено \d+/i.test(msg)){
+  if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool/i.test(msg)){
     addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
   }
   const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
