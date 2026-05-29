@@ -713,10 +713,11 @@ def _sf(val, default):
 
 def _update_top20(top20_list, result):
     top20_list.append(result)
-    top20_list.sort(key=lambda x: -x["fitness"])
+    # Сортируем по validated_fitness (учитывает стабильность) если оно есть, иначе по fitness
+    top20_list.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
     seen=set(); deduped=[]
     for item in top20_list:
-        key=round(item["fitness"], 6)
+        key=round(item.get("validated_fitness") or item["fitness"], 6)
         if key not in seen: seen.add(key); deduped.append(item)
     return deduped[:7]
 
@@ -2948,7 +2949,7 @@ function poll(){
       lastLogCount=logs.length;
     }
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
-    if(d.top20&&d.top20.length) renderTop20(d.top20);
+    if(d.best) renderTop20([d.best]);  // таблица всегда показывает текущий best (тот же что на графике)
     if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
     if(d.chart_path){
       document.getElementById('chartBtn').style.display='flex';
