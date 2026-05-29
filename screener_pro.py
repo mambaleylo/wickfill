@@ -1518,6 +1518,39 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
         final_result = top20_global[0]
         final_params = dict(final_result["params"])
+
+    # --- Валидация стабильности финального результата цикла ---
+    # Прогоняем по 3 окнам (старая треть / средняя / свежая треть)
+    # Штрафуем validated_fitness если окна сильно расходятся с трейном
+    train_wr_cycle = final_result.get("winrate", 0)
+    now_ts_cycle = time.time()
+    def _quick_window(d_from, d_to):
+        cutoff_f = now_ts_cycle - d_from * 86400
+        cutoff_t = now_ts_cycle - d_to * 86400
+        sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
+        if len(sl) < 8: return None
+        return _simulate(sl, final_params, 0, risk_pct=risk_pct)
+    window_size_c = days / 3.0
+    ok_windows = 0; total_windows = 0
+    for wi in range(3):
+        wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
+        if wres and wres["trades"] >= 2:
+            total_windows += 1
+            if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.65:
+                ok_windows += 1
+    stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
+    # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
+    stability_multiplier = 0.5 + 0.5 * stability_ratio
+    final_result["stability_ratio"] = round(stability_ratio, 2)
+    final_result["validated_fitness"] = round(final_result["fitness"] * stability_multiplier, 4)
+    olog(f"  📐 Стабильность: {ok_windows}/{total_windows} окон ({'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}) → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 else "warn")
+
+    # Обновляем validated_fitness для всего top20
+    for r in top20_global:
+        if "validated_fitness" not in r:
+            r["stability_ratio"] = 1.0
+            r["validated_fitness"] = r["fitness"]
+
     return final_result, final_params, top20_global
 
 # ═══════════════════════════════════════════════════════════════
@@ -1782,8 +1815,11 @@ def run_optimizer(params):
             else:
                 prev_top20 = top20
 
-            # all_time_best берём из уже merged top20 — гарантия совпадения с таблицей
-            all_time_best = prev_top20[0] if prev_top20 else final_result
+            # all_time_best берём из top20 по validated_fitness (учитывает стабильность)
+            if prev_top20:
+                all_time_best = max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"]))
+            else:
+                all_time_best = final_result
             prev_best_params = dict(all_time_best["params"])
 
             if infinite and all_time_best["fitness"] > final_result["fitness"]:
