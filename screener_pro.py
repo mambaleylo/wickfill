@@ -1458,7 +1458,7 @@ _opt_stop_flag = threading.Event()
 _opt_thread = None
 _last_fetch_error = None
 
-def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
+def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
                    prev_best_params=None, prev_top20=None):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
@@ -1497,7 +1497,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
         olog(f"── {label} ──", "ok")
         with opt_lock: opt_state["generation"]=i+1
         result, cur, top20_global = _coordinate_descent_from(
-            start_ind, pmap, olog, t0, top20_global, label, max_passes=6, stop_flag=stop_flag)
+            start_ind, pmap, olog, t0, top20_global, label, max_passes=4, stop_flag=stop_flag)
         local_bests.append((result["fitness"], result, cur))
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
@@ -1514,10 +1514,10 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
     best_f, best_r1, best_p1 = local_bests[0]
 
     # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
-    olog(f"━━ ФАЗА 2: Basin Hopping (20 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
+    olog(f"━━ ФАЗА 2: Basin Hopping (12 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
     try:
-      for bh_i in range(20):
+      for bh_i in range(12):
         if stop_flag(): break
         perturbed=dict(bh_current)
         for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
@@ -1527,7 +1527,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=12,
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        olog(f"  BH {bh_i+1}/20...", "info")
+        olog(f"  BH {bh_i+1}/12...", "info")
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
