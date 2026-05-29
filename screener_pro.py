@@ -611,15 +611,14 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     profit_factor=(sum(x for x in pnls if x>0)/abs(sum(x for x in pnls if x<0))
                    if any(x<0 for x in pnls) else float("inf"))
 
-    if trades<3: fitness=-9999.0
+    if trades<15: fitness=-9999.0
     elif max_dd>=50.0: fitness=-9999.0
     else:
         import math as _math
         net_return=equity-100.0
 
         # --- Calmar: логарифмически нормирован ---
-        # log нормировка убирает астрономические значения при DD=1-2%
-        # DD>=20% — полный обрыв calmar (калибровка: граница 19-20%)
+        # DD>=20% — полный обрыв calmar
         min_dd_floor=max(1.0, 15.0/_math.sqrt(max(trades,1)))
         effective_dd=max(max_dd,min_dd_floor)
         if max_dd>=20.0:
@@ -628,30 +627,39 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             calmar_score=_math.log(max(net_return/effective_dd, 1.0)+1.0)
         dd_penalty=max(0.0,max_dd-15.0)*0.2
 
-        # --- WR: главный приоритет ---
-        # Линейный бонус с 50%, экспоненциальный буст после 86%
-        # Калибровка: WR>=86% перевешивает большую часть других факторов
-        wr_bonus=max(0.0,wr_val-50.0)*0.10
-        if wr_val>=86.0:
-            wr_bonus+=_math.exp((wr_val-86.0)*0.08)*2.0
+        # --- WR: линейный бонус с 50%, без экспоненциального буста ---
+        # Убран буст WR 86%+ — он толкал к редким "идеальным" сделкам (оверфиттинг)
+        # При RR 1:5 достаточно WR 50%, при RR 1:2 — WR 60%
+        wr_bonus=max(0.0,wr_val-50.0)*0.08
 
-        # --- Депозит: log(equity) — абсолютная сумма важна, но не линейно ---
-        # log(11000)~9.3 vs log(5500)~8.6 — разница 0.7, умноженная на profit_w
+        # --- Депозит: log(equity) ---
         profit_bonus=_math.log(max(equity,1.0))*4.0
 
-        # --- Сделки: нелинейный штраф, резко растёт после 25 ---
-        # Калибровка: 18 сд ≈ 28 сд (почти одинаково), 45 сд — уже ощутимо много
-        if trades<=25:
-            trade_bonus=_math.log(max(trades/3.0,1.0)+1)*0.8
-        elif trades<=50:
-            trade_bonus=_math.log(max(25/3.0,1.0)+1)*0.8-(trades-25)*0.10
+        # --- Сделки: поощряем 15-40, плавно штрафуем >60 ---
+        # Статистическая надёжность важнее: 25 сделок лучше 5
+        if trades<=40:
+            trade_bonus=_math.log(max(trades/15.0,1.0)+1)*1.5
+        elif trades<=60:
+            trade_bonus=_math.log(max(40/15.0,1.0)+1)*1.5-(trades-40)*0.05
         else:
-            trade_bonus=_math.log(max(25/3.0,1.0)+1)*0.8-25*0.10-(trades-50)*0.20
+            trade_bonus=_math.log(max(40/15.0,1.0)+1)*1.5-20*0.05-(trades-60)*0.15
+
+        # --- RR (Risk/Reward): средний выигрыш / средний проигрыш ---
+        # Стратегия RR 1:5 + WR 50% лучше RR 1:1 + WR 80%
+        wins_pnl=[x for x in pnls if x>0]
+        loss_pnl=[abs(x) for x in pnls if x<0]
+        if wins_pnl and loss_pnl:
+            avg_win=sum(wins_pnl)/len(wins_pnl)
+            avg_loss=sum(loss_pnl)/len(loss_pnl)
+            rr=avg_win/max(avg_loss,0.0001)
+            rr_bonus=_math.log(max(rr,1.0)+1)*1.5
+        else:
+            rr_bonus=0.0
 
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
         pf_bonus=pf_val*1.2
 
-        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+pf_bonus-dd_penalty
+        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+rr_bonus+pf_bonus-dd_penalty
 
     return {
         "equity": round(equity,2), "trades": trades, "wins": wins, "losses": losses_n,
