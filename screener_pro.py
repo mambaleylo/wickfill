@@ -124,7 +124,7 @@ opt_state = {
     "cycle": 0,       # номер цикла бесконечного режима
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
     "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
-    "started_at": "", "elapsed": 0.0, "error": "",
+    "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None, "cycle_times": [], "avg_cycle_s": None,
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
     # sliding window
@@ -1736,14 +1736,14 @@ def run_optimizer(params):
     cycle = 0
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
-    _last_autosave_eq = 0.0   # equity последнего автосохранения
+    _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
-            _last_autosave_eq = auto_data["best"].get("equity", 0)
+            _last_autosave_vfit = auto_data["best"].get("validated_fitness", auto_data["best"].get("fitness", 0))
             olog(f"🔍 Авто-загрузка: {os.path.basename(auto_path)}", "ok")
             olog(f"   ${_last_autosave_eq:.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
 
@@ -1795,6 +1795,7 @@ def run_optimizer(params):
         with opt_lock:
             current_candles = list(_sw_candles)
 
+        cycle_t0 = time.time()
         final_result, final_params, top20 = _run_one_cycle(
             current_candles, days, risk_pct, olog, t0,
             prev_best_params=prev_best_params if infinite else None,
@@ -1823,7 +1824,7 @@ def run_optimizer(params):
                 all_time_best = final_result
             prev_best_params = dict(all_time_best["params"])
 
-            if infinite and all_time_best["fitness"] > final_result["fitness"]:
+            if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
                 olog(f"  Цикл #{cycle}: ${final_result['equity']:.2f} — не улучшил рекорд (${all_time_best['equity']:.2f})", "info")
             else:
                 olog(f"✅ Цикл #{cycle} готов за {elapsed}с | 🏆 ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}%", "ok" if cycle==1 else "found")
@@ -1905,11 +1906,11 @@ def run_optimizer(params):
                 opt_state["min_stable_days"] = min_stable_days
 
             # Автосохранение в Downloads если результат улучшился
-            new_eq = all_time_best.get("equity", 0)
-            if new_eq > _last_autosave_eq:
+            new_vfit = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
+            if new_vfit > _last_autosave_vfit:
                 saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
                 if saved:
-                    _last_autosave_eq = new_eq
+                    _last_autosave_vfit = new_vfit
 
             # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             with opt_lock:
@@ -1927,6 +1928,7 @@ def run_optimizer(params):
             if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
             chart_path = _save_chart(chart_candles_fmt, chart_signals, all_time_best, symbol, tf, risk_pct)
+            cycle_elapsed = round(time.time() - cycle_t0, 1)
             with opt_lock:
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
@@ -1936,6 +1938,10 @@ def run_optimizer(params):
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
+                ct = opt_state.setdefault("cycle_times", [])
+                ct.append(cycle_elapsed)
+                if len(ct) > 20: ct.pop(0)  # храним последние 20
+                opt_state["avg_cycle_s"] = round(sum(ct) / len(ct), 1)
 
             # Запуск скользящего окна (один раз после первого цикла)
             with opt_lock:
@@ -2565,6 +2571,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
     <span class="pill" id="latencyPill">— мс</span>
+    <span class="pill" id="speedPill" style="display:none">⚡ —</span>
     <span id="statusBadge2"></span>
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
@@ -2938,6 +2945,19 @@ function poll(){
     const swb=document.getElementById('swBadge');
     if(d.running&&d.infinite) badge.innerHTML='<span class="pill blue pulse">∞ бесконечный</span>';
     else badge.innerHTML='';
+    // Быстродействие
+    const sp=document.getElementById('speedPill');
+    if(sp){
+      if(d.avg_cycle_s!=null){
+        sp.style.display='';
+        const mins=Math.floor(d.avg_cycle_s/60);
+        const secs=Math.round(d.avg_cycle_s%60);
+        sp.textContent='⚡ '+(mins>0?mins+'м ':'')+secs+'с/цикл';
+        sp.title='Среднее время одного цикла оптимизации';
+      } else {
+        sp.style.display='none';
+      }
+    }
     if(d.sw_running) swb.innerHTML='<span class="pill green">🔄 SW</span>';
     else swb.innerHTML='';
     if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='flex';
@@ -3112,7 +3132,7 @@ function renderValid(v, best, windows, minDays){
 
   if(v){
     const metrics=[
-      {l:'Депозит', v:'$'+v.equity.toFixed(0), c:v.equity>=(best?.equity??100)*0.75?'var(--green)':'var(--red)'},
+      {l:'Депозит', v:'$'+v.equity.toFixed(0), c:v.equity>=100?'var(--green)':'var(--red)'},
       {l:'WR (валид)', v:v.winrate.toFixed(1)+'%', c:v.winrate>=55?'var(--green)':'var(--red)'},
       {l:'WR (трейн)', v:trainWr.toFixed(0)+'%', c:'var(--text2)'},
       {l:'Max DD', v:v.max_dd.toFixed(1)+'%', c:v.max_dd<15?'var(--green)':v.max_dd>30?'var(--red)':'var(--text2)'},
@@ -3226,6 +3246,7 @@ class Handler(BaseHTTPRequestHandler):
                     "windows":        opt_state.get("windows", []),
                     "min_stable_days":opt_state.get("min_stable_days", None),
                     "elapsed":        opt_state["elapsed"],
+                    "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
                     "chart_path":     cr,
