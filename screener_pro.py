@@ -3455,6 +3455,7 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             with open(fp,"r",encoding="utf-8") as f2: d2=json.load(f2)
                             if not (d2.get("best") and d2["best"].get("params")): continue
+                            if d2.get("days") and d2.get("days") != days: continue
                             eq2=d2["best"].get("equity",0)
                             if eq2>best_eq2: best_eq2=eq2; fpath=fp; data=d2
                         except Exception: pass
@@ -3465,7 +3466,10 @@ class Handler(BaseHTTPRequestHandler):
                         candidate=os.path.join(d,old_fname)
                         if os.path.exists(candidate):
                             try:
-                                with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2); fpath=candidate; break
+                                with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2)
+                                if data.get("days") and data.get("days") != days:
+                                    data = None; continue
+                                fpath=candidate; break
                             except Exception: pass
             if not data:
                 self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}. Проверенные папки: {[d for d in _AUTO_DIRS if os.path.isdir(d)]}"}); return
