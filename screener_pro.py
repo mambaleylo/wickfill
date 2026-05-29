@@ -606,19 +606,42 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     else:
         import math as _math
         net_return=equity-100.0
-        # Пол просадки растёт при малом числе сделок — защита от случайных WR=100% на 3 сделках
+
+        # --- Calmar: логарифмически нормирован ---
+        # log нормировка убирает астрономические значения при DD=1-2%
+        # DD>=20% — полный обрыв calmar (калибровка: граница 19-20%)
         min_dd_floor=max(1.0, 15.0/_math.sqrt(max(trades,1)))
         effective_dd=max(max_dd,min_dd_floor)
-        calmar=net_return/effective_dd
-        # Бонус за абсолютную прибыль (log2): $234→~8, $2500→~17 — выравнивает calmar vs реальные деньги
-        profit_bonus=_math.log2(max(net_return,0)+1)*3.0
-        if trades<=200: trade_bonus=_math.log(max(trades/8.0,1.0)+1)*4.0
-        else: trade_bonus=_math.log(200/8.0+1)*4.0-(trades-200)*0.01
-        wr_bonus=max(0.0,wr_val-50.0)*0.08
+        if max_dd>=20.0:
+            calmar_score=0.0
+        else:
+            calmar_score=_math.log(max(net_return/effective_dd, 1.0)+1.0)
+        dd_penalty=max(0.0,max_dd-15.0)*0.2
+
+        # --- WR: главный приоритет ---
+        # Линейный бонус с 50%, экспоненциальный буст после 86%
+        # Калибровка: WR>=86% перевешивает большую часть других факторов
+        wr_bonus=max(0.0,wr_val-50.0)*0.10
+        if wr_val>=86.0:
+            wr_bonus+=_math.exp((wr_val-86.0)*0.08)*2.0
+
+        # --- Депозит: log(equity) — абсолютная сумма важна, но не линейно ---
+        # log(11000)~9.3 vs log(5500)~8.6 — разница 0.7, умноженная на profit_w
+        profit_bonus=_math.log(max(equity,1.0))*4.0
+
+        # --- Сделки: нелинейный штраф, резко растёт после 25 ---
+        # Калибровка: 18 сд ≈ 28 сд (почти одинаково), 45 сд — уже ощутимо много
+        if trades<=25:
+            trade_bonus=_math.log(max(trades/3.0,1.0)+1)*0.8
+        elif trades<=50:
+            trade_bonus=_math.log(max(25/3.0,1.0)+1)*0.8-(trades-25)*0.10
+        else:
+            trade_bonus=_math.log(max(25/3.0,1.0)+1)*0.8-25*0.10-(trades-50)*0.20
+
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
-        pf_bonus=pf_val*1.5
-        dd_penalty=max(0.0,max_dd-15.0)*0.5
-        fitness=calmar*4.0+profit_bonus+trade_bonus+wr_bonus+pf_bonus-dd_penalty
+        pf_bonus=pf_val*1.2
+
+        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+pf_bonus-dd_penalty
 
     return {
         "equity": round(equity,2), "trades": trades, "wins": wins, "losses": losses_n,
