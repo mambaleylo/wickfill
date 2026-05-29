@@ -1647,6 +1647,8 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         os.replace(tmp_path, fpath)   # атомарная замена — перезапишет если уже есть
     except Exception as e:
         print(f"[auto_save] Ошибка записи: {e}", flush=True)
+        with opt_lock:
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"⚠ Сохранение не удалось: {save_dir} → {e}", "level": "warn"})
         if tmp_path:
             try:
                 os.remove(tmp_path)
@@ -1667,6 +1669,10 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
 
     if olog: olog(f"💾 Сохранено: {fpath}", "ok")
+    else:
+        # Логируем напрямую в opt_state если olog не передан (напр. из /save_result)
+        with opt_lock:
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "ok"})
     print(f"[auto_save] Сохранён: {fpath}", flush=True)
     return fpath
 
@@ -1740,12 +1746,17 @@ def run_optimizer(params):
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
+        # Диагностика: какие папки проверяются
+        existing_dirs = [d for d in _AUTO_DIRS if os.path.isdir(d)]
+        olog(f"🗂 Ищу конфиг в: {existing_dirs or ['нет доступных папок']}", "info")
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
             _last_autosave_vfit = auto_data["best"].get("validated_fitness", auto_data["best"].get("fitness", 0))
-            olog(f"🔍 Авто-загрузка: {os.path.basename(auto_path)}", "ok")
-            olog(f"   ${_last_autosave_eq:.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
+            olog(f"🔍 Авто-загрузка: {auto_path}", "ok")
+            olog(f"   ${auto_data['best'].get('equity',0):.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
+        else:
+            olog(f"📭 Конфиг не найден — начинаю с нуля", "info")
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
@@ -1911,6 +1922,9 @@ def run_optimizer(params):
                 saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
                 if saved:
                     _last_autosave_vfit = new_vfit
+                    olog(f"📁 Путь: {saved}", "ok")
+                else:
+                    olog(f"⚠ Авто-сохранение не удалось (проверь папку Download)", "warn")
 
             # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             with opt_lock:
@@ -2526,7 +2540,7 @@ details summary::-webkit-details-marker{display:none}
   .top-strip{flex-direction:column;height:auto;flex-shrink:0;}
   .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;}
   .cc-strip{flex-wrap:nowrap;overflow-x:auto;}
-  .log-col{max-height:160px;}
+  .log-col{max-height:300px;min-height:120px;}
 
   /* График — под таблицей, компактнее */
   .chart-area{height:220px;flex:none;}
@@ -2546,7 +2560,7 @@ details summary::-webkit-details-marker{display:none}
   #chartFrame{filter:brightness(1.35) contrast(0.92);}
 
   /* Лог */
-  .log-area{padding:4px 10px;}
+  .log-area{padding:4px 10px;min-height:80px;}
 
   /* Таблица топ — обычный блок */
   #top20Wrap{
@@ -2839,8 +2853,13 @@ function saveResult(){
   fetch('/save_result',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({best,top20:top20||[],symbol:sym,tf,days,risk_pct:risk})
   }).then(r=>r.json()).then(d=>{
-    if(d.ok) _slStatus('✓ Сохранено: '+d.file,true);
-    else _slStatus('✕ '+d.msg,false);
+    if(d.ok){
+      _slStatus('✓ Сохранено: '+(d.path||d.file),true);
+      addLogLine('💾 Сохранено: '+(d.path||d.file),'ok');
+    } else {
+      _slStatus('✕ '+d.msg,false);
+      addLogLine('⚠ Ошибка сохранения: '+d.msg,'warn');
+    }
   }).catch(e=>_slStatus('✕ '+e,false));
 }
 function loadResult(){
@@ -2859,7 +2878,9 @@ function loadResult(){
       if(d.days) document.getElementById('wf_days').value=d.days;
       if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
       if(d.best) renderBest(d.best,d.top20||[]);
-      _slStatus(`✓ $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+      const msg=`✓ Загружено: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.path||d.file||''}`;
+      _slStatus(msg,true);
+      addLogLine(msg,'ok');
     }).catch(e=>_slStatus('✕ '+e,false));
 }
 
@@ -3439,13 +3460,14 @@ class Handler(BaseHTTPRequestHandler):
                                 with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2); fpath=candidate; break
                             except Exception: pass
             if not data:
-                self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}"}); return
+                self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}. Проверенные папки: {[d for d in _AUTO_DIRS if os.path.isdir(d)]}"}); return
             try:
                 self._json({"ok":True,"best":data.get("best"),"top20":data.get("top20",[]),
                             "saved_at":data.get("saved_at",""),
                             "symbol":data.get("symbol",symbol),"tf":data.get("tf",tf),
                             "days":data.get("days",days),"risk_pct":data.get("risk_pct",risk_pct),
-                            "file":os.path.basename(fpath) if fpath else ""})
+                            "file":os.path.basename(fpath) if fpath else "",
+                            "path":fpath if fpath else ""})
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         else:
             self.send_response(404); self.end_headers()
@@ -3462,8 +3484,8 @@ class Handler(BaseHTTPRequestHandler):
             days=int(params.get("days",3)); risk_pct=float(params.get("risk_pct",20.0))
             if not best: self._json({"ok":False,"msg":"Нет данных"}); return
             saved=_auto_save_config(symbol, tf, days, risk_pct, best, top20)
-            if saved: self._json({"ok":True,"file":os.path.basename(saved)})
-            else: self._json({"ok":False,"msg":"Не удалось записать файл"})
+            if saved: self._json({"ok":True,"file":os.path.basename(saved),"path":saved})
+            else: self._json({"ok":False,"msg":"Не удалось записать файл — нет доступа к папке Download. Убедитесь что termux-setup-storage выполнен."})
             return
 
         if parsed.path == "/test_email":
