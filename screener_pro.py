@@ -2735,6 +2735,27 @@ function checkApi(){
 }
 checkApi();setInterval(checkApi,60000);
 
+// Авто-загрузка конфига при открытии страницы
+window.addEventListener('DOMContentLoaded', function(){
+  setTimeout(function(){
+    const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+    const tf=document.getElementById('wf_tf_sel').value;
+    const days=parseInt(document.getElementById('wf_days').value)||3;
+    const risk=parseFloat(document.getElementById('wf_risk').value)||20;
+    fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
+      .then(r=>r.json()).then(d=>{
+        if(!d.ok) return; // нет конфига — тихо игнорируем
+        window._loadedSeed={best:d.best,top20:d.top20||[]};
+        if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
+        if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
+        if(d.days) document.getElementById('wf_days').value=d.days;
+        if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
+        if(d.best) renderBest(d.best,d.top20||[]);
+        _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+      }).catch(()=>{});
+  }, 500);
+});
+
 function getAlertCfg(){
   const t=document.getElementById('al_tg_token').value.trim();
   const c=document.getElementById('al_tg_chat').value.trim();
@@ -2765,28 +2786,34 @@ function saveResult(){
   const best=window._lastBest,top20=window._lastTop20;
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
+  const days=parseInt(document.getElementById('wf_days').value)||3;
+  const risk=parseFloat(document.getElementById('wf_risk').value)||20;
   if(!best){_slStatus('Нет результата',false);return;}
-  const data={best,top20:top20||[],symbol:sym,tf,saved_at:new Date().toLocaleString()};
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download=`wickfill_${sym}_${tf}.json`;a.click();
-  URL.revokeObjectURL(url);_slStatus('✓ Скачан файл',true);
+  fetch('/save_result',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({best,top20:top20||[],symbol:sym,tf,days,risk_pct:risk})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok) _slStatus('✓ Сохранено: '+d.file,true);
+    else _slStatus('✕ '+d.msg,false);
+  }).catch(e=>_slStatus('✕ '+e,false));
 }
 function loadResult(){
-  const input=document.createElement('input');input.type='file';input.accept='.json';
-  input.onchange=function(e){
-    const file=e.target.files[0];if(!file)return;
-    const reader=new FileReader();
-    reader.onload=function(ev){
-      try{
-        const d=JSON.parse(ev.target.result);
-        if(!d.best){_slStatus('Неверный формат',false);return;}
-        window._loadedSeed={best:d.best,top20:d.top20};
-        if(d.best) renderBest(d.best,d.top20||[]);
-        _slStatus(`✓ $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}%`,true);
-      }catch(err){_slStatus('Ошибка: '+err,false);}
-    };reader.readAsText(file);
-  };input.click();
+  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const tf=document.getElementById('wf_tf_sel').value;
+  const days=parseInt(document.getElementById('wf_days').value)||3;
+  const risk=parseFloat(document.getElementById('wf_risk').value)||20;
+  _slStatus('Загрузка...', true);
+  fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){_slStatus('✕ '+d.msg,false);return;}
+      window._loadedSeed={best:d.best,top20:d.top20||[]};
+      // Подтягиваем поля из конфига если они там есть
+      if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
+      if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
+      if(d.days) document.getElementById('wf_days').value=d.days;
+      if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
+      if(d.best) renderBest(d.best,d.top20||[]);
+      _slStatus(`✓ $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+    }).catch(e=>_slStatus('✕ '+e,false));
 }
 
 /* ── Start / Stop ── */
@@ -3322,19 +3349,42 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/load_result":
             qs=parse_qs(parsed.query)
             symbol=qs.get("symbol",["BTC_USDT"])[0]; tf=qs.get("tf",["1h"])[0]
-            fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-            # Ищем файл во всех возможных папках (Downloads + рядом со скриптом)
-            search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
-            fpath = None
-            for d in search_dirs:
-                candidate = os.path.join(d, fname)
-                if os.path.exists(candidate):
-                    fpath = candidate; break
-            if not fpath:
-                self._json({"ok":False,"msg":f"Файл не найден: {fname}"}); return
+            days=int(qs.get("days",["3"])[0]); risk_pct=float(qs.get("risk",["20"])[0])
+            # Сначала ищем по новому формату (с days+risk+equity)
+            fpath, data = _find_auto_config(symbol, tf, days, risk_pct)
+            # Если не нашли — ищем любой файл по паре+tf без учёта days/risk
+            if not data:
+                import glob as _glob
+                sym2 = symbol.replace("_","").replace("/","").lower()
+                pat2 = f"wickfill_{sym2}_{tf}_*.json"
+                search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
+                best_eq2 = -1
+                for d in search_dirs:
+                    if not os.path.isdir(d): continue
+                    for fp in _glob.glob(os.path.join(d, pat2)):
+                        try:
+                            with open(fp,"r",encoding="utf-8") as f2: d2=json.load(f2)
+                            if not (d2.get("best") and d2["best"].get("params")): continue
+                            eq2=d2["best"].get("equity",0)
+                            if eq2>best_eq2: best_eq2=eq2; fpath=fp; data=d2
+                        except Exception: pass
+                # Также проверяем старый формат имени
+                if not data:
+                    old_fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
+                    for d in search_dirs:
+                        candidate=os.path.join(d,old_fname)
+                        if os.path.exists(candidate):
+                            try:
+                                with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2); fpath=candidate; break
+                            except Exception: pass
+            if not data:
+                self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}"}); return
             try:
-                with open(fpath,"r",encoding="utf-8") as f: data=json.load(f)
-                self._json({"ok":True,"best":data.get("best"),"top20":data.get("top20",[]),"saved_at":data.get("saved_at","")})
+                self._json({"ok":True,"best":data.get("best"),"top20":data.get("top20",[]),
+                            "saved_at":data.get("saved_at",""),
+                            "symbol":data.get("symbol",symbol),"tf":data.get("tf",tf),
+                            "days":data.get("days",days),"risk_pct":data.get("risk_pct",risk_pct),
+                            "file":os.path.basename(fpath) if fpath else ""})
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         else:
             self.send_response(404); self.end_headers()
@@ -3348,14 +3398,11 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             best=params.get("best"); top20=params.get("top20",[]); symbol=params.get("symbol","UNK"); tf=params.get("tf","1h")
+            days=int(params.get("days",3)); risk_pct=float(params.get("risk_pct",20.0))
             if not best: self._json({"ok":False,"msg":"Нет данных"}); return
-            fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-            fpath=os.path.join(os.path.dirname(os.path.abspath(__file__)),fname)
-            try:
-                with open(fpath,"w",encoding="utf-8") as f:
-                    json.dump({"best":best,"top20":top20,"symbol":symbol,"tf":tf,"saved_at":time.strftime("%Y-%m-%d %H:%M:%S")},f,ensure_ascii=False,indent=2)
-                self._json({"ok":True,"file":fname})
-            except Exception as e: self._json({"ok":False,"msg":str(e)})
+            saved=_auto_save_config(symbol, tf, days, risk_pct, best, top20)
+            if saved: self._json({"ok":True,"file":os.path.basename(saved)})
+            else: self._json({"ok":False,"msg":"Не удалось записать файл"})
             return
 
         if parsed.path == "/test_email":
