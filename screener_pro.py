@@ -2446,7 +2446,7 @@ details summary::-webkit-details-marker{display:none}
   .field>label{margin-bottom:1px;line-height:1.2}
 
   /* Прогресс бар */
-  .prog-wrap{gap:3px}
+  .prog-wrap{display:none !important}
   .prog-meta{font-size:.65rem}
   .prog-param{font-size:.62rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
@@ -2465,8 +2465,8 @@ details summary::-webkit-details-marker{display:none}
 
   /* Топ-результат: 1 строка */
   #bestSection{display:none !important}
-  #validSection{display:none !important}
-  #mob-best-row{display:flex !important}
+  #validSection{display:block !important}
+  #mob-best-row{display:none !important}
 
   /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
   .sidebar details{display:none}
@@ -2483,7 +2483,7 @@ details summary::-webkit-details-marker{display:none}
   .top-strip{flex-direction:column;height:auto;flex-shrink:0;}
   .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;}
   .cc-strip{flex-wrap:nowrap;overflow-x:auto;}
-  .log-col{max-height:70px;}
+  .log-col{max-height:160px;}
 
   /* График — под таблицей, компактнее */
   .chart-area{height:220px;flex:none;}
@@ -3032,37 +3032,50 @@ function renderValid(v, best, windows, minDays){
   const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
   const ok=ratio>=0.75;
   const color=ok?'var(--green)':'var(--red)';
+  const bgColor=ok?'rgba(80,200,100,0.08)':'rgba(220,80,80,0.08)';
   const icon=ok?'✅':'⚠️';
-  const stab=ok?'Стабильный':'Нестабильный';
+  const stab=ok?'Стабильная':'Нестабильная';
 
-  // Строка 1: валидация 30%
-  let html=`<div style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid ${color};background:var(--card);font-size:13px">`;
+  let html=`<div style="margin-top:8px;padding:10px 12px;border-radius:10px;border:1.5px solid ${color};background:${bgColor};font-size:13px">`;
+
+  html+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <span style="font-size:1.2rem">${icon}</span>
+    <span style="color:${color};font-weight:700;font-size:.95rem">${stab} стратегия</span>
+  </div>`;
+
   if(v){
-    html+=`<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:${windows&&windows.length?'6px':'0'}">
-      <span style="color:${color};font-weight:600">${icon} ${stab}</span>
-      <span style="color:var(--text2)">Валид ${v.days}д:</span>
-      <span style="color:var(--text2)">$${v.equity.toFixed(0)}</span>
-      <span style="color:${v.winrate>=55?'var(--green)':'var(--red)'}">WR ${v.winrate.toFixed(1)}%</span>
-      <span style="color:var(--text2)">DD ${v.max_dd.toFixed(1)}%</span>
-      <span style="color:var(--text2)">${v.trades}сд</span>
-      <span style="color:var(--text2);opacity:0.6">train ${trainWr.toFixed(0)}%</span>
-    </div>`;
+    const metrics=[
+      {l:'Депозит', v:'$'+v.equity.toFixed(0), c:v.equity>=(best?.equity??100)*0.75?'var(--green)':'var(--red)'},
+      {l:'WR (валид)', v:v.winrate.toFixed(1)+'%', c:v.winrate>=55?'var(--green)':'var(--red)'},
+      {l:'WR (трейн)', v:trainWr.toFixed(0)+'%', c:'var(--text2)'},
+      {l:'Max DD', v:v.max_dd.toFixed(1)+'%', c:v.max_dd<15?'var(--green)':v.max_dd>30?'var(--red)':'var(--text2)'},
+      {l:'Сделок', v:v.trades+'', c:'var(--text2)'},
+      {l:'Период', v:v.days+'д', c:'var(--text2)'},
+    ];
+    html+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:${windows&&windows.length||minDays?'8px':'0'}">`;
+    for(const m of metrics){
+      html+=`<div style="background:var(--card);border-radius:7px;padding:5px 7px;text-align:center">
+        <div style="font-size:.6rem;color:var(--text3);margin-bottom:2px">${m.l}</div>
+        <div style="font-size:.82rem;font-weight:600;color:${m.c}">${m.v}</div>
+      </div>`;
+    }
+    html+='</div>';
   }
 
-  // Строка 2: скользящие окна
   if(windows&&windows.length){
-    const dots=windows.map(w=>{
+    html+=`<div style="margin-bottom:${minDays?'6px':'0'}">
+      <div style="font-size:.62rem;color:var(--text3);margin-bottom:4px">📊 Скользящие окна</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">`;
+    for(const w of windows){
       const c=w.ok?'var(--green)':'var(--red)';
-      return `<span style="color:${c};white-space:nowrap">#${w.i} WR${w.winrate}%</span>`;
-    }).join('<span style="color:var(--text2);opacity:0.4"> | </span>');
-    html+=`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:${minDays?'6px':'0'}">
-      <span style="color:var(--text2);opacity:0.7">📊</span>${dots}
-    </div>`;
+      const bg=w.ok?'rgba(80,200,100,0.12)':'rgba(220,80,80,0.12)';
+      html+=`<span style="background:${bg};border:1px solid ${c};border-radius:5px;padding:2px 6px;font-size:.65rem;color:${c};white-space:nowrap">#${w.i} WR${w.winrate}%${w.ok?'✓':'✗'}</span>`;
+    }
+    html+='</div></div>';
   }
 
-  // Строка 3: минимальный период
   if(minDays!=null){
-    html+=`<div style="color:var(--text2);font-size:12px">📐 Мин. стабильный период: <b style="color:var(--green)">${minDays}д</b></div>`;
+    html+=`<div style="margin-top:4px;font-size:.7rem;color:var(--text2)">📐 Мин. стабильный период: <b style="color:var(--green)">${minDays}д</b></div>`;
   }
 
   html+='</div>';
