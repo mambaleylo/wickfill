@@ -2491,13 +2491,6 @@ tbody tr:first-child td{color:var(--bark);font-weight:600}
 .alert-msg.ok{color:var(--green)}
 .alert-msg.err{color:var(--red)}
 
-/* Save/load row */
-.save-row{display:flex;gap:7px}
-.save-row .btn-ghost{flex:1;font-size:.78rem;padding:7px 10px}
-.save-status{font-size:.68rem;color:var(--text3);padding:2px 0}
-.save-status.ok{color:var(--green)}
-.save-status.err{color:var(--red)}
-
 /* ── Details (Telegram) ── */
 details summary{
   cursor:pointer;list-style:none;
@@ -2555,9 +2548,6 @@ details summary::-webkit-details-marker{display:none}
   /* SW кнопка — скрыть на мобилке (редко нужна) */
   #swStopBtn{display:none !important}
 
-  /* Save row */
-  .save-row .btn-ghost{padding:7px 8px;font-size:.75rem}
-
   /* Бесконечный тоггл — скрыт (он всегда on) */
   #infiniteRow{display:none}
 
@@ -2569,10 +2559,6 @@ details summary::-webkit-details-marker{display:none}
   /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
   .sidebar details{display:none}
   .sidebar .div{display:none}
-  .save-row{display:none}
-  #saveLoadStatus{display:none !important}
-  /* Мобильные кнопки сохранить/загрузить */
-  #mob-save-row{display:flex !important}
 
   /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
   .right{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
@@ -2704,14 +2690,7 @@ details summary::-webkit-details-marker{display:none}
       </button>
     </div>
 
-    <!-- Save / load -->
-    <div class="save-row">
-      <button class="btn-ghost" onclick="saveResult()">💾 Сохранить</button>
-      <button class="btn-ghost" onclick="loadResult()">📂 Загрузить</button>
-    </div>
-    <div class="save-status" id="saveLoadStatus" style="display:none"></div>
-
-    <!-- Мобильная строка топ-результата (1 строка, видна только на телефоне) -->
+    <!-- Best result (desktop) -->
     <div id="mob-best-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 2px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
       <span id="mob-eq" style="font-weight:700;font-family:'DM Mono',monospace;font-size:1rem;color:var(--green);padding:0 8px">—</span>
       <span id="mob-wr" style="font-size:.78rem;color:var(--text2)">WR —</span>
@@ -2722,11 +2701,6 @@ details summary::-webkit-details-marker{display:none}
       <span style="flex:1"></span>
     </div>
 
-    <!-- Мобильные кнопки Сохранить / Загрузить -->
-    <div id="mob-save-row" style="display:none;gap:7px">
-      <button class="btn-ghost" style="flex:1;font-size:.78rem;padding:7px 10px" onclick="saveResult()">💾 Сохранить</button>
-      <button class="btn-ghost" style="flex:1;font-size:.78rem;padding:7px 10px" onclick="loadResult()">📂 Загрузить</button>
-    </div>
 
     <!-- Best result (desktop) -->
     <div id="bestSection" style="display:none">
@@ -2876,51 +2850,6 @@ function sendTestEmail(){
 }
 
 /* ── Save / Load ── */
-function _slStatus(msg,ok){
-  const el=document.getElementById('saveLoadStatus');
-  if(!el)return;el.style.display='block';
-  el.className='save-status '+(ok?'ok':'err');el.textContent=msg;
-}
-function saveResult(){
-  const best=window._lastBest,top20=window._lastTop20;
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
-  const tf=document.getElementById('wf_tf_sel').value;
-  const days=parseInt(document.getElementById('wf_days').value)||3;
-  const risk=parseFloat(document.getElementById('wf_risk').value)||20;
-  if(!best){_slStatus('Нет результата',false);return;}
-  fetch('/save_result',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({best,top20:top20||[],symbol:sym,tf,days,risk_pct:risk})
-  }).then(r=>r.json()).then(d=>{
-    if(d.ok){
-      _slStatus('✓ Сохранено: '+(d.path||d.file),true);
-      addLogLine('💾 Сохранено: '+(d.path||d.file),'ok');
-    } else {
-      _slStatus('✕ '+d.msg,false);
-      addLogLine('⚠ Ошибка сохранения: '+d.msg,'warn');
-    }
-  }).catch(e=>_slStatus('✕ '+e,false));
-}
-function loadResult(){
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
-  const tf=document.getElementById('wf_tf_sel').value;
-  const days=parseInt(document.getElementById('wf_days').value)||3;
-  const risk=parseFloat(document.getElementById('wf_risk').value)||20;
-  _slStatus('Загрузка...', true);
-  fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
-    .then(r=>r.json()).then(d=>{
-      if(!d.ok){_slStatus('✕ '+d.msg,false);return;}
-      window._loadedSeed={best:d.best,top20:d.top20||[]};
-      // Подтягиваем поля из конфига если они там есть
-      if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
-      if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
-      if(d.days) document.getElementById('wf_days').value=d.days;
-      if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
-      if(d.best) renderBest(d.best,d.top20||[]);
-      const msg=`✓ Загружено: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.path||d.file||''}`;
-      _slStatus(msg,true);
-      addLogLine(msg,'ok');
-    }).catch(e=>_slStatus('✕ '+e,false));
-}
 
 /* ── Start / Stop ── */
 function startOpt(){
