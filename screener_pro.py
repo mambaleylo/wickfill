@@ -1514,6 +1514,10 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
 
     top20_global = [_clamp_result(r) for r in prev_top20] if prev_top20 else []
 
+    # «Пол» — загруженный seed: никогда не показываем результат хуже него в UI
+    _seed_floor = top20_global[0] if top20_global else None
+    _seed_floor_fit = (_seed_floor.get("validated_fitness") or _seed_floor["fitness"]) if _seed_floor else -1e18
+
     # Фаза 1: многоточечный старт
     if prev_best_params:
         start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
@@ -1534,7 +1538,11 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
         with opt_lock:
+            # Показываем лучшее из top20, но не хуже seed-флора
             best_so_far = top20_global[0] if top20_global else result
+            best_so_far_fit = best_so_far.get("validated_fitness") or best_so_far["fitness"]
+            if _seed_floor and best_so_far_fit < _seed_floor_fit:
+                best_so_far = _seed_floor
             opt_state["best"] = best_so_far
             opt_state["top20"] = top20_global
             opt_state["elapsed"] = round(time.time()-t0, 1)
@@ -1565,7 +1573,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
-            with opt_lock: opt_state["best"]=final_result; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
+            with opt_lock:
+                show_best = final_result
+                show_fit = show_best.get("validated_fitness") or show_best["fitness"]
+                if _seed_floor and show_fit < _seed_floor_fit:
+                    show_best = _seed_floor
+                opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
 
     finally:
         _pool.shutdown(wait=False)
