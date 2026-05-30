@@ -352,7 +352,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
-    tp_hits=0; sl_hits=0; sig_closes=0
     in_trade=False; t_dir=0; t_ep=0.0; t_tp=0.0; t_sl=0.0
     t_orig_sl=0.0; t_pos=0.0; t_entry_bar=-1
     be_triggered=False; be_trig_lvl=0.0
@@ -378,8 +377,8 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 rr_r=move/t_orig_sl if t_orig_sl>0 else 0
                 pnl=t_pos*risk_pct/100*rr_r
                 equity+=pnl; pnls.append(pnl); trades+=1
-                if tp_win: wins+=1; tp_hits+=1
-                else: losses_n+=1; sl_hits+=1
+                if tp_win: wins+=1
+                else: losses_n+=1
                 if equity>max_eq: max_eq=equity
                 dd=(max_eq-equity)/max_eq*100 if max_eq>0 else 0
                 if dd>max_dd: max_dd=dd
@@ -532,7 +531,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
                     rr_r=move/t_orig_sl if t_orig_sl>0 else 0
                     pnl=t_pos*risk_pct/100*rr_r; is_win=pnl>0
-                    equity+=pnl;pnls.append(pnl);trades+=1;sig_closes+=1
+                    equity+=pnl;pnls.append(pnl);trades+=1
                     if is_win: wins+=1
                     else: losses_n+=1
                     if equity>max_eq: max_eq=equity
@@ -554,7 +553,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
                     rr_r=move/t_orig_sl if t_orig_sl>0 else 0
                     pnl=t_pos*risk_pct/100*rr_r; is_win=pnl>0
-                    equity+=pnl;pnls.append(pnl);trades+=1;sig_closes+=1
+                    equity+=pnl;pnls.append(pnl);trades+=1
                     if is_win: wins+=1
                     else: losses_n+=1
                     if equity>max_eq: max_eq=equity
@@ -659,8 +658,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
         pf_bonus=pf_val*1.2
 
-        sig_close_ratio = sig_closes / trades if trades > 0 else 0
-
         fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+rr_bonus+pf_bonus-dd_penalty
 
     return {
@@ -668,8 +665,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         "winrate": round(wr_val,1), "max_dd": round(max_dd,2),
         "profit_factor": round(profit_factor,2) if profit_factor!=float("inf") else 999.0,
         "avg_pnl": round(avg_pnl,4), "fitness": round(fitness,4),
-        "tp_hits": tp_hits, "sl_hits": sl_hits, "sig_closes": sig_closes,
-        "sig_close_ratio": round(sig_close_ratio*100,1),
         "params": dict(p), "_signals": _csigs if _collect else None,
     }
 
@@ -1463,7 +1458,6 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
 
     # Для таймфреймов < 1h ограничиваем максимальный TP до 1.2%
     _small_tf = TF_SECONDS.get(tf, 3600) < 3600
-    import copy as _copy
     _grids_local = dict(_GRIDS)
     if _small_tf:
         _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
@@ -1492,7 +1486,6 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         return ind
 
     def _clamp_tp(ind):
-        """Зажать tp_pct до максимума для малых ТФ."""
         if _small_tf and ind and ind.get("tp_pct", 0) > 1.2:
             ind = dict(ind); ind["tp_pct"] = 1.2
         return ind
@@ -3115,7 +3108,6 @@ function renderBest(b){
     document.getElementById('mob-sl').textContent='SL '+(b.params?.sl_pct??'—')+'%';
     document.getElementById('mob-tp').textContent='TP '+(b.params?.tp_pct??'—')+'%';
   }
-  const scr=b.sig_close_ratio??null;
   const stats=[
     {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>100?'good':eq<100?'bad':''},
     {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=55?'good':wr<45?'bad':''},
@@ -3124,7 +3116,7 @@ function renderBest(b){
     {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.5?'good':'bad'},
     {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
     {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
-    {v:scr!==null?scr+'%':'—',l:'По сигналу',c:scr!==null?(scr<40?'good':scr>65?'bad':''):''},
+    {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
   document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell"><div class="stat-v ${s.c}">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
   if(b.params){
