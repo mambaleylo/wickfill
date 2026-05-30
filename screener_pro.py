@@ -2852,6 +2852,7 @@ function sendTestEmail(){
 /* ── Save / Load ── */
 
 /* ── Start / Stop ── */
+function _slStatus(msg,ok){ /* статус убран из UI, авто-загрузка продолжает работать */ }
 function startOpt(){
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
