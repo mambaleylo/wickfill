@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.0
+WickFill Optimizer v3.106
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -8,9 +8,19 @@ WickFill Optimizer v3.0
 """
 
 import json, time, threading, random, math, os
+import math as _math  # используется в fitness внутри _simulate
+import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import sys as _sys
+# python3.14t (free-threaded, no GIL) не поддерживает ProcessPoolExecutor
+if hasattr(_sys, '_is_gil_enabled') and not _sys._is_gil_enabled():
+    from concurrent.futures import ThreadPoolExecutor as PoolExecutor
+    _POOL_TYPE = "thread"
+else:
+    from concurrent.futures import ProcessPoolExecutor as PoolExecutor
+    _POOL_TYPE = "process"
 import requests
 import smtplib, email.mime.text, email.mime.multipart
 
@@ -122,8 +132,8 @@ opt_state = {
     "running": False, "done": False, "infinite": False,
     "cycle": 0,       # номер цикла бесконечного режима
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
-    "current_param": "", "logs": [], "best": None, "top20": [],
-    "started_at": "", "elapsed": 0.0, "error": "",
+    "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+    "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None,
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
     # sliding window
@@ -250,7 +260,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         return None
     n = len(candles_list)
 
-    closes = [c["close"] for c in candles_list]
+    # Используем предвычисленный массив closes если доступен (worker-процесс)
+    global _worker_closes
+    if _worker_closes is not None and len(_worker_closes) == n and days_limit == 0:
+        closes = _worker_closes
+    else:
+        closes = [c["close"] for c in candles_list]
     def _rsi(closes, period):
         if len(closes) < period + 1: return [50.0]*len(closes)
         gains, losses = [], []
@@ -335,6 +350,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 if abs(c["low"]-level_price)<=zone_tol: cnt+=1
         return cnt
 
+    # Предвычисляем массивы high/low/upwick/dnwick для быстрых скользящих окон
+    _all_hi  = [c["high"] for c in candles_list]
+    _all_lo  = [c["low"]  for c in candles_list]
+    _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
+    _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
+
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
     in_trade=False; t_dir=0; t_ep=0.0; t_tp=0.0; t_sl=0.0
@@ -388,14 +409,18 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         rsi_ok_l=(not urf) or rsi_now<=rlmax
         rsi_ok_s=(not urf) or rsi_now>=rsmin
 
-        prev_hi=max(candles_list[j]["high"] for j in range(max(0,i-ll),i)) if ulf else hi
-        prev_lo=min(candles_list[j]["low"]  for j in range(max(0,i-ll),i)) if ulf else lo
+        if ulf:
+            _s=max(0,i-ll)
+            prev_hi=max(_all_hi[_s:i]) if i>_s else hi
+            prev_lo=min(_all_lo[_s:i]) if i>_s else lo
+        else:
+            prev_hi=hi; prev_lo=lo
         near_hi=(not ulf) or (abs(hi-prev_hi)/prev_hi*100<=ltol if prev_hi>0 else False)
         near_lo=(not ulf) or (abs(lo-prev_lo)/prev_lo*100<=ltol if prev_lo>0 else False)
 
         if ugf:
-            hist_up=[candles_list[j]["high"]-max(candles_list[j]["open"],candles_list[j]["close"]) for j in range(max(0,i-gl),i)]
-            hist_dn=[min(candles_list[j]["open"],candles_list[j]["close"])-candles_list[j]["low"] for j in range(max(0,i-gl),i)]
+            _s=max(0,i-gl)
+            hist_up=_all_upw[_s:i]; hist_dn=_all_dnw[_s:i]
             geo_up=sum(1 for w in hist_up if up_w>w)/len(hist_up)*100 if hist_up else 0
             geo_dn=sum(1 for w in hist_dn if dn_w>w)/len(hist_dn)*100 if hist_dn else 0
             geo_ok_l=geo_up>=gmin; geo_ok_s=geo_dn>=gmin
@@ -430,18 +455,20 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             quiet_ok=True
 
         if uswf:
-            sw_hi=max((candles_list[j]["high"] for j in range(max(0,i-sw_len),i)), default=hi)
-            sw_lo=min((candles_list[j]["low"]  for j in range(max(0,i-sw_len),i)), default=lo)
+            _s=max(0,i-sw_len)
+            sw_hi=max(_all_hi[_s:i]) if i>_s else hi
+            sw_lo=min(_all_lo[_s:i]) if i>_s else lo
             sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
             sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
         else:
             sweep_ok_l=sweep_ok_s=True
 
         if umsf and i>=ms_lb*2:
-            swing_hi=max(candles_list[j]["high"] for j in range(i-ms_lb,i))
-            swing_lo=min(candles_list[j]["low"]  for j in range(i-ms_lb,i))
-            prev_s_hi=max(candles_list[j]["high"] for j in range(i-ms_lb*2,i-ms_lb))
-            prev_s_lo=min(candles_list[j]["low"]  for j in range(i-ms_lb*2,i-ms_lb))
+            _s1=i-ms_lb; _s2=i-ms_lb*2
+            swing_hi=max(_all_hi[_s1:i])
+            swing_lo=min(_all_lo[_s1:i])
+            prev_s_hi=max(_all_hi[_s2:_s1])
+            prev_s_lo=min(_all_lo[_s2:_s1])
             ms_up=swing_hi>prev_s_hi and swing_lo>prev_s_lo
             ms_down=swing_hi<prev_s_hi and swing_lo<prev_s_lo
             ms_ok_l=ms_down; ms_ok_s=ms_up
@@ -578,33 +605,72 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         last_c=candles_list[-1]; exit_p=last_c["close"]
         move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
         rr_r=move/t_orig_sl if t_orig_sl>0 else 0
-        pnl_ot=t_pos*risk_pct/100*rr_r
-        if pnl_ot<0:
-            floating_dd=(max_eq-(equity+pnl_ot))/max_eq*100 if max_eq>0 else 0
-            if floating_dd>max_dd: max_dd=floating_dd
+        pnl_ot=t_pos*risk_pct/100*rr_r*0.5  # коэф. 0.5: исход неизвестен, не искажаем equity
+        equity+=pnl_ot; pnls.append(pnl_ot)
+        is_win_ot=pnl_ot>0
+        trades+=1
+        if is_win_ot: wins+=1
+        else: losses_n+=1
+        if equity>max_eq: max_eq=equity
+        dd_ot=(max_eq-equity)/max_eq*100 if max_eq>0 else 0
+        if dd_ot>max_dd: max_dd=dd_ot
         if _collect and _csigs:
-            _csigs[-1]["exit_bar"]=None;_csigs[-1]["win"]=None;_csigs[-1]["open_end"]=True
+            _csigs[-1]["exit_bar"]=None;_csigs[-1]["win"]=is_win_ot;_csigs[-1]["open_end"]=True
+            _csigs[-1]["exit_p"]=exit_p
 
     wr_val=wins/trades*100 if trades>0 else 0
     avg_pnl=sum(pnls)/len(pnls) if pnls else 0
     profit_factor=(sum(x for x in pnls if x>0)/abs(sum(x for x in pnls if x<0))
                    if any(x<0 for x in pnls) else float("inf"))
 
-    if trades<3: fitness=-9999.0
+    if trades<15: fitness=-9999.0
     elif max_dd>=50.0: fitness=-9999.0
     else:
-        import math as _math
         net_return=equity-100.0
-        expected_dd=p["sl_pct"]*(1.0-wr_val/100.0)*_math.sqrt(max(trades,1))
-        effective_dd=max(max_dd,expected_dd,1.0)
-        calmar=net_return/effective_dd
-        if trades<=200: trade_bonus=_math.log(max(trades/8.0,1.0)+1)*4.0
-        else: trade_bonus=_math.log(200/8.0+1)*4.0-(trades-200)*0.01
-        wr_bonus=max(0.0,wr_val-50.0)*0.1
+
+        # --- Calmar: логарифмически нормирован ---
+        # DD>=20% — полный обрыв calmar
+        min_dd_floor=max(1.0, 15.0/_math.sqrt(max(trades,1)))
+        effective_dd=max(max_dd,min_dd_floor)
+        if max_dd>=20.0:
+            calmar_score=0.0
+        else:
+            calmar_score=_math.log(max(net_return/effective_dd, 1.0)+1.0)
+        dd_penalty=max(0.0,max_dd-15.0)*0.2
+
+        # --- WR: линейный бонус с 50%, без экспоненциального буста ---
+        # Убран буст WR 86%+ — он толкал к редким "идеальным" сделкам (оверфиттинг)
+        # При RR 1:5 достаточно WR 50%, при RR 1:2 — WR 60%
+        wr_bonus=max(0.0,wr_val-50.0)*0.08
+
+        # --- Депозит: log(equity) ---
+        profit_bonus=_math.log(max(equity,1.0))*4.0
+
+        # --- Сделки: поощряем 15-40, плавно штрафуем >60 ---
+        # Статистическая надёжность важнее: 25 сделок лучше 5
+        if trades<=40:
+            trade_bonus=_math.log(max(trades/15.0,1.0)+1)*1.5
+        elif trades<=60:
+            trade_bonus=_math.log(max(40/15.0,1.0)+1)*1.5-(trades-40)*0.05
+        else:
+            trade_bonus=_math.log(max(40/15.0,1.0)+1)*1.5-20*0.05-(trades-60)*0.15
+
+        # --- RR (Risk/Reward): средний выигрыш / средний проигрыш ---
+        # Стратегия RR 1:5 + WR 50% лучше RR 1:1 + WR 80%
+        wins_pnl=[x for x in pnls if x>0]
+        loss_pnl=[abs(x) for x in pnls if x<0]
+        if wins_pnl and loss_pnl:
+            avg_win=sum(wins_pnl)/len(wins_pnl)
+            avg_loss=sum(loss_pnl)/len(loss_pnl)
+            rr=avg_win/max(avg_loss,0.0001)
+            rr_bonus=_math.log(max(rr,1.0)+1)*1.5
+        else:
+            rr_bonus=0.0
+
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
-        pf_bonus=pf_val*2.0
-        dd_penalty=max(0.0,max_dd-15.0)*0.5
-        fitness=calmar*5.0+trade_bonus+wr_bonus+pf_bonus-dd_penalty
+        pf_bonus=pf_val*1.2
+
+        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+rr_bonus+pf_bonus-dd_penalty
 
     return {
         "equity": round(equity,2), "trades": trades, "wins": wins, "losses": losses_n,
@@ -620,10 +686,23 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 _worker_candles = None
 _worker_days    = None
 _worker_risk    = 20.0
+# Предвычисленные массивы (закэшированы один раз на процесс)
+_worker_opens   = None
+_worker_highs   = None
+_worker_lows    = None
+_worker_closes  = None
 
 def _worker_init(candles, days, risk):
     global _worker_candles, _worker_days, _worker_risk
-    _worker_candles = candles; _worker_days = days; _worker_risk = risk
+    global _worker_opens, _worker_highs, _worker_lows, _worker_closes
+    _worker_candles = candles
+    _worker_days    = days
+    _worker_risk    = risk
+    # Предвычисляем массивы цен один раз — не надо делать list comprehension в каждой симуляции
+    _worker_opens  = [c["open"]  for c in candles]
+    _worker_highs  = [c["high"]  for c in candles]
+    _worker_lows   = [c["low"]   for c in candles]
+    _worker_closes = [c["close"] for c in candles]
 
 def _worker_evaluate(ind):
     r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk)
@@ -661,10 +740,11 @@ def _sf(val, default):
 
 def _update_top20(top20_list, result):
     top20_list.append(result)
-    top20_list.sort(key=lambda x: -x["fitness"])
+    # Сортируем по validated_fitness (учитывает стабильность) если оно есть, иначе по fitness
+    top20_list.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
     seen=set(); deduped=[]
     for item in top20_list:
-        key=round(item["equity"],2)
+        key=round(item.get("validated_fitness") or item["fitness"], 6)
         if key not in seen: seen.add(key); deduped.append(item)
     return deduped[:7]
 
@@ -673,37 +753,51 @@ def _update_top20(top20_list, result):
 # ═══════════════════════════════════════════════════════════════
 def _fetch_candles(symbol, tf, days):
     interval_sec = TF_SECONDS.get(tf, 3600)
-    batch = 100
-    now = int(time.time())
+    LIMIT = 999          # Gate.io futures максимум за один запрос
+    now   = int(time.time())
     since = now - days * 86400
-    all_candles = []; current_from = since
-    total_sec = now - since
-    print(f"[fetch] {symbol} {tf} {days}д — загрузка...", flush=True)
+    total_needed = (now - since) // interval_sec + 2
+    all_candles = []
+    current_from = since
+    last_http_error = None
+    last_exception  = None
+    print(f"[fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
-        to = min(current_from + interval_sec * batch, now)
-        pct = int((current_from - since) / total_sec * 100) if total_sec > 0 else 0
+        pct = int((current_from - since) / max(now - since, 1) * 100)
         print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
         try:
             r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
-                params={"contract":symbol,"interval":tf,"from":current_from,"to":to}, timeout=10)
+                params={"contract": symbol, "interval": tf,
+                        "from": current_from, "limit": LIMIT}, timeout=15)
             if r.status_code != 200:
-                print("\n[fetch] HTTP {} — прерываем".format(r.status_code), flush=True); break
+                last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                print(f"\n[fetch] {last_http_error}", flush=True); break
             data = r.json()
-            if not isinstance(data, list) or not data: break
+            if not isinstance(data, list):
+                last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
+                print(f"\n[fetch] {last_http_error}", flush=True); break
+            if not data: break
             for c in data:
-                all_candles.append({"t":int(c.get("t",0)),"open":float(c["o"]),
-                    "high":float(c["h"]),"low":float(c["l"]),"close":float(c["c"])})
-            last_t = int(data[-1].get("t",0))
+                t = int(c.get("t", 0))
+                if t < since - interval_sec: continue  # мягкий порог
+                all_candles.append({"t": t, "open": float(c["o"]),
+                    "high": float(c["h"]), "low": float(c["l"]), "close": float(c["c"])})
+            last_t = int(data[-1].get("t", 0))
             next_from = last_t + interval_sec
-            if next_from <= current_from or next_from >= now: break
+            if next_from <= current_from: break
+            if last_t >= now - interval_sec: break
             current_from = next_from
             time.sleep(0.05)
         except Exception as e:
-            print("\n[fetch] err: {}".format(e), flush=True); break
-    seen=set(); result=[]
+            last_exception = str(e)
+            print(f"\n[fetch] err: {e}", flush=True); break
+    seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    print("\n[fetch] Готово: {} свечей".format(len(result)), flush=True)
+    print(f"\n[fetch] Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
+    # Возвращаем причину ошибки вместе с результатом через глобал (для лога оптимизатора)
+    global _last_fetch_error
+    _last_fetch_error = last_http_error or last_exception or None
     return result
 
 def _fetch_latest_candle(symbol, tf):
@@ -774,38 +868,45 @@ def _fetch_current_candle(symbol, tf):
 # ═══════════════════════════════════════════════════════════════
 # COORDINATE DESCENT
 # ═══════════════════════════════════════════════════════════════
-def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
+def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
-                              stop_flag=None):
+                              stop_flag=None, grids=None):
     current = dict(start_ind)
-    best_result = _worker_evaluate(current)
-    top20_global = _update_top20(top20_global, best_result)
+    best_result = pmap_fn([current])[0]
     pass_num = 0
+
+    # Если стартовая точка не набирает минимум сделок — пробуем найти хоть что-то
+    # за один быстрый круг, иначе пропускаем этот старт
+    _dead_start = best_result["fitness"] <= -9000
 
     while True:
         if stop_flag and stop_flag(): break
         pass_num += 1
         keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
-        olog(f"  {start_label} | Круг #{pass_num} | Депозит: ${best_result['equity']:.2f}", "ok")
+        # Круг/Депозит — отображается через pass_num в progLabel, лог не нужен
+        _grids = grids if grids is not None else _GRIDS
 
-        steps_in_pass = sum(len(_GRIDS[k]) for k in keys_shuffled)
+        steps_in_pass = sum(len(_grids[k]) for k in keys_shuffled)
         with opt_lock:
             opt_state["pass_num"]=pass_num; opt_state["total"]=steps_in_pass; opt_state["progress"]=0
 
         step_in_pass=0; improved_in_pass=False
+        _pass_t0 = time.time()
 
         for param_idx, key in enumerate(keys_shuffled):
             if stop_flag and stop_flag(): break
-            label=PARAM_SPACE[key]["label"]; grid=_GRIDS[key]
+            label=PARAM_SPACE[key]["label"]; grid=_grids[key]
             with opt_lock:
                 opt_state["current_param"]=label; opt_state["generation"]=param_idx+1
 
+            _param_t0 = time.time()
             candidates=[{**current, key:val} for val in grid]
             use_key=FILTER_GROUPS.get(key)
             if use_key and current.get(use_key,True):
                 candidates.append({**current, use_key:False})
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
+            _param_dt = round(time.time() - _param_t0, 3)
             param_best=results[0]; best_val=param_best["params"][key]
 
             if param_best["fitness"]>best_result["fitness"]:
@@ -814,33 +915,26 @@ def _coordinate_descent_from(start_ind, candles, days, pmap_fn, olog, t0,
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
 
-            for r in results[:5]: top20_global=_update_top20(top20_global,r)
-            extra=1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0
-            step_in_pass+=len(grid)+extra
+            _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
+
+            step_in_pass+=len(grid)+(1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0)
             with opt_lock:
                 opt_state["progress"]=step_in_pass
-                opt_state["top20"]=top20_global; opt_state["elapsed"]=round(time.time()-t0,1)
+                opt_state["elapsed"]=round(time.time()-t0,1)
 
-        if not improved_in_pass:
-            # RSI control sweep
-            rsi_candidates=[]
-            for rl in [v for v in _GRIDS["rsi_len"] if 2<=v<=6]:
-                for rlmax in _GRIDS["rsi_long_max"]:
-                    for rsmin in _GRIDS["rsi_short_min"]:
-                        rsi_candidates.append({**current,"use_rsi_filter":True,"rsi_len":rl,"rsi_long_max":rlmax,"rsi_short_min":rsmin})
-            rsi_candidates.append({**current,"use_rsi_filter":False})
-            with opt_lock: opt_state["current_param"]="RSI контрольный перебор"
-            rsi_results=pmap_fn(rsi_candidates); rsi_results.sort(key=lambda x:-x["fitness"])
-            rsi_best=rsi_results[0]
-            for r in rsi_results[:5]: top20_global=_update_top20(top20_global,r)
-            if rsi_best["fitness"]>best_result["fitness"]:
-                for k in ("use_rsi_filter","rsi_len","rsi_long_max","rsi_short_min"):
-                    current[k]=rsi_best["params"][k]
-                best_result=rsi_best; olog("  RSI-контроль улучшил → продолжаю","ok")
-            else:
-                olog("  RSI-контроль не помог — локальный максимум","ok"); break
+        _pass_dt = round(time.time() - _pass_t0, 3)
+        _plog("pass_done", pass_n=pass_num, sec=_pass_dt, improved=improved_in_pass, start=start_label)
+
+        if stop_flag and stop_flag(): break
+
+        if not improved_in_pass: break
+        # Мёртвый старт: если за первый круг не нашли ни одной валидной стратегии — уходим
+        if _dead_start and best_result["fitness"] <= -9000: break
+        _dead_start = False  # после первого улучшения снимаем флаг
         if pass_num>=max_passes: break
 
+    # Обновляем top20 только финальным результатом старта
+    top20_global = _update_top20(top20_global, best_result)
     return best_result, current, top20_global
 
 # ═══════════════════════════════════════════════════════════════
@@ -862,7 +956,10 @@ def _send_telegram(cfg, text):
 
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
-    dt=time.strftime("%Y-%m-%d %H:%M", time.localtime(candle_t))
+    # Показываем время ЗАКРЫТИЯ свечи (открытие + интервал), в московском времени (UTC+3)
+    close_t = candle_t + TF_SECONDS.get(tf, 3600)
+    moscow_offset = 3 * 3600  # UTC+3
+    dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
     text = (
         f"🔔 <b>WickFill Сигнал</b>\n\n"
         f"{dir_str} <b>{symbol}</b> {tf}\n"
@@ -895,83 +992,43 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
     return f"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>WickFill Live · {symbol} · {tf}</title>
+<title>WickFill · {symbol} · {tf}</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--blue:#58a6ff;
-  --green:#3fb950;--red:#f85149;--yellow:#e3b341;--muted:#8b949e;--text:#e6edf3}}
-html,body{{height:100%;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
-.topbar{{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}}
-.topbar-title{{font-size:.9rem;font-weight:700;flex:1;min-width:160px}}
-.stats{{display:flex;gap:14px;font-size:.72rem;flex-wrap:wrap}}
-.stats .g b{{color:var(--green)}}.stats .r b{{color:var(--red)}}.stats .y b{{color:var(--yellow)}}
-.btn{{padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:.73rem}}
+:root{{
+  --cream:#f7f3ee;--cream2:#ede8e0;--cream3:#e2dbd0;
+  --bark:#4a3f34;--text:#1a1310;--text2:#504438;--text3:#7a6e63;
+  --border:rgba(92,79,67,.15);--border2:rgba(92,79,67,.08);
+  --green:#3a7d52;--red:#a03030;--yellow:#8a6a1a;
+  --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
+}}
+html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
-#sidebar{{width:240px;background:var(--bg2);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;transition:width .2s}}
-#sidebar.hidden{{width:0;overflow:hidden}}
-.sidebar-inner{{padding:10px 12px;min-width:240px}}
-.sidebar-inner h3{{font-size:.75rem;color:var(--blue);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}}
-#paramTable{{width:100%;border-collapse:collapse;font-size:.68rem}}
-#paramTable td{{padding:3px 4px;border-bottom:1px solid var(--bg3);vertical-align:top}}
-#paramTable td:first-child{{color:var(--muted);padding-right:8px}}
-.result-card{{margin-top:14px;background:var(--bg3);border-radius:8px;padding:9px 11px}}
-.result-card h3{{font-size:.73rem;color:var(--blue);text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px}}
-.rc-grid{{display:grid;grid-template-columns:1fr 1fr;gap:5px}}
-.rc-item{{background:var(--bg2);border-radius:5px;padding:5px 7px;text-align:center}}
-.rc-val{{font-size:.95rem;font-weight:700;color:var(--blue)}}.rc-val.g{{color:var(--green)}}.rc-val.r{{color:var(--red)}}
-.rc-lbl{{font-size:.6rem;color:var(--muted);margin-top:1px}}
-#tooltip{{position:absolute;display:none;pointer-events:none;background:rgba(13,17,23,.95);border:1px solid var(--border);border-radius:7px;padding:7px 11px;font-size:.7rem;line-height:1.75;white-space:nowrap;z-index:20}}
-.legend{{position:absolute;bottom:36px;left:10px;font-size:.66rem;color:var(--muted);line-height:2;background:rgba(13,17,23,.7);padding:5px 9px;border-radius:6px;pointer-events:none}}
-.legend span{{display:inline-block;width:11px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}}
-.live-badge{{padding:2px 7px;background:#0f2a0f;border:1px solid var(--green);border-radius:10px;font-size:.65rem;color:var(--green);animation:pulse 2s infinite}}
+#tooltip{{position:absolute;display:none;pointer-events:none;
+  background:rgba(30,26,23,.97);border:1px solid rgba(255,255,255,.12);
+  border-radius:10px;padding:7px 11px;font-size:.7rem;line-height:1.75;
+  white-space:nowrap;z-index:20;color:#d4c8bc;
+  box-shadow:0 4px 16px rgba(0,0,0,.4)}}
+.legend{{display:none}}
+.live-badge{{padding:2px 7px;
+  background:var(--green-light);border:1px solid rgba(58,125,82,.3);
+  border-radius:10px;font-size:.65rem;color:var(--green);
+  animation:pulse 2s infinite;display:inline-block}}
 @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.5}}}}
-::-webkit-scrollbar{{width:5px}}::-webkit-scrollbar-thumb{{background:var(--border);border-radius:3px}}
+::-webkit-scrollbar{{width:5px}}
+::-webkit-scrollbar-thumb{{background:var(--cream3);border-radius:3px}}
 </style></head><body>
-<div class="topbar">
-  <div class="topbar-title">📊 WickFill · {symbol} · {tf}
-    &nbsp;<span class="live-badge" id="liveBadge">⬤ LIVE</span>
-    &nbsp;<span style="color:var(--muted);font-size:.7rem">Обновлено: {updated} · {len(candles)} св. · {trades} сделок</span>
-  </div>
-  <div class="stats">
-    <span class="{'g' if wr>=55 else 'r' if wr<45 else ''}">WR <b>{wr}%</b></span>
-    <span>Сделок <b>{trades}</b></span>
-    <span class="{'g' if eq>100 else 'r'}">Депозит <b>${eq:.2f}</b></span>
-    <span class="{'g' if dd<15 else 'r'}">DD <b>{dd:.1f}%</b></span>
-    <span class="{'g' if (pf if pf!=999 else 99)>=1.5 else 'r'}">PF <b>{'∞' if pf==999 else f'{pf:.2f}'}</b></span>
-    <span class="y">SL <b>{p.get('sl_pct','—')}%</b></span>
-    <span style="color:var(--green)">TP <b>{p.get('tp_pct','—')}%</b></span>
-    <span style="color:#a78bfa">Риск <b>{risk_pct_ui:.0f}%</b></span>
-  </div>
-  <button class="btn" onclick="location.reload()">↻ Обновить</button>
-  <button class="btn" onclick="toggleSidebar()">⚙ Параметры</button>
-</div>
 <div class="body">
   <div id="canvas-wrap">
     <canvas id="c"></canvas>
     <div id="tooltip"></div>
-    <div class="legend">
-      <div><span style="background:var(--blue)"></span>Лонг</div>
-      <div><span style="background:var(--yellow)"></span>Шорт</div>
-      <div><span style="background:var(--green)"></span>TP</div>
-      <div><span style="background:#444"></span>SL</div>
-    </div>
-  </div>
-  <div id="sidebar">
-    <div class="sidebar-inner">
-      <div class="result-card">
-        <h3>Результат</h3>
-        <div class="rc-grid">
-          <div class="rc-item"><div class="rc-val {'g' if eq>100 else 'r'}">${eq:.2f}</div><div class="rc-lbl">Депозит</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if wr>=55 else 'r'}">{wr}%</div><div class="rc-lbl">Winrate</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if dd<15 else 'r'}">{dd:.1f}%</div><div class="rc-lbl">Max DD</div></div>
-          <div class="rc-item"><div class="rc-val {'g' if (pf if pf!=999 else 99)>=1.5 else 'r'}">{'∞' if pf==999 else f'{pf:.2f}'}</div><div class="rc-lbl">PF</div></div>
-        </div>
-      </div>
-      <br>
-      <h3>Параметры</h3>
-      <table id="paramTable">{params_rows}</table>
+
+    <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:#9a8e83">
+      <span class="live-badge" id="liveBadge">⬤ LIVE</span>
+      <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
+      <span>{len(candles)} св. · {trades} сд.</span>
     </div>
   </div>
 </div>
@@ -995,33 +1052,71 @@ function render(){{
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
   const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;if(mx<=mn)mx=mn+1;
-  const PAD_L=6,PAD_R=62,PAD_T=14,PAD_B=34,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
+  const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=54,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
-  ctx.clearRect(0,0,W,H);
+  // Background fill chart area
+  ctx.fillStyle='#1e1a17';ctx.fillRect(0,0,W,H);
+  // Time axis separator
+  ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(PAD_L,H-PAD_B);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
+  // Price axis separator
+  ctx.beginPath();ctx.moveTo(W-PAD_R,PAD_T);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='#1e2530';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#8b949e';ctx.fillText(price.toPrecision(5),W-PAD_R+4,y+3);
+    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle='#9a8e83';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
+  // Only draw TP/SL labels for the active (open) trade
+  const activeSig=SIGNALS.find(s=>s.open_end===true&&s.bar_i<end&&s.bar_i>=viewStart-(viewLen*2));
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
     const ei=Math.min(Math.max(viC,eiR),vis.length-1);
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
-    ctx.fillStyle='rgba(63,185,80,0.07)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
-    ctx.fillStyle='rgba(248,81,73,0.07)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
-    ctx.setLineDash([4,3]);
-    ctx.strokeStyle=isLong?'#3fb950':'#f85149';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
-    ctx.strokeStyle='#556';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
+    ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
+    ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
+    // Полоски на границах TP/SL — строго в пределах ширины заливки
+    ctx.setLineDash([]);ctx.lineWidth=0.8;
+    ctx.strokeStyle=isLong?'rgba(58,125,82,0.45)':'rgba(160,48,48,0.45)';
+    ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
+    ctx.strokeStyle=isLong?'rgba(160,48,48,0.45)':'rgba(58,125,82,0.45)';
+    ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
+    ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    // TP/SL dashed lines and labels ONLY for active open trade
+    if(activeSig===s){{
+      ctx.setLineDash([4,3]);
+      ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
+      ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
+      ctx.setLineDash([]);
+      const tpY=py(s.tp),slY=py(s.sl);
+      ctx.font='bold 9px system-ui';ctx.textAlign='left';
+      ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
+      ctx.fillStyle='rgba(140,120,100,0.75)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
+      ctx.font='10px system-ui';
+    }}
+  }}
+  // Current price label — always visible
+  const lastC=vis[vis.length-1];
+  if(lastC){{
+    const curPrice=lastC.c,curY=py(curPrice),isUp=lastC.c>=lastC.o;
+    const cpCol=isUp?'#3a7d52':'#a03030';
+    ctx.setLineDash([2,3]);ctx.strokeStyle=cpCol+'80';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(PAD_L,curY);ctx.lineTo(W-PAD_R,curY);ctx.stroke();
     ctx.setLineDash([]);
-    ctx.strokeStyle=isLong?'#58a6ff':'#e3b341';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    ctx.fillStyle=cpCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,curY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY+3);
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
-    const col=bull?'#3fb950':'#f85149';
+    const col=bull?'#3a7d52':'#a03030';
     ctx.globalAlpha=isLive?0.55:1.0;
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,cw*0.1);
     if(isLive) ctx.setLineDash([3,2]);
@@ -1033,32 +1128,45 @@ function render(){{
   }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
-    const x=cx(vi),isLong=s.dir===1,arrowPad=Math.max(5,cw*0.6);
+    const x=cx(vi),isLong=s.dir===1;
+    const c_sig=vis[vi];
+    const arrowSz=Math.max(5,Math.min(7,cw*0.45));
+    const arrowOff=Math.max(18,cw*2.2);
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
-    ctx.fillStyle=isLong?'#58a6ff':'#e3b341';
-    ctx.strokeStyle=isOpenEnd?'#555':s.win===null?'#aaa':isWin?'#3fb950':'#f85149';
+    ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
+    ctx.strokeStyle=isOpenEnd?'#b0a090':s.win===null?'#b0a090':isWin?'#3a7d52':'#a03030';
     ctx.lineWidth=1.5;ctx.beginPath();
-    if(isLong){{const ay=py(s.ep)+arrowPad;ctx.moveTo(x,ay-arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
-    else{{const ay=py(s.ep)-arrowPad;ctx.moveTo(x,ay+arrowPad);ctx.lineTo(x-5,ay);ctx.lineTo(x+5,ay);}}
+    if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
+    else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
     if(!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
       const lbl=(pct>=0?'+':'')+pct.toFixed(2)+'%';
       const vi_exit=s.exit_bar-viewStart,x_exit=(vi_exit>=0&&vi_exit<vis.length)?cx(vi_exit):x;
-      const lx=(x+x_exit)/2,ly=isLong?py(s.ep)+arrowPad+14:py(s.ep)-arrowPad-5;
+      const lx=(x+x_exit)/2;
+      const ly=isLong?py(c_sig.l)+arrowOff+arrowSz+16:py(c_sig.h)-arrowOff-arrowSz-16;
       ctx.font=`bold ${{Math.max(9,Math.min(12,cw*1.5))}}px system-ui`;ctx.textAlign='center';
       const tw=ctx.measureText(lbl).width;
-      ctx.fillStyle=pct>=0?'rgba(20,50,20,0.85)':'rgba(60,15,15,0.85)';
+      ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
       ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
-      ctx.fillStyle=pct>=0?'#3fb950':'#f85149';ctx.fillText(lbl,lx,ly);
+      ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
-  ctx.fillStyle='#8b949e';ctx.font='10px system-ui';ctx.textAlign='center';
+  ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
   const step=Math.max(1,Math.floor(vis.length/8));
+  const isMobile=W<500;
+  const mskOffset=3*3600*1000;
   for(let i=0;i<vis.length;i+=step){{
-    const t=new Date(vis[i].t*1000);
-    ctx.fillText((t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours().toString().padStart(2,'0')+':00',cx(i),H-PAD_B+14);
+    const t=new Date(vis[i].t*1000+mskOffset);
+    let lbl;
+    if(isMobile){{
+      // On mobile: just HH:MM to avoid overlap
+      lbl=t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
+    }}else{{
+      lbl=(t.getUTCMonth()+1)+'/'+t.getUTCDate()+' '+t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
+    }}
+    ctx.fillText(lbl,cx(i),H-PAD_B+16);
   }}
 }}
 wrap.addEventListener('wheel',e=>{{e.preventDefault();const delta=e.deltaY>0?1.18:0.84,ratio=(e.offsetX-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
@@ -1140,20 +1248,51 @@ render();
 </script></body></html>"""
 
 def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
-    downloads_dir = os.path.expanduser("~/downloads")
-    os.makedirs(downloads_dir, exist_ok=True)
-    fpath = os.path.join(downloads_dir, f"wickfill_live_{symbol.replace('_','').lower()}_{tf}.html")
-    html = _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui)
-    try:
-        with open(fpath, "w", encoding="utf-8") as f:
-            f.write(html)
-        return fpath
-    except Exception as e:
-        print(f"[chart] err: {e}"); return None
+    # Локальное сохранение файла отключено — график доступен через /chart
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 # CHECK SIGNAL ON LAST CANDLE & SEND EMAIL
 # ═══════════════════════════════════════════════════════════════
+def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
+    """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
+    if not alert_cfg or not prev_signals or not new_signals:
+        return
+    # Карта открытых позиций из предыдущего прогона (exit_bar == None или open_end)
+    prev_open = {s["bar_i"]: s for s in prev_signals
+                 if s.get("exit_bar") is None or s.get("open_end")}
+    if not prev_open:
+        return
+    moscow_offset = 3 * 3600
+    for s in new_signals:
+        bar_i = s["bar_i"]
+        if bar_i not in prev_open:
+            continue
+        # Была открытой — теперь закрыта?
+        if s.get("exit_bar") is not None and not s.get("open_end"):
+            is_win   = s.get("win", False)
+            exit_p   = s.get("exit_p") or (s["tp"] if is_win else s["sl"])
+            is_long  = s["dir"] == 1
+            pct      = ((exit_p - s["ep"]) / s["ep"] * 100 if is_long
+                        else (s["ep"] - exit_p) / s["ep"] * 100)
+            dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
+            res_str  = "✅ Тейк-профит" if is_win else "❌ Стоп-лосс"
+            pct_str  = ("+" if pct >= 0 else "") + f"{pct:.2f}%"
+            # Берём время закрытия свечи входа (t свечи + интервал таймфрейма), а не time.time()
+            exit_candle_t = s.get("t", int(time.time())) + TF_SECONDS.get(tf, 3600)
+            dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(exit_candle_t + moscow_offset))
+            text = (
+                f"🔔 <b>WickFill — Сделка закрыта</b>\n\n"
+                f"{dir_str} <b>{symbol}</b> {tf}\n"
+                f"{res_str}  <b>{pct_str}</b>\n\n"
+                f"📥 Вход:   <b>{s['ep']:.6g}</b>\n"
+                f"📤 Выход:  <b>{exit_p:.6g}</b>\n"
+                f"🕐 {dt} (МСК)"
+            )
+            ok = _send_telegram(alert_cfg, text)
+            status = "✓" if ok else "✕"
+            print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
+
 def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
     """Проверяет последнюю свечу. Если сигнал — шлёт email."""
     if not best_params or not alert_cfg: return
@@ -1188,7 +1327,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
                     alert_state["signals"].insert(0, {
                         "symbol": symbol, "tf": tf, "dir": direction,
                         "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
-                        "ts": time.strftime("%H:%M:%S", time.localtime(candle_t))
+                        "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
                     })
                     alert_state["signals"] = alert_state["signals"][:50]
                 print(f"[alert] Сигнал отправлен: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g}")
@@ -1273,7 +1412,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             print("[sw] Не удалось загрузить новую свечу"); continue
 
         with opt_lock:
-            candles = _sw_candles
+            candles = list(_sw_candles)  # копия под блокировкой — защита от race condition
             best_p  = dict(_sw_params) if _sw_params else None
 
         if not candles:
@@ -1297,6 +1436,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
 
             with opt_lock:
+                prev_signals_for_close = list(opt_state.get("chart_signals") or [])
                 _sw_candles = new_candles
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
@@ -1304,9 +1444,15 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 opt_state["sw_candle_count"] = len(new_candles)
                 br = opt_state.get("best") or {}
 
+            # Уведомление о закрытии сделки
+            if alert_cfg and prev_signals_for_close:
+                _check_trade_close(prev_signals_for_close, chart_signals, alert_cfg, symbol, tf)
+
             chart_path = _save_chart(chart_candles_fmt, chart_signals, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            if chart_path:
-                with opt_lock: opt_state["chart_path"] = chart_path; opt_state["chart_updated_at"] = int(time.time())
+            with opt_lock:
+                if chart_path:
+                    opt_state["chart_path"] = chart_path
+                opt_state["chart_updated_at"] = int(time.time())
 
             print(f"[sw] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g} | всего={len(new_candles)}")
 
@@ -1325,93 +1471,380 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
 # OPTIMIZER MAIN LOOP
 # ═══════════════════════════════════════════════════════════════
 _opt_stop_flag = threading.Event()
+_opt_thread = None
+_last_fetch_error = None
 
-def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=20,
-                   prev_best_params=None, prev_top20=None):
-    """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20).
-    prev_best_params/prev_top20 — передаются в бесконечном режиме для продолжения улучшения."""
+# ═══════════════════════════════════════════════════════════════
+# PERF LOG — замеры для диагностики торможения
+# ═══════════════════════════════════════════════════════════════
+_perf_log = []          # список dict-записей
+_perf_lock = threading.Lock()
+_perf_t0   = 0.0       # время старта сессии
+
+def _plog(event, **kw):
+    """Добавить запись в perf-лог. Потокобезопасно."""
+    entry = {"t": round(time.time() - _perf_t0, 3), "ev": event}
+    entry.update(kw)
+    with _perf_lock:
+        _perf_log.append(entry)
+
+def _perf_save(symbol, tf):
+    """Сохранить perf-лог в файл рядом с конфигами."""
+    with _perf_lock:
+        data = list(_perf_log)
+    if not data:
+        return
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    sym = symbol.replace("_","").replace("/","").lower()
+    fname = f"wickfill_perf_{sym}_{tf}.txt"
+    lines = [f"WickFill perf-log  symbol={symbol}  tf={tf}  saved={time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+             f"{'время':>8}  {'событие':<28}  детали\n",
+             "-"*80 + "\n"]
+    prev_t = 0.0
+    for e in data:
+        t = e["t"]; dt = t - prev_t; prev_t = t
+        ev = e["ev"]
+        details = "  ".join(f"{k}={v}" for k,v in e.items() if k not in ("t","ev"))
+        flag = ""
+        # Помечаем записи где прошло много времени
+        if dt > 5:   flag = f"  ⚠ +{dt:.1f}s"
+        if dt > 30:  flag = f"  🔴 +{dt:.1f}s ЗАТЫК"
+        lines.append(f"{t:>8.1f}s  {ev:<28}  {details}{flag}\n")
+    txt = "".join(lines)
+    saved = False
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        try:
+            fpath = os.path.join(d, fname)
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(txt)
+            print(f"[perf] Сохранён: {fpath}", flush=True)
+            saved = True
+            break
+        except Exception as e:
+            print(f"[perf] Ошибка записи {d}: {e}", flush=True)
+    if not saved:
+        print(f"[perf] Не удалось сохранить лог\n{txt[:2000]}", flush=True)
+
+def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
+                   prev_best_params=None, prev_top20=None, pool=None, n_workers=1):
+    """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
-    n_workers = max(1, os.cpu_count() or 1)
-    olog(f"   ProcessPool: {n_workers} воркеров")
+    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.2%
+    _small_tf = TF_SECONDS.get(tf, 3600) < 3600
+    _grids_local = dict(_GRIDS)
+    if _small_tf:
+        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
 
-    _pool = ProcessPoolExecutor(max_workers=n_workers, initializer=_worker_init,
-                                 initargs=(candles, days, risk_pct))
     def pmap(candidates):
-        return list(_pool.map(_worker_evaluate, candidates))
+        if not candidates:
+            return []
+        chunk = max(1, len(candidates) // (n_workers * 2))
+        _pt0 = time.time()
+        result = list(pool.map(_worker_evaluate, candidates, chunksize=chunk))
+        _dt = round(time.time() - _pt0, 3)
+        _plog("pmap", n=len(candidates), workers=n_workers, sec=_dt,
+              sec_per_cand=round(_dt/len(candidates),4) if candidates else 0)
+        return result
 
     def stop_flag():
         return _opt_stop_flag.is_set()
 
-    top20_global = list(prev_top20) if prev_top20 else []
+    def _rand_ind():
+        ind = {}
+        for k, spec in PARAM_SPACE.items():
+            if spec["type"] in ("bool", "cat"): ind[k] = random.choice(spec["values"])
+            else: ind[k] = random.choice(_grids_local[k])
+        return ind
 
+    def _clamp_tp(ind):
+        if _small_tf and ind and ind.get("tp_pct", 0) > 1.2:
+            ind = dict(ind); ind["tp_pct"] = 1.2
+        return ind
+
+    def _clamp_result(r):
+        """Обрезает tp_pct в result-объекте (params + пересчёт не нужен — просто обрезаем сетку)."""
+        if not _small_tf or not r: return r
+        if r.get("params", {}).get("tp_pct", 0) <= 1.2: return r
+        r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.2
+        return r2
+
+    top20_global = [_clamp_result(r) for r in prev_top20] if prev_top20 else []
+
+    # «Пол» — загруженный seed: никогда не показываем результат хуже него в UI
+    _seed_floor = top20_global[0] if top20_global else None
+    _seed_floor_fit = (_seed_floor.get("validated_fitness") or _seed_floor["fitness"]) if _seed_floor else -1e18
+
+    # Фаза 1: многоточечный старт
     if prev_best_params:
-        n_random = max(1, n_restarts - 1)
-        start_points = [prev_best_params] + [_random_individual() for _ in range(n_random - 1)]
-        olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_random-1} случайных ━", "ok")
+        start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
+        olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
     else:
-        start_points = [_default_individual()] + [_random_individual() for _ in range(n_restarts-1)]
+        start_points = [_default_individual()] + [_rand_ind() for _ in range(n_restarts - 1)]
         olog(f"━━ ФАЗА 1: {n_restarts} стартов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    local_bests  = []
 
+    local_bests = []
     for i, start_ind in enumerate(start_points):
         if stop_flag(): break
-        if i == 0 and prev_best_params:
-            label = "Старт #1 (лучший предыдущего цикла)"
-        else:
-            label = f"Старт #{i+1}" + (" (середина)" if (i==0 and not prev_best_params) else " (случайный)")
+        label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
         olog(f"── {label} ──", "ok")
         with opt_lock: opt_state["generation"]=i+1
+        _plog("phase1_start", start=i+1, label=label)
+        _st0 = time.time()
         result, cur, top20_global = _coordinate_descent_from(
-            start_ind, candles, days, pmap, olog, t0, top20_global, label, max_passes=5, stop_flag=stop_flag)
+            start_ind, pmap, olog, t0, top20_global, label, max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        _plog("phase1_done", start=i+1, sec=round(time.time()-_st0,1),
+              equity=round(result["equity"],2), wr=round(result["winrate"],1))
         local_bests.append((result["fitness"], result, cur))
-        olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%","found" if result["equity"]>100 else "info")
+        olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
+             "found" if result["equity"]>100 else "info")
         with opt_lock:
-            # Всегда берём лучший из top20 — он же отображается в таблице
+            # Показываем лучшее из top20, но не хуже seed-флора
             best_so_far = top20_global[0] if top20_global else result
+            best_so_far_fit = best_so_far.get("validated_fitness") or best_so_far["fitness"]
+            if _seed_floor and best_so_far_fit < _seed_floor_fit:
+                best_so_far = _seed_floor
             opt_state["best"] = best_so_far
             opt_state["top20"] = top20_global
             opt_state["elapsed"] = round(time.time()-t0, 1)
             _sw_params = dict(best_so_far["params"])
 
-    if stop_flag(): _pool.shutdown(wait=False); return None, None, top20_global
+    if stop_flag(): return None, None, top20_global
 
     local_bests.sort(key=lambda x: -x[0])
     best_f, best_r1, best_p1 = local_bests[0]
 
-    olog(f"", "info")
-    olog(f"━━ ФАЗА 2: Финальный глубокий спуск ━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    final_result, final_params, top20_global = _coordinate_descent_from(
-        best_p1, candles, days, pmap, olog, t0, top20_global, "Финал", max_passes=20, stop_flag=stop_flag)
-
-    if stop_flag(): _pool.shutdown(wait=False); return final_result, final_params, top20_global
-
-    olog(f"━━ ФАЗА 3: Basin Hopping ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
-    bh_current=dict(final_params); bh_best=final_result
-    for bh_i in range(12):
+    # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
+    olog(f"━━ ФАЗА 2: Basin Hopping (12 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
+    bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
+    try:
+      for bh_i in range(12):
         if stop_flag(): break
         perturbed=dict(bh_current)
         for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
-            spec=PARAM_SPACE[k]; grid=_GRIDS[k]
+            spec=PARAM_SPACE[k]; grid=_grids_local[k]
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        olog(f"  BH {bh_i+1}/12...", "info")
-        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/12"
-        bh_r, bh_p, top20_global=_coordinate_descent_from(
-            perturbed, candles, days, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
-        if bh_r["fitness"]>bh_best["fitness"]:
+        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
+        _plog("bh_start", bh=bh_i+1)
+        _bht0 = time.time()
+        bh_r, bh_p, top20_global = _coordinate_descent_from(
+            perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        _plog("bh_done", bh=bh_i+1, sec=round(time.time()-_bht0,1),
+              equity=round(bh_r["equity"],2), improved=bh_r["fitness"]>bh_best["fitness"])
+        if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
-            with opt_lock: opt_state["best"]=final_result; _sw_params=dict(final_params)
+            with opt_lock:
+                show_best = final_result
+                show_fit = show_best.get("validated_fitness") or show_best["fitness"]
+                if _seed_floor and show_fit < _seed_floor_fit:
+                    show_best = _seed_floor
+                opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
 
-    if top20_global and top20_global[0]["fitness"]>final_result["fitness"]:
-        final_result=top20_global[0]
-        final_params=dict(final_result["params"])  # синхронизируем params с результатом
-    _pool.shutdown(wait=False)
+    finally:
+        pass  # пул управляется снаружи (run_optimizer), не закрываем здесь
+
+    if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
+        final_result = top20_global[0]
+        final_params = dict(final_result["params"])
+    # Гарантируем ограничение TP для малых TF в итоговом результате
+    final_result = _clamp_result(final_result)
+    final_params = dict(final_result["params"])
+
+    # --- Валидация стабильности финального результата цикла ---
+    # Прогоняем по 3 окнам (старая треть / средняя / свежая треть)
+    # Штрафуем validated_fitness если окна сильно расходятся с трейном
+    train_wr_cycle = final_result.get("winrate", 0)
+    now_ts_cycle = time.time()
+    def _quick_window(d_from, d_to):
+        cutoff_f = now_ts_cycle - d_from * 86400
+        cutoff_t = now_ts_cycle - d_to * 86400
+        sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
+        if len(sl) < 8: return None
+        return _simulate(sl, final_params, 0, risk_pct=risk_pct)
+    window_size_c = days / 3.0
+    ok_windows = 0; total_windows = 0
+    for wi in range(3):
+        wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
+        if wres and wres["trades"] >= 5:
+            total_windows += 1
+            if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.65:
+                ok_windows += 1
+    stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
+    # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
+    stability_multiplier = 0.5 + 0.5 * stability_ratio
+    final_result["stability_ratio"] = round(stability_ratio, 2)
+    final_result["validated_fitness"] = round(final_result["fitness"] * stability_multiplier, 4)
+    olog(f"  📐 Стабильность: {ok_windows}/{total_windows} окон ({'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}) → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 else "warn")
+
+    # Обновляем validated_fitness для всего top20
+    for r in top20_global:
+        if "validated_fitness" not in r:
+            r["stability_ratio"] = 1.0
+            r["validated_fitness"] = r["fitness"]
+
     return final_result, final_params, top20_global
+
+# ═══════════════════════════════════════════════════════════════
+# AUTO SAVE / LOAD CONFIG
+# ═══════════════════════════════════════════════════════════════
+def _script_dir():
+    """Безопасно возвращает папку скрипта — без краша если __file__ == '<stdin>'."""
+    try:
+        p = os.path.abspath(__file__)
+        d = os.path.dirname(p)
+        return d if d else os.getcwd()
+    except Exception:
+        return os.getcwd()
+
+_AUTO_DIRS = [
+    "/sdcard/Download",
+    _script_dir(),
+]
+
+def _clamp_tp_result(r, tf):
+    """Обрезает tp_pct > 1.2 для TF < 1h в result-объекте (модульный уровень)."""
+    if not r or TF_SECONDS.get(tf, 3600) >= 3600: return r
+    if r.get("params", {}).get("tp_pct", 0) <= 1.2: return r
+    r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.2
+    return r2
+
+def _clamp_tp_params(p, tf):
+    """Обрезает tp_pct > 1.2 для TF < 1h в dict params."""
+    if not p or TF_SECONDS.get(tf, 3600) >= 3600: return p
+    if p.get("tp_pct", 0) <= 1.2: return p
+    p2 = dict(p); p2["tp_pct"] = 1.2
+    return p2
+
+def _config_key(symbol, tf, days, risk_pct):
+    """Уникальный ключ набора параметров для имени файла."""
+    sym = symbol.replace("_","").replace("/","").lower()
+    return f"{sym}_{tf}_{days}d_r{int(round(risk_pct))}"
+
+def _config_filename(symbol, tf, days, risk_pct, equity):
+    """wickfill_btcusdt_15m_3d_$234_r20.json"""
+    sym = symbol.replace("_","").replace("/","").lower()
+    eq  = int(round(equity))
+    r   = int(round(risk_pct))
+    return f"wickfill_{sym}_{tf}_{days}d_${eq}_r{r}.json"
+
+def _find_auto_config(symbol, tf, days, risk_pct):
+    """Ищет лучший конфиг в Downloads по (symbol,tf,days,risk). Возвращает (path, data) или (None,None)."""
+    import glob as _glob
+    days = int(days)
+    sym = symbol.replace("_","").replace("/","").lower()
+    r   = int(round(risk_pct))
+    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
+    best_path, best_data, best_eq = None, None, -1
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        for fpath in _glob.glob(os.path.join(d, pat)):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not (data.get("best") and data["best"].get("params")): continue
+                if int(data.get("days", days)) != days: continue
+                if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
+                eq = data["best"].get("equity", 0)
+                if eq > best_eq:
+                    best_eq = eq; best_path = fpath; best_data = data
+            except Exception:
+                pass
+    return best_path, best_data
+
+def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
+    """Сохраняет конфиг в Downloads. Атомарная замена — никаких копий с (1)."""
+    import glob as _glob, tempfile
+    sym = symbol.replace("_","").replace("/","").lower()
+    r   = int(round(risk_pct))
+    eq  = best.get("equity", 100)
+    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
+
+    def _log(msg, level="info"):
+        if olog: olog(msg, level)
+        else:
+            with opt_lock:
+                opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+                if len(opt_state["logs"]) > 500:
+                    opt_state["logs"] = opt_state["logs"][-300:]
+
+    # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
+    if not os.path.isdir("/sdcard/Download"):
+        try: os.makedirs("/sdcard/Download", exist_ok=True)
+        except Exception: pass
+
+    # Найти папку для записи (первая существующая и доступная для записи)
+    save_dir = None
+    tried = []
+    for d in _AUTO_DIRS:
+        exists = os.path.isdir(d)
+        writable = os.access(d, os.W_OK) if exists else False
+        tried.append(f"{d} ({'✓' if writable else ('нет папки' if not exists else 'нет записи')})")
+        if exists and writable:
+            save_dir = d; break
+    if not save_dir:
+        save_dir = os.path.dirname(os.path.abspath(__file__))
+        tried.append(f"{save_dir} (фолбек скрипта)")
+
+    _log(f"💾 Сохраняю в: {save_dir}", "info")
+
+    fname = _config_filename(symbol, tf, days, risk_pct, eq)
+    fpath = os.path.join(save_dir, fname)
+
+    data = {
+        "best": best, "top20": top20,
+        "symbol": symbol, "tf": tf,
+        "days": days, "risk_pct": risk_pct,
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    # Атомарная запись: пишем во временный файл рядом, потом os.replace()
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, fpath)
+    except Exception as e:
+        _log(f"⚠ Сохранение не удалось: {save_dir} → {e}", "warn")
+        _log(f"  Проверенные папки: {', '.join(tried)}", "warn")
+        print(f"[auto_save] Ошибка записи: {e}", flush=True)
+        if tmp_path:
+            try: os.remove(tmp_path)
+            except Exception: pass
+        return None
+
+    # Удалить ВСЕ старые файлы того же набора параметров (кроме только что сохранённого)
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        for old_f in _glob.glob(os.path.join(d, pat)):
+            if os.path.abspath(old_f) == os.path.abspath(fpath):
+                continue  # это наш новый файл — не трогаем
+            try:
+                os.remove(old_f)
+                print(f"[auto_save] Удалён старый: {old_f}", flush=True)
+            except Exception as e:
+                print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
+
+    # Обновляем MediaStore на Android чтобы файл появился в файловых менеджерах
+    try:
+        import subprocess
+        subprocess.Popen(["termux-media-scan", fpath],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    if olog: olog(f"💾 Сохранено: {fpath}", "found")
+    else:
+        with opt_lock:
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "found"})
+    print(f"[auto_save] Сохранён: {fpath}", flush=True)
+    return fpath
 
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
@@ -1427,6 +1860,13 @@ def run_optimizer(params):
     _opt_stop_flag.clear()
     _sw_risk = risk_pct
 
+    # Сбрасываем perf-лог для новой сессии
+    global _perf_t0, _perf_log
+    _perf_t0 = time.time()
+    with _perf_lock:
+        _perf_log = []
+    _plog("start", symbol=symbol, tf=tf, days=days, risk=risk_pct, pool=_POOL_TYPE, cpus=os.cpu_count())
+
     with opt_lock:
         # Сохраняем sw_running — не обрываем уже живой тред скользящего окна
         sw_was_running = opt_state.get("sw_running", False)
@@ -1434,11 +1874,11 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "top20": [],
+            "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
-            "chart_path": "", "chart_updated_at": 0,
+            "chart_path": "", "chart_updated_at": -1,
             "sw_last_update": 0, "sw_candle_count": 0,
             "last_signal_t": 0,
         })
@@ -1449,19 +1889,26 @@ def run_optimizer(params):
     def olog(msg, level="info"):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+            if len(opt_state["logs"]) > 500:
+                opt_state["logs"] = opt_state["logs"][-300:]
 
     t0 = time.time()
-    olog(f"🔍 WickFill Optimizer v3.0 | {'∞ БЕСКОНЕЧНЫЙ РЕЖИМ' if infinite else 'Одиночный запуск'}")
+
     olog(f"   {symbol} | {tf} | {days}д | риск {risk_pct:.0f}%")
 
     # Загрузка свечей
     olog(f"📡 Загрузка свечей...")
     candles = _fetch_candles(symbol, tf, days)
     if len(candles) < 30:
-        olog(f"❌ Мало свечей: {len(candles)}", "error")
+        reason = _last_fetch_error or "нет данных от биржи"
+        olog(f"❌ Мало свечей: {len(candles)} — {reason}", "error")
         with opt_lock: opt_state["running"]=False; opt_state["error"]=f"Мало свечей: {len(candles)}"
         return
-    olog(f"   Загружено {len(candles)} свечей", "ok")
+    # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
+    cutoff_check = time.time() - days * 86400
+    candles_in_window = [c for c in candles if c.get("t", 0) >= cutoff_check]
+    expected_per_day = round(86400 / TF_SECONDS.get(tf, 3600))
+    olog(f"   Загружено {len(candles)} свечей → в окне {days}д: {len(candles_in_window)} (≈{expected_per_day}/день × {days}д = {expected_per_day*days})", "ok")
 
     # Если задано n_candles — обрезаем окно
     if n_candles > 0 and n_candles < len(candles):
@@ -1471,15 +1918,85 @@ def run_optimizer(params):
     _sw_candles = list(candles)
     n_sw = len(candles)   # сохраняем размер окна
 
+    # Запускаем прогрев пула ПАРАЛЛЕЛЬНО с остальной подготовкой (критично для Windows spawn)
+    _n_workers = max(1, os.cpu_count() or 1)
+    _plog("pool_create", workers=_n_workers, pool_type=_POOL_TYPE, n_candles=len(candles))
+    olog(f"⚙ Запуск {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'} ({_n_workers} {'потоков' if _POOL_TYPE=='thread' else 'процессов'})...", "info")
+    _pool_ready = threading.Event()
+    _shared_pool_holder = [None]
+
+    def _create_pool():
+        _shared_pool_holder[0] = PoolExecutor(
+            max_workers=_n_workers,
+            initializer=_worker_init,
+            initargs=(candles, 0, risk_pct)
+        )
+        _pool_ready.set()
+
+    threading.Thread(target=_create_pool, daemon=True).start()
+
     cycle = 0
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
+    _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
+
+    # Авто-загрузка конфига из Downloads (если нет ручного seed)
+    if not seed:
+        existing_dirs = [d for d in _AUTO_DIRS if os.path.isdir(d)]
+        import glob as _glob2
+        sym2 = symbol.replace("_","").replace("/","").lower()
+        r2   = int(round(risk_pct))
+        search_pat = f"wickfill_{sym2}_{tf}_{days}d_$*_r{r2}.json"
+        olog(f"🗂 Ищу: {search_pat}", "info")
+        for d in existing_dirs:
+            all_wf = _glob2.glob(os.path.join(d, "wickfill_*.json"))
+            if all_wf:
+                olog(f"   📁 {d}: {[os.path.basename(f) for f in all_wf]}", "info")
+        auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
+        if auto_data:
+            seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
+            _last_autosave_vfit = auto_data["best"].get("validated_fitness", auto_data["best"].get("fitness", 0))
+            olog(f"🔍 Авто-загрузка: {auto_path}", "ok")
+            olog(f"   ${auto_data['best'].get('equity',0):.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
+        else:
+            olog(f"📭 Конфиг не найден — начинаю с нуля", "info")
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
-        prev_best_params = dict(seed["best"]["params"])
-        prev_top20       = list(seed.get("top20") or [])
+        prev_best_params = _clamp_tp_params(dict(seed["best"]["params"]), tf)
+        prev_top20       = [_clamp_tp_result(r, tf) for r in (seed.get("top20") or [])]
         olog(f"📂 Загружен seed: ${seed['best'].get('equity',0):.2f} WR {seed['best'].get('winrate',0):.1f}% | top20: {len(prev_top20)} записей", "ok")
+        # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
+        try:
+            olog(f"📊 Строю предварительный график из конфига...", "info")
+            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct)
+            if sim_pre:
+                sigs_pre = sim_pre["_signals"] or []
+                cc_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in candles]
+                cur_pre = _fetch_current_candle(symbol, tf)
+                if cur_pre and cur_pre["t"] > candles[-1]["t"]:
+                    cc_fmt = cc_fmt + [{"t":cur_pre["t"],"o":cur_pre["open"],"h":cur_pre["high"],"l":cur_pre["low"],"c":cur_pre["close"],"live":True}]
+                pre_best = seed["best"]
+                cp = _save_chart(cc_fmt, sigs_pre, pre_best, symbol, tf, risk_pct)
+                with opt_lock:
+                    opt_state["chart_candles"]    = cc_fmt
+                    opt_state["chart_signals"]    = sigs_pre
+                    opt_state["chart_path"]       = cp or ""
+                    opt_state["chart_updated_at"] = int(time.time())
+                    opt_state["best"]             = pre_best
+                    opt_state["top20"]            = prev_top20
+                    _sw_params = dict(prev_best_params)  # алерты сразу на базе seed
+                olog(f"✅ График готов: {len(sigs_pre)} сигналов", "ok")
+        except Exception as e:
+            olog(f"⚠ Предварительный график не удался: {e}", "warn")
+
+    # Ждём готовности пула (он создавался параллельно с подготовкой)
+    if not _pool_ready.wait(timeout=120):
+        olog("❌ Пул воркеров не запустился за 120с", "error")
+        with opt_lock: opt_state["running"]=False; opt_state["error"]="Pool timeout"
+        return
+    _shared_pool = _shared_pool_holder[0]
+    _plog("pool_ready", sec=round(time.time()-t0, 1), workers=_n_workers)
 
     while True:
         if _opt_stop_flag.is_set(): break
@@ -1488,6 +2005,8 @@ def run_optimizer(params):
         if infinite:
             olog(f"", "info")
             if cycle == 1:
+                _nw = max(1, os.cpu_count() or 1)
+                olog(f"⚙ {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'}: {_nw} {'потоков' if _POOL_TYPE=='thread' else 'процессов'}", "found")
                 olog(f"═══ ЦИКЛ #{cycle} — ПЕРВЫЙ ПРОГОН ═══════════════════════════", "ok")
             else:
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
@@ -1501,47 +2020,149 @@ def run_optimizer(params):
         with opt_lock:
             current_candles = list(_sw_candles)
 
+        _plog("cycle_start", cycle=cycle, n_candles=len(current_candles))
+        cycle_t0 = time.time()
         final_result, final_params, top20 = _run_one_cycle(
-            current_candles, days, risk_pct, olog, t0,
+            current_candles, days, risk_pct, olog, t0, tf,
             prev_best_params=prev_best_params if infinite else None,
-            prev_top20=prev_top20 if infinite else None)
+            prev_top20=prev_top20 if infinite else None,
+            pool=_shared_pool, n_workers=_n_workers)
+        _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
+              stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
-        if _opt_stop_flag.is_set(): break
+        if _opt_stop_flag.is_set():
+            print(f"[DBG] while-loop: stop_flag сработал на cycle={cycle}", flush=True); break
 
+        print(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}", flush=True)
+        cycle_elapsed = round(time.time() - cycle_t0, 1)   # вычисляем сразу — используется ниже
         if final_result:
             elapsed = round(time.time()-t0, 1)
 
             # Накапливаем top20 между циклами — сначала merge, потом выбираем best
             if infinite:
-                merged = list(top20)
-                for r in prev_top20:
-                    merged = _update_top20(merged, r)
-                prev_top20 = merged
+                merged = list(top20) + list(prev_top20)
+                merged.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
+                seen_vf=set(); deduped=[]
+                for item in merged:
+                    k=round(item.get("validated_fitness") or item["fitness"], 6)
+                    if k not in seen_vf: seen_vf.add(k); deduped.append(item)
+                prev_top20 = deduped[:7]
             else:
                 prev_top20 = top20
 
-            # all_time_best берём из уже merged top20 — гарантия совпадения с таблицей
-            all_time_best = prev_top20[0] if prev_top20 else final_result
+            # all_time_best берём из top20 по validated_fitness (учитывает стабильность)
+            if prev_top20:
+                all_time_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
+            else:
+                all_time_best = _clamp_tp_result(final_result, tf)
             prev_best_params = dict(all_time_best["params"])
 
-            if infinite and all_time_best["fitness"] > final_result["fitness"]:
-                olog(f"  Цикл #{cycle}: ${final_result['equity']:.2f} — не улучшил рекорд (${all_time_best['equity']:.2f})", "info")
+            if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
+                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
             else:
-                olog(f"✅ Цикл #{cycle} готов за {elapsed}с | 🏆 ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}%", "ok" if cycle==1 else "found")
+                is_new_rec = (cycle==1) or (all_time_best.get("validated_fitness", all_time_best["fitness"]) >= final_result.get("validated_fitness", final_result["fitness"]))
+                rec_flag = "🆕" if is_new_rec else "→"
+                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "ok" if cycle==1 else "found")
 
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
                 _sw_params = all_time_params
 
-            # Обновляем chart — всегда показываем all-time best
+            # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
+            now_ts = time.time()
+            valid_days = days * 0.30
+            with opt_lock:
+                _fresh_candles = list(_sw_candles) if _sw_candles else list(current_candles)
+            train_wr = all_time_best["winrate"]
+
+            def _wf_sim(d_from, d_to=None):
+                """Прогоняет конфиг на отрезке [now - d_from*86400 .. now - (d_to or 0)*86400]."""
+                cutoff_from = now_ts - d_from * 86400
+                cutoff_to   = now_ts - (d_to or 0) * 86400
+                sl = [c for c in _fresh_candles if cutoff_from <= c.get("t", 0) < cutoff_to]
+                if len(sl) < 10: return None
+                return _simulate(sl, all_time_params, 0, risk_pct=risk_pct)
+
+            # 1) Валидация на последних 30%
+            valid_sim = _wf_sim(valid_days, 0)
+            valid_result = None
+            if valid_sim:
+                valid_result = {
+                    "equity":        round(valid_sim["equity"], 2),
+                    "winrate":       round(valid_sim["winrate"], 1),
+                    "max_dd":        round(valid_sim["max_dd"], 1),
+                    "trades":        valid_sim["trades"],
+                    "profit_factor": min(round(valid_sim.get("profit_factor", 0), 2), 999.0),
+                    "days":          round(valid_days, 1),
+                }
+                olog(
+                    f"🔍 Валидация ({valid_result['days']}д): "
+                    f"${valid_result['equity']:.2f} | "
+                    f"WR {valid_result['winrate']:.1f}% | "
+                    f"DD {valid_result['max_dd']:.1f}% | "
+                    f"Сд {valid_result['trades']}",
+                    "ok" if valid_result["winrate"] >= train_wr * 0.75 else "warn"
+                )
+
+            # 2) Скользящие окна — 5 равных отрезков по всей истории
+            window_size = days / 5.0
+            windows = []
+            for wi in range(5):
+                d_from = days - wi * window_size
+                d_to   = days - (wi + 1) * window_size
+                ws = _wf_sim(d_from, d_to)
+                if ws:
+                    windows.append({
+                        "i":      wi + 1,
+                        "winrate": round(ws["winrate"], 1),
+                        "equity":  round(ws["equity"], 2),
+                        "trades":  ws["trades"],
+                        "ok":      ws["winrate"] >= train_wr * 0.75,
+                    })
+            if windows:
+                ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
+                olog(f"📊 Окна: {ww_str}", "ok")
+
+            # 3) Минимальный стабильный период
+            min_stable_days = None
+            for pct in [0.70, 0.50, 0.33, 0.20, 0.10]:
+                test_days = days * pct
+                ts = _wf_sim(test_days, 0)
+                if ts and ts["winrate"] >= train_wr * 0.75 and ts["trades"] >= 3:
+                    min_stable_days = round(test_days, 1)
+                else:
+                    break
+            if min_stable_days is not None:
+                olog(f"📐 Мин. стабильный период: {min_stable_days}д", "ok")
+
+            with opt_lock:
+                opt_state["valid"] = valid_result
+                opt_state["windows"] = windows
+                opt_state["min_stable_days"] = min_stable_days
+
+            # Автосохранение в Downloads если результат улучшился
+            new_vfit = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
+            if new_vfit > _last_autosave_vfit:
+                saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
+                if saved:
+                    _last_autosave_vfit = new_vfit
+                else:
+                    olog(f"⚠ Авто-сохранение не удалось (проверь папку Download)", "warn")
+
+            # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             with opt_lock:
                 current_candles2 = list(_sw_candles)
-            sim = _simulate(current_candles2, all_time_params, 0, _collect=True, risk_pct=risk_pct)
+            # Обрезаем свечи по тому же days_limit что и оптимизатор
+            cutoff = time.time() - days * 86400
+            chart_candles_window = [c for c in current_candles2 if c.get("t", 0) >= cutoff]
+            if len(chart_candles_window) < 10:
+                chart_candles_window = current_candles2  # fallback
+            sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
             chart_signals = sim["_signals"] if sim else []
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in current_candles2]
+            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
-            if cur_c and cur_c["t"] > current_candles2[-1]["t"]:
+            if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
             chart_path = _save_chart(chart_candles_fmt, chart_signals, all_time_best, symbol, tf, risk_pct)
             with opt_lock:
@@ -1553,6 +2174,10 @@ def run_optimizer(params):
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
+                ct = opt_state.setdefault("cycle_times", [])
+                ct.append(cycle_elapsed)
+                if len(ct) > 20: ct.pop(0)  # храним последние 20
+                opt_state["avg_cycle_s"] = round(sum(ct) / len(ct), 1)
 
             # Запуск скользящего окна (один раз после первого цикла)
             with opt_lock:
@@ -1585,10 +2210,32 @@ def run_optimizer(params):
         if not _opt_stop_flag.is_set():
             olog(f"⟳ Запускаем следующий цикл улучшения...", "info")
 
+    _shared_pool.shutdown(wait=False)
+    _plog("optimizer_done", reason="stop_flag" if _opt_stop_flag.is_set() else "finished")
+    _perf_save(symbol, tf)
+
     with opt_lock:
         opt_state["running"] = False
         opt_state["done"]    = True
     print("[opt] Завершён")
+
+def run_optimizer_safe(params):
+    import traceback
+    try:
+        run_optimizer(params)
+    except Exception as e:
+        print(f"[opt] ИСКЛЮЧЕНИЕ: {e}\n{traceback.format_exc()}", flush=True)
+        with opt_lock:
+            opt_state["running"] = False
+            opt_state["error"] = str(e)
+        # Сохраняем perf-лог даже при краше
+        try:
+            _plog("crash", error=str(e))
+            sym = params.get("wf_symbol","unknown")
+            tf2 = params.get("wf_tf","?")
+            _perf_save(sym, tf2)
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
@@ -1597,328 +2244,824 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
-<title>WickFill Optimizer v3</title>
+<title>WickFill · Optimizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;
-  --blue:#1f6feb;--blue2:#58a6ff;--green:#238636;--green2:#3fb950;
-  --red:#f85149;--yellow:#e3b341;--muted:#8b949e;--text:#e6edf3;
-  --purple:#a78bfa;--radius:10px;--gap:8px}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;font-size:14px}
-body{display:flex;flex-direction:column;padding:8px;gap:var(--gap);overflow-x:hidden}
-.topbar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius)}
-.topbar h1{font-size:1rem;font-weight:700;flex:1}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
-.dot.ok{background:var(--green2)}.dot.err{background:var(--red)}
-.btn-icon{padding:4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:.8rem}
-.main{display:grid;grid-template-columns:360px 1fr;gap:var(--gap);flex:1;min-height:0}
-.panel{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
-.panel-title{font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em}
-.field{display:flex;flex-direction:column;gap:3px}
-.field label{font-size:.72rem;color:var(--muted)}
+:root{
+  --cream:#f7f3ee;
+  --cream2:#ede8e0;
+  --cream3:#e2dbd0;
+  --sand:#c9bfb0;
+  --sand2:#b5a896;
+  --warm:#8c7b6b;
+  --bark:#4a3f34;
+  --text:#1a1310;
+  --text2:#504438;
+  --text3:#7a6e63;
+  --glass:rgba(247,243,238,0.72);
+  --glass2:rgba(237,232,224,0.55);
+  --blur:saturate(180%) blur(20px);
+  --shadow:0 2px 20px rgba(92,79,67,0.10);
+  --shadow2:0 8px 40px rgba(92,79,67,0.14);
+  --radius:18px;
+  --radius-sm:12px;
+  --accent:#7c6a58;
+  --green:#4a7c59;
+  --green-light:#e8f2eb;
+  --red:#8b3a3a;
+  --red-light:#f5e8e8;
+  --blue:#4a6580;
+  --blue-light:#e8eef5;
+  --yellow:#8a7040;
+  --yellow-light:#f5f0e4;
+  --border:rgba(92,79,67,0.12);
+  --border2:rgba(92,79,67,0.08);
+}
+
+html,body{
+  height:100%;
+  background:var(--cream);
+  color:var(--text);
+  font-family:'DM Sans',sans-serif;
+  font-size:14px;
+  overflow:hidden;
+  overscroll-behavior:none;
+  touch-action:none;
+}
+
+/* Subtle noise texture */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events:none;z-index:0;opacity:.4;
+}
+
+body>*{position:relative;z-index:1}
+
+/* ── Layout ── */
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;gap:0;overflow:hidden}
+
+/* ── Topbar ── */
+.topbar{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 20px;
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.topbar-logo{
+  display:flex;align-items:center;gap:8px;
+  font-weight:600;font-size:.95rem;letter-spacing:-.01em;color:var(--bark);
+}
+.topbar-logo .dot-live{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--green);flex-shrink:0;
+  box-shadow:0 0 0 2px var(--green-light);
+}
+.topbar-spacer{flex:1}
+.topbar-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Pill badge */
+.pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:20px;
+  font-size:.72rem;font-weight:500;
+  border:1px solid var(--border);
+  background:var(--glass2);
+  color:var(--text2);
+  white-space:nowrap;
+}
+.pill.green{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
+.pill.blue{background:var(--blue-light);border-color:rgba(74,101,128,.2);color:var(--blue)}
+.pill.pulse{animation:softpulse 2s ease-in-out infinite}
+@keyframes softpulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* ── Icon Buttons (topbar) ── */
+.icon-btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  padding:6px 12px;border-radius:10px;
+  background:var(--glass2);
+  border:1px solid var(--border);
+  color:var(--text2);font-size:.75rem;font-weight:500;
+  cursor:pointer;transition:all .18s ease;
+  white-space:nowrap;
+}
+.icon-btn:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
+.icon-btn.danger{color:var(--red)}
+.icon-btn.danger:hover{background:var(--red-light);border-color:rgba(139,58,58,.25)}
+.icon-btn.success{color:var(--green)}
+.icon-btn.success:hover{background:var(--green-light);border-color:rgba(74,124,89,.25)}
+
+/* ── Main 2-col grid ── */
+.main{display:flex;flex:1;min-height:0;gap:0}
+
+/* ── Left sidebar ── */
+.sidebar{
+  width:320px;flex-shrink:0;
+  background:var(--glass);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  border-right:1px solid var(--border);
+  overflow-y:auto;padding:18px 16px;
+  display:flex;flex-direction:column;gap:14px;
+  touch-action:pan-y;
+}
+
+/* Card */
+.card{
+  background:var(--glass2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  padding:14px 15px;
+}
+.card-title{
+  font-size:.67rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text3);margin-bottom:11px;
+}
+
+/* Field */
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label{font-size:.72rem;color:var(--text3);font-weight:500}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-select,input[type=text],input[type=password]{padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:.85rem;width:100%}
-select:focus,input:focus{outline:none;border-color:var(--blue)}
-.slider-row{display:flex;align-items:center;gap:8px}
-.slider-row input[type=range]{flex:1;accent-color:var(--blue);height:3px}
-.slider-val{min-width:32px;text-align:right;font-size:.85rem;font-weight:600;color:var(--blue2)}
-/* Toggle switch */
-.toggle-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:8px;cursor:pointer}
-.toggle-label{font-size:.82rem;flex:1}
-.toggle-switch{width:36px;height:20px;background:#333;border-radius:10px;position:relative;transition:background .2s;flex-shrink:0}
-.toggle-switch.on{background:var(--blue)}
-.toggle-switch::after{content:'';position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:3px;left:3px;transition:left .2s}
-.toggle-switch.on::after{left:19px}
-/* Infinite badge */
-.inf-badge{padding:2px 8px;background:#0a1a3a;border:1px solid var(--blue2);border-radius:10px;font-size:.7rem;color:var(--blue2);animation:pulse 1.5s infinite}
-.sw-badge{padding:2px 8px;background:#0f2a0f;border:1px solid var(--green2);border-radius:10px;font-size:.7rem;color:var(--green2)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.btn-run{padding:11px;background:linear-gradient(135deg,var(--blue),#1a5cc7);border:none;border-radius:8px;color:#fff;font-size:.95rem;font-weight:700;cursor:pointer;width:100%;transition:opacity .2s}
-.btn-run:disabled{opacity:.4;cursor:not-allowed}
-.btn-stop{padding:8px;background:transparent;border:1px solid var(--red);border-radius:8px;color:var(--red);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.btn-sw-stop{padding:8px;background:transparent;border:1px solid var(--yellow);border-radius:8px;color:var(--yellow);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.btn-chart{padding:8px;background:linear-gradient(135deg,#1a2f1a,#0f2a0f);border:1px solid var(--green2);border-radius:8px;color:var(--green2);font-size:.85rem;cursor:pointer;width:100%;display:none}
-.prog-wrap{display:none;flex-direction:column;gap:4px}
-.prog-track{background:var(--bg3);border-radius:3px;height:5px;overflow:hidden}
-.prog-bar{height:100%;background:linear-gradient(90deg,var(--blue),var(--blue2));width:0%;border-radius:3px;transition:width .4s}
-.right{display:flex;flex-direction:column;gap:var(--gap);min-height:0}
-.logwrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
- #wfLog{flex:1;overflow-y:auto;min-height:0}
- /* ── Cycle cards strip ── */
- .cc-strip{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 8px;align-content:flex-start}
- .cc{width:110px;flex-shrink:0;border-radius:9px;padding:9px 10px;border:1px solid var(--border);background:var(--bg3);display:flex;flex-direction:column;gap:4px;position:relative;overflow:hidden}
- .cc.running{border-color:var(--blue);animation:cc-pulse 1.4s ease-in-out infinite}
- @keyframes cc-pulse{0%,100%{border-color:var(--blue)}50%{border-color:var(--blue2);box-shadow:0 0 8px rgba(88,166,255,.25)}}
- .cc.pos{border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.05)}
- .cc.neg{border-color:rgba(248,81,73,.35);background:rgba(248,81,73,.04)}
- .cc-num{font-size:.6rem;color:var(--muted);font-weight:600;letter-spacing:.05em;text-transform:uppercase}
- .cc-eq{font-size:1.05rem;font-weight:800;line-height:1;margin:1px 0}
- .cc-eq.pos{color:var(--green2)}.cc-eq.neg{color:var(--red)}.cc-eq.run{color:var(--blue2)}
- .cc-delta{font-size:.62rem;font-weight:700}
- .cc-delta.pos{color:var(--green2)}.cc-delta.neg{color:var(--red)}.cc-delta.flat{color:var(--muted)}
- .cc-meta{font-size:.58rem;color:var(--muted);line-height:1.4}
- .cc-bar{position:absolute;bottom:0;left:0;height:3px;background:var(--green2);transition:width .5s}
- .cc-bar.neg{background:var(--red)}
- /* activity line */
- .cc-activity{font-size:.67rem;color:var(--muted);font-family:'JetBrains Mono',monospace;padding:2px 0 6px;display:flex;align-items:center;gap:5px}
- .spin{animation:spin .9s linear infinite;display:inline-block}
- @keyframes spin{to{transform:rotate(360deg)}}
- .cc-status{font-size:.67rem;color:var(--muted);font-family:'JetBrains Mono',monospace;padding:2px 0}
- .cc-status.ok{color:var(--green2)}.cc-status.warn{color:var(--yellow)}.cc-status.err{color:var(--red)}
-.best-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
-.stat{background:var(--bg3);border-radius:7px;padding:7px 10px;text-align:center}
-.stat-val{font-size:1.05rem;font-weight:700;color:var(--blue2)}
-.stat-lbl{font-size:.66rem;color:var(--muted);margin-top:2px}
-.stat.good .stat-val{color:var(--green2)}.stat.bad .stat-val{color:var(--red)}
-.top20-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.top20-hdr{padding:8px 12px;font-size:.75rem;font-weight:600;color:var(--blue2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
-#top20Table{width:100%;border-collapse:collapse;font-size:.71rem}
-#top20Table th{padding:6px;color:var(--muted);border-bottom:1px solid var(--border);font-weight:500;text-align:left;white-space:nowrap}
-#top20Table td{padding:6px;border-bottom:1px solid var(--bg3)}
-#top20Table tr:last-child td{border:none}
-#top20Table tr:hover td{background:var(--bg3)}
-.div{height:1px;background:var(--border);margin:2px 0}
-.info-banner{padding:9px 12px;background:linear-gradient(135deg,#0d1f2d,#091622);border:1px solid var(--blue);border-radius:8px;font-size:.72rem;color:var(--muted);line-height:1.65}
-.info-banner b{color:var(--yellow)}
-.alert-field{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
-.alert-field label{font-size:.72rem;color:var(--muted)}
-::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.field-inset{display:flex;flex-direction:column;gap:3px}
+.field-inset label{
+  font-size:.58rem;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;
+  pointer-events:none;line-height:1;padding-left:2px;
+}
+.field-inset input,.field-inset select{
+  padding:8px 10px;font-size:.9rem;
+  border-radius:10px;
+}
+
+input[type=text],input[type=password],input[type=number],select{
+  padding:8px 11px;
+  background:rgba(247,243,238,0.9);
+  border:1px solid var(--border);
+  border-radius:10px;
+  color:var(--text);
+  font-size:.85rem;
+  font-family:'DM Sans',sans-serif;
+  width:100%;
+  transition:border-color .18s;
+  -webkit-appearance:none;appearance:none;
+}
+input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+
+/* Slider */
+.slider-wrap{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
+.slider-wrap input[type=range]{
+  flex:1;min-width:0;height:3px;accent-color:var(--bark);
+  -webkit-appearance:none;appearance:none;
+  background:linear-gradient(to right, var(--bark) 0%, var(--bark) var(--pct,50%), var(--cream3) var(--pct,50%), var(--cream3) 100%);
+  border-radius:2px;cursor:pointer;
+}
+.slider-wrap input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;
+  border-radius:50%;background:#fff;
+  border:2px solid var(--bark);
+  box-shadow:0 1px 4px rgba(92,79,67,.2);
+  transition:transform .15s;
+}
+.slider-wrap input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2)}
+.slider-val{
+  min-width:36px;text-align:right;
+  font-size:.82rem;font-weight:600;
+  color:var(--bark);font-family:'DM Mono',monospace;
+}
+
+/* Toggle */
+.toggle-wrap{
+  display:none;
+}
+.toggle-wrap:hover{background:var(--cream2)}
+.toggle-text{flex:1;font-size:.82rem;color:var(--text2)}
+.toggle-text small{display:block;font-size:.68rem;color:var(--text3);margin-top:1px}
+.toggle-sw{
+  width:38px;height:22px;border-radius:11px;
+  background:var(--cream3);border:1.5px solid var(--sand);
+  position:relative;transition:all .22s;flex-shrink:0;
+}
+.toggle-sw::after{
+  content:'';position:absolute;
+  width:14px;height:14px;border-radius:50%;
+  background:#fff;top:2px;left:2px;
+  box-shadow:0 1px 3px rgba(0,0,0,.15);
+  transition:left .22s;
+}
+.toggle-sw.on{background:var(--bark);border-color:var(--bark)}
+.toggle-sw.on::after{left:20px}
+
+/* Divider */
+.div{height:1px;background:var(--border2);margin:2px 0}
+
+/* ── Primary button ── */
+.btn-primary{
+  width:100%;padding:11px 16px;
+  background:linear-gradient(135deg,#5c4f43 0%,#7c6a58 100%);
+  border:none;border-radius:var(--radius-sm);
+  color:#f7f3ee;font-size:.9rem;font-weight:600;
+  font-family:'DM Sans',sans-serif;
+  cursor:pointer;letter-spacing:-.01em;
+  box-shadow:0 2px 12px rgba(92,79,67,.25),inset 0 1px 0 rgba(255,255,255,.12);
+  transition:all .18s ease;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+}
+.btn-primary:hover:not(:disabled){
+  background:linear-gradient(135deg,#6b5c4e 0%,#8c7a68 100%);
+  box-shadow:0 4px 20px rgba(92,79,67,.3);transform:translateY(-1px);
+}
+.btn-primary:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+/* Secondary / ghost */
+.btn-ghost{
+  width:100%;padding:9px 16px;
+  background:transparent;
+  border:1.5px solid var(--border);
+  border-radius:var(--radius-sm);
+  color:var(--text2);font-size:.85rem;font-weight:500;
+  font-family:'DM Sans',sans-serif;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  transition:all .18s;
+}
+.btn-ghost:hover{background:var(--cream2);border-color:var(--sand2);color:var(--bark)}
+.btn-ghost.red{border-color:rgba(139,58,58,.3);color:var(--red)}
+.btn-ghost.red:hover{background:var(--red-light);border-color:rgba(139,58,58,.4)}
+.btn-ghost.green2{border-color:rgba(74,124,89,.3);color:var(--green)}
+.btn-ghost.green2:hover{background:var(--green-light);border-color:rgba(74,124,89,.4)}
+
+/* Action buttons row */
+.action-row{display:flex;gap:7px}
+.action-row .btn-ghost{flex:1}
+
+/* Progress */
+.prog-wrap{display:flex;flex-direction:column;gap:5px}
+.prog-track{background:var(--cream3);border-radius:3px;height:4px;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--warm),var(--bark));border-radius:3px;width:0%;transition:width .4s ease}
+.prog-meta{display:flex;justify-content:space-between;font-size:.68rem;color:var(--text3)}
+.prog-param{font-size:.68rem;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Best stats */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.stat-cell{
+  background:rgba(247,243,238,0.9);
+  border:1px solid var(--border2);
+  border-radius:10px;padding:8px 8px;text-align:center;
+}
+.stat-v{font-size:.95rem;font-weight:700;color:var(--bark);font-family:'DM Mono',monospace;line-height:1}
+.stat-v.good{color:var(--green)}
+.stat-v.bad{color:var(--red)}
+.stat-l{font-size:.58rem;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+
+/* ── Telegram field ── */
+.tg-grid{display:flex;flex-direction:column;gap:7px}
+.tg-row{display:flex;gap:7px}
+.tg-row input{flex:1}
+.btn-tg-test{
+  padding:0 14px;
+  background:rgba(74,101,128,.1);
+  border:1px solid rgba(74,101,128,.2);
+  border-radius:10px;color:var(--blue);
+  font-size:.75rem;font-weight:500;
+  cursor:pointer;white-space:nowrap;
+  transition:all .18s;
+}
+.btn-tg-test:hover{background:var(--blue-light);border-color:rgba(74,101,128,.35)}
+
+/* ── Right panel ── */
+.right{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+
+/* Top strip: cycles cards LEFT + logs RIGHT, single row */
+.top-strip{
+  display:flex;flex-direction:row;min-height:0;
+  border-bottom:1px solid var(--border2);
+  flex-shrink:0;
+  height:auto;
+  min-height:90px;
+  max-height:130px;
+}
+.cycles-col{
+  flex-shrink:0;
+  display:flex;flex-direction:column;
+  padding:8px 14px 8px;
+  border-right:1px solid var(--border2);
+  gap:5px;min-width:0;
+  max-width:50%;
+}
+.cycles-col-header{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0;
+}
+.log-col{
+  flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;
+}
+.log-col-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 12px 4px;flex-shrink:0;
+  font-size:.65rem;color:var(--text3);font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;
+}
+
+/* Chart area — fills all remaining space */
+.chart-area{
+  flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
+  background:var(--bg);
+}
+.chart-placeholder{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:8px;
+  color:var(--text3);font-size:.78rem;
+}
+#chartFrame{
+  width:100%;height:100%;flex:1;border:none;display:none;min-height:0;
+  background:var(--bg);
+}
+
+/* Best combination table — inside log-col below log */
+#top20Wrap.in-strip{
+  border-top:1px solid var(--border2);
+  flex-shrink:0;
+}
+#top20Wrap.in-strip .table-hdr{padding:5px 12px;font-size:.62rem;}
+#top20Wrap.in-strip table{font-size:.72rem;}
+#top20Wrap.in-strip th,#top20Wrap.in-strip td{padding:4px 8px;}
+
+/* Cycles strip */
+.cycles-bar{display:none} /* legacy — replaced by cycles-col */
+.cycles-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
+.cc-strip{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;flex:1;align-items:flex-start;}
+.cc-strip::-webkit-scrollbar{height:3px}
+.cc-strip::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+
+.cc{
+  flex-shrink:0;width:96px;height:76px;
+  background:var(--glass2);
+  border:1px solid var(--border);
+  border-radius:12px;padding:7px 9px;
+  position:relative;overflow:hidden;
+  transition:all .2s;
+  display:flex;flex-direction:column;justify-content:space-between;
+}
+.cc.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
+.cc.pos{border-color:rgba(74,124,89,.3);background:rgba(232,242,235,.5)}
+.cc.neg{border-color:rgba(139,58,58,.3);background:rgba(245,232,232,.4)}
+@keyframes cc-glow{0%,100%{box-shadow:0 0 0 rgba(92,79,67,0)}50%{box-shadow:0 0 12px rgba(92,79,67,.15)}}
+.cc-n{font-size:.6rem;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.cc-eq{font-size:1.05rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1.15;color:var(--bark)}
+.cc-eq.pos{color:var(--green)}.cc-eq.neg{color:var(--red)}.cc-eq.run{color:var(--bark)}
+.cc-d{font-size:.62rem;font-weight:600;margin-top:1px}
+.cc-d.pos{color:var(--green)}.cc-d.neg{color:var(--red)}.cc-d.flat{color:var(--text3)}
+.cc-m{font-size:.6rem;color:var(--text3);margin-top:2px;line-height:1.4}
+.cc-bar{position:absolute;bottom:0;left:0;height:2.5px;background:var(--green);transition:width .5s ease;border-radius:0 2px 0 0}
+.cc-bar.neg{background:var(--red)}
+
+/* Log area */
+.log-area{flex:1;overflow-y:auto;padding:12px 18px;display:flex;flex-direction:column;gap:3px;min-height:0}
+.log-area::-webkit-scrollbar{width:4px}
+.log-area::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+
+.log-line{
+  font-size:.73rem;font-family:'DM Mono',monospace;
+  color:var(--text3);line-height:1.6;padding:1px 0;
+}
+.log-line.ok{color:var(--bark)}
+.log-line.found{color:var(--green)}
+.log-line.error{color:var(--red)}
+.log-line.warn{color:var(--yellow)}
+.log-line.info{color:var(--text3)}
+
+.activity-line{
+  font-size:.72rem;font-family:'DM Mono',monospace;
+  color:var(--text3);padding:3px 0;
+  display:flex;align-items:center;gap:6px;
+}
+.spin{animation:spin .9s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Bottom: Top-7 table ── */
+.table-panel{
+  border-top:1px solid var(--border);
+  flex-shrink:0;max-height:220px;overflow-y:auto;
+}
+.table-panel::-webkit-scrollbar{width:4px}
+.table-panel::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+.table-hdr{
+  padding:10px 18px 8px;
+  font-size:.68rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text3);background:var(--glass);
+  border-bottom:1px solid var(--border2);
+  position:sticky;top:0;z-index:2;
+  display:flex;align-items:center;justify-content:space-between;
+}
+
+table{width:100%;border-collapse:collapse;font-size:.72rem}
+thead th{
+  padding:7px 10px;text-align:left;
+  color:var(--text3);font-weight:500;
+  font-size:.67rem;
+  background:var(--cream);
+  border-bottom:1px solid var(--border2);
+  position:sticky;top:0;white-space:nowrap;
+}
+tbody td{padding:7px 10px;border-bottom:1px solid var(--border2);color:var(--text2);font-family:'DM Mono',monospace;font-size:.7rem}
+tbody tr:hover td{background:rgba(247,243,238,.7)}
+tbody tr:first-child td{color:var(--bark);font-weight:600}
+
+/* Params collapse */
+.params-toggle{
+  font-size:.7rem;color:var(--text3);cursor:pointer;
+  padding:5px 0;display:flex;align-items:center;gap:4px;
+  transition:color .15s;
+}
+.params-toggle:hover{color:var(--bark)}
+.params-box{
+  display:none;margin-top:5px;padding:9px 11px;
+  background:rgba(247,243,238,.9);border:1px solid var(--border2);
+  border-radius:10px;font-size:.68rem;font-family:'DM Mono',monospace;
+  line-height:1.9;max-height:140px;overflow-y:auto;color:var(--text2);
+}
+.params-box::-webkit-scrollbar{width:3px}
+.params-box::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
+.params-box span{color:var(--text3)}
+
+/* Alert status */
+.alert-msg{font-size:.71rem;padding:4px 0;line-height:1.5;color:var(--text3)}
+.alert-msg.ok{color:var(--green)}
+.alert-msg.err{color:var(--red)}
+
+/* ── Details (Telegram) ── */
+details summary{
+  cursor:pointer;list-style:none;
+  display:flex;align-items:center;gap:6px;
+  font-size:.75rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;
+  color:var(--text3);padding:4px 0;
+  transition:color .15s;
+}
+details summary:hover{color:var(--bark)}
+details summary::before{content:'›';font-size:1rem;transition:transform .2s}
+details[open] summary::before{transform:rotate(90deg)}
+details summary::-webkit-details-marker{display:none}
+
+/* ── Responsive mobile ── */
+@media(max-width:700px){
+  /* Шапка — скрыта */
+  .topbar{display:none}
+
+  /* Весь интерфейс — flex-колонка на весь экран */
+  .app{height:100dvh;height:100vh}
+  .main{flex-direction:column;flex:1;min-height:0}
+
+  /* ── САЙДБАР: компактный верхний блок, не скроллится ── */
+  .sidebar{
+    width:100%;border-right:none;border-bottom:1px solid var(--border);
+    padding:8px 10px;gap:6px;
+    overflow:hidden;
+    flex-shrink:0;
+  }
+
+  /* Карточка настроек — 2 поля + 2 слайдера ужаты */
+  .card{padding:8px 10px}
+  .card-title{display:none}
+  .field-row{gap:6px;margin-bottom:6px !important}
+  .field label{font-size:.65rem}
+  input[type=text],input[type=number],select{padding:6px 9px;font-size:.82rem}
+
+  /* Слайдеры — убрать лейблы, только значение */
+  .slider-wrap{gap:6px}
+  .slider-val{min-width:26px;font-size:.75rem}
+  .field .slider-wrap{margin-top:0}
+  /* Лейбл слайдеров — сжать */
+  .field>label{margin-bottom:1px;line-height:1.2}
+
+  /* Прогресс бар */
+  .prog-wrap{display:none !important}
+  .prog-meta{font-size:.65rem}
+  .prog-param{font-size:.62rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* Кнопки — чуть меньше чем стандарт, но удобные */
+  .btn-primary{padding:10px 14px;font-size:.88rem}
+  .btn-ghost{padding:8px 10px;font-size:.8rem}
+  .action-row{gap:5px}
+  /* SW кнопка — скрыть на мобилке (редко нужна) */
+  #swStopBtn{display:none !important}
+
+  /* Бесконечный тоггл — скрыт (он всегда on) */
+  #infiniteRow{display:none}
+
+  /* Топ-результат: 1 строка */
+  #bestSection{display:none !important}
+  #validSection{display:block !important}
+  #mob-best-row{display:none !important}
+
+  /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
+  .sidebar details{display:none}
+  .sidebar .div{display:none}
+
+  /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
+  .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+
+  /* Top strip — вертикально на мобилке, сам скроллится */
+  .top-strip{flex-direction:column;height:auto;max-height:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;flex-shrink:0;}
+  .cc-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .log-col{flex:1;min-height:120px;overflow:visible;}
+  .log-area{min-height:150px;overflow-y:visible;touch-action:pan-y;}
+
+  /* График — под таблицей, компактнее */
+  .chart-area{height:220px;flex:none;}
+  #chartFrame{height:220px;min-height:0;}
+
+  /* Циклы — компактная лента */
+  .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
+  .cycles-label{display:none}
+  .cc{width:82px;padding:7px 8px}
+  .cc-eq{font-size:.9rem}
+  .cc-n{font-size:.55rem}
+
+  /* Мобильные кнопки Топ / Логи */
+  #mob-top-toggle{display:flex !important;flex-shrink:0}
+
+  /* На мобиле осветляем тёмный график */
+  #chartFrame{filter:brightness(1.35) contrast(0.92);}
+
+  /* Лог */
+  .log-area{padding:4px 10px;min-height:80px;}
+
+  /* Таблица топ — обычный блок */
+  #top20Wrap{
+    display:none;
+    position:static;
+    max-height:none;
+    background:var(--cream);
+    z-index:auto;
+  }
+}
 </style></head><body>
 
-<div class="topbar">
-  <span class="dot" id="apidot"></span>
-  <h1>🧬 WickFill Optimizer <span style="font-size:.7rem;font-weight:400;color:var(--muted)">v3.0</span></h1>
-  <span id="statusBadge"></span>
-  <span style="font-size:.72rem;color:var(--muted)" id="latency">—</span>
-  <button class="btn-icon" onclick="checkApi()">⟳ API</button>
-  <button class="btn-icon" onclick="termuxUpdate()" style="background:#1a3a1a;border-color:#238636;color:#3fb950">⬆ Update</button>
-  <button class="btn-icon" onclick="renameDownload()" style="background:#1a2a3a;border-color:#1a6a9a;color:#58a6ff" title="Переименовать screener_pro (1).py → screener_pro.py">✏ Fix</button>
-  <button class="btn-icon" onclick="deleteDownload()" style="background:#2a1a1a;border-color:#8b1a1a;color:#e05a5a" title="Удалить screener_pro.py из папки Downloads">🗑</button>
-</div>
+<div class="app">
 
+<!-- ── Topbar ── -->
+<header class="topbar">
+  <div class="topbar-logo">
+    <span class="dot-live" id="apidot2"></span>
+    WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.106</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-meta">
+    <span class="pill" id="speedPill" style="display:none">⚡ —</span>
+    <span id="statusBadge2"></span>
+    <span id="swBadge"></span>
+    <button class="icon-btn" onclick="checkApi()">⟳ API</button>
+    <span class="pill" id="latencyPill">— мс</span>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
+    <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
+  </div>
+</header>
+
+<!-- ── Main ── -->
 <div class="main">
-<div class="panel">
-  <div class="panel-title">⚙️ Настройки</div>
 
-  <div class="field-row">
-    <div class="field"><label>Символ</label><input type="text" id="wf_symbol" value="BTC_USDT"></div>
-    <div class="field"><label>Таймфрейм</label>
-      <select id="wf_tf_sel">
-        <option value="5m">5m</option><option value="15m" selected>15m</option>
-        <option value="30m">30m</option><option value="1h">1h</option>
-        <option value="4h">4h</option><option value="1d">1d</option>
-      </select>
-    </div>
-  </div>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
 
-  <div class="field">
-    <label>История: <b id="wfDaysV" style="color:var(--blue2)">3</b> дней</label>
-    <div class="slider-row">
-      <input type="range" id="wf_days" min="3" max="90" value="3" step="1" oninput="syncSlider('wf_days','wfDaysV','wfDaysV2')" onchange="syncSlider('wf_days','wfDaysV','wfDaysV2')">
-      <span class="slider-val" id="wfDaysV2">3</span>
-    </div>
-  </div>
-
-  <div class="field">
-    <label>Риск на сделку: <b id="wfRiskV" style="color:var(--purple)">20</b>%</label>
-    <div class="slider-row">
-      <input type="range" id="wf_risk" min="1" max="100" value="20" step="1" oninput="syncSlider('wf_risk','wfRiskV','wfRiskV2')" onchange="syncSlider('wf_risk','wfRiskV','wfRiskV2')">
-      <span class="slider-val" id="wfRiskV2">20%</span>
-    </div>
-  </div>
-
-  <div class="div"></div>
-
-  <!-- ∞ Бесконечный режим -->
-  <div class="toggle-row" onclick="toggleInfinite()" id="infiniteRow">
-    <span class="toggle-label">∞ Бесконечный режим <span style="color:var(--muted);font-size:.68rem">(рестарт без остановки)</span></span>
-    <div class="toggle-switch on" id="infiniteSwitch"></div>
-  </div>
-
-  <div class="div"></div>
-
-  <div class="div"></div>
-
-  <!-- Progress -->
-  <div class="prog-wrap" id="progWrap">
-    <div style="display:flex;justify-content:space-between">
-      <span style="font-size:.72rem;color:var(--blue2)" id="progLabel">Запуск...</span>
-      <span style="font-size:.72rem;color:var(--muted)" id="progTime">0с</span>
-    </div>
-    <div class="prog-track"><div class="prog-bar" id="progBar"></div></div>
-    <div style="font-size:.68rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="progParam"></div>
-  </div>
-
-  <button class="btn-run" id="wfBtn" onclick="startOpt()">🔍 Запустить оптимизацию</button>
-  <button class="btn-stop" id="wfStopBtn" onclick="stopOpt()">⏹ Остановить</button>
-<button class="btn-sw-stop" id="swStopBtn" onclick="stopSW()">⏹ Остановить скользящее окно</button>
-  <button class="btn-chart" id="chartBtn" onclick="openChart()">📊 Открыть график</button>
-
-  <div class="div"></div>
-
-  <!-- Save / Load -->
-  <div style="display:flex;gap:5px">
-    <button class="btn-icon" style="flex:1;padding:7px 0;font-size:.75rem" onclick="saveResult()">💾 Сохранить результат</button>
-    <button class="btn-icon" style="flex:1;padding:7px 0;font-size:.75rem" onclick="loadResult()">📂 Загрузить результат</button>
-  </div>
-  <div id="saveLoadStatus" style="font-size:.68rem;margin-top:4px;display:none"></div>
-
-  <div class="div"></div>
-
-  <!-- Best result -->
-  <div id="bestSection" style="display:none">
-    <div class="panel-title" style="margin-bottom:6px">🏆 Лучший результат</div>
-    <div class="best-grid" id="bestGrid"></div>
-    <div id="bestParamsWrap" style="margin-top:8px;display:none">
-      <div style="font-size:.68rem;color:var(--muted);margin-bottom:4px;cursor:pointer" onclick="toggleParams()">▶ Параметры стратегии</div>
-      <div id="bestParams" style="display:none;font-size:.66rem;font-family:monospace;background:var(--bg);padding:8px;border-radius:6px;border:1px solid var(--border);line-height:1.8;max-height:160px;overflow-y:auto"></div>
-    </div>
-  </div>
-
-  <div class="div"></div>
-
-  <!-- Email alerts -->
-  <details>
-    <summary style="cursor:pointer;font-size:.78rem;font-weight:600;color:var(--blue2);text-transform:uppercase;letter-spacing:.04em;list-style:none">🔔 Алерты в Telegram</summary>
-    <div style="margin-top:10px">
-      <div class="alert-field"><label>Токен бота</label><input type="text" id="al_tg_token" placeholder="123456789:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA"></div>
-      <div class="alert-field"><label>Ваш Chat ID</label><input type="text" id="al_tg_chat" placeholder="123456789" value="181970023"></div>
-      <div style="margin-top:8px">
-        <button class="btn-run" id="testMailBtn" onclick="sendTestEmail()" style="width:100%;padding:6px 0;font-size:.75rem">📨 Отправить тестовое сообщение</button>
+    <!-- Settings card -->
+    <div class="card">
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset">
+          <label>Символ</label>
+          <input type="text" id="wf_symbol" value="BTC_USDT">
+        </div>
+        <div class="field-inset">
+          <label>Таймфрейм</label>
+          <select id="wf_tf_sel">
+            <option value="5m">5m</option>
+            <option value="15m" selected>15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
       </div>
-      <div id="alertStatusMsg" style="font-size:.7rem;color:var(--muted);margin-top:4px;line-height:1.5"></div>
-    </div>
-  </details>
-
-</div><!-- /panel -->
-
-<div class="right">
-  <div class="logwrap">
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <span class="panel-title">📋 Лог</span>
-      <div style="display:flex;gap:6px">
-        <span id="swStatus" style="font-size:.7rem;color:var(--muted)"></span>
-        <button class="btn-icon" onclick="_resetLog()">очистить</button>
+      <div class="field-row" style="margin-bottom:0">
+        <div class="field-inset">
+          <label>История (дни)</label>
+          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" style="width:100%">
+        </div>
+        <div class="field-inset">
+          <label>Риск %</label>
+          <input type="number" id="wf_risk" min="1" max="100" value="10" step="1" style="width:100%">
+        </div>
       </div>
     </div>
-    <div id="wfLog"><div class="cc-strip" id="ccStrip"></div></div>
-  </div>
-  <div class="top20-wrap" id="top20Wrap" style="display:none">
-    <div class="top20-hdr">📊 Топ-7 комбинаций <span style="color:var(--muted);font-weight:400;font-size:.7rem;margin-left:auto" id="top20Count"></span></div>
-    <div style="overflow-x:auto">
-      <table id="top20Table">
-        <thead><tr><th>#</th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th></tr></thead>
+
+    <!-- Бесконечный режим всегда включён -->
+
+    <!-- Progress (hidden by default) -->
+    <div class="prog-wrap" id="progWrap" style="display:none">
+      <div class="prog-meta">
+        <span id="progLabel" style="color:var(--bark);font-size:.72rem;font-weight:500">Запуск...</span>
+        <span id="progTime">0с</span>
+      </div>
+      <div class="prog-track"><div class="prog-fill" id="progBar"></div></div>
+      <div class="prog-param" id="progParam"></div>
+    </div>
+
+    <!-- Main action buttons -->
+    <button class="btn-primary" id="wfBtn" onclick="startOpt()">
+      <span>🔍</span> Запустить оптимизацию
+    </button>
+
+    <div class="action-row">
+      <button class="btn-ghost red" id="wfStopBtn" style="display:none" onclick="stopOpt()">
+        ⏹ Стоп
+      </button>
+      <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
+        ⏹ SW
+      </button>
+      <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="openChart()">
+        📊 График
+      </button>
+      <button class="btn-ghost" onclick="listConfigs()">
+        🗂 Конфиги
+      </button>
+    </div>
+
+    <!-- Best result (desktop) -->
+    <div id="mob-best-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 2px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
+      <span id="mob-eq" style="font-weight:700;font-family:'DM Mono',monospace;font-size:1rem;color:var(--green);padding:0 8px">—</span>
+      <span id="mob-wr" style="font-size:.78rem;color:var(--text2)">WR —</span>
+      <span id="mob-dd" style="font-size:.78rem;color:var(--text2)">DD —</span>
+      <span id="mob-tr" style="font-size:.78rem;color:var(--text3)">— сд</span>
+      <span id="mob-sl" style="font-size:.78rem;color:var(--text3)">SL —</span>
+      <span id="mob-tp" style="font-size:.78rem;color:var(--text3)">TP —</span>
+      <span style="flex:1"></span>
+    </div>
+
+
+    <!-- Best result (desktop) -->
+    <div id="bestSection" style="display:none">
+      <div class="div"></div>
+      <div class="card-title" style="margin-bottom:8px">Лучший результат</div>
+      <div class="stats-grid" id="bestGrid"></div>
+      <div id="bestParamsWrap" style="display:none;margin-top:8px">
+        <div id="bestParams" style="font-size:.75rem;color:var(--text2);line-height:1.7"></div>
+      </div>
+    </div>
+    <div id="validSection" style="display:none"></div>
+
+    <div class="div"></div>
+
+    <!-- Telegram alerts -->
+    <details>
+      <summary>🔔 Telegram алерты</summary>
+      <div style="margin-top:10px" class="tg-grid">
+        <div class="field">
+          <label>Токен бота</label>
+          <input type="text" id="al_tg_token" placeholder="123456:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA">
+        </div>
+        <div class="field">
+          <label>Chat ID</label>
+          <div class="tg-row">
+            <input type="text" id="al_tg_chat" placeholder="123456789" value="181970023">
+            <button class="btn-tg-test" id="testMailBtn" onclick="sendTestEmail()">Тест</button>
+          </div>
+        </div>
+        <div class="alert-msg" id="alertStatusMsg"></div>
+      </div>
+    </details>
+
+  </aside>
+
+  <!-- ── Right panel ── -->
+  <div class="right">
+
+    <!-- Top strip: cycles | logs -->
+    <div class="top-strip">
+
+      <!-- Cycles column -->
+      <div class="cycles-col">
+        <div class="cycles-col-header">
+          <span class="cycles-label">Циклы</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
+            <button class="icon-btn" style="font-size:.65rem;padding:3px 7px" onclick="_resetLog()">очистить</button>
+          </div>
+        </div>
+        <div class="cc-strip" id="ccStrip"></div>
+      </div>
+
+      <!-- Log column -->
+      <div class="log-col">
+        <div class="log-col-header">Логи</div>
+        <div class="log-area" id="wfLog" style="flex:1;padding:4px 12px 6px;"></div>
+      </div>
+
+    </div><!-- /top-strip -->
+
+    <!-- Best combination table (below top-strip) -->
+    <div class="table-panel in-strip" id="top20Wrap" style="display:none">
+      <div class="table-hdr">Лучшая комбинация</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Депозит</th><th>WR%</th>
+            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th><th title="Риск / Стоп-лосс">Плечо×</th>
+          </tr>
+        </thead>
         <tbody id="top20Body"></tbody>
       </table>
     </div>
-  </div>
-</div>
-</div>
+
+    <!-- Chart — fills remaining space -->
+    <div class="chart-area">
+      <div class="chart-placeholder" id="chartPlaceholder">
+        <span style="font-size:2rem;opacity:.2">📊</span>
+        <span>График появится после первого цикла</span>
+      </div>
+      <iframe id="chartFrame" src="about:blank"></iframe>
+    </div>
+
+  </div><!-- /right -->
+</div><!-- /main -->
+</div><!-- /app -->
 
 <script>
-let polling=null, startTs=0, lastLogCount=0, chartOpened=false;
-let infiniteMode=true;
+let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=-1;
+const infiniteMode=true;
+function toggleInfinite(){} // режим всегда бесконечный
 
-function syncSlider(id,v1,v2){
-  const el=document.getElementById(id);
-  if(!el) return;
-  const v=el.value;
-  const e1=document.getElementById(v1); if(e1) e1.textContent=v;
-  const e2=document.getElementById(v2); if(e2) e2.textContent=(id==='wf_risk'?v+'%':v);
-}
-
-function toggleInfinite(){
-  infiniteMode=!infiniteMode;
-  document.getElementById('infiniteSwitch').classList.toggle('on',infiniteMode);
-}
-
+/* ── API check ── */
 function checkApi(){
-  if(document.hidden)return;
-  const dot=document.getElementById('apidot'),lat=document.getElementById('latency');
-  dot.className='dot';lat.textContent='...';
+  const pill=document.getElementById('latencyPill');
+  pill.textContent='...';pill.className='pill';
   fetch('/ping').then(r=>r.json()).then(d=>{
-    if(d.ok){dot.className='dot ok';lat.textContent=d.ms+'мс';}
-    else{dot.className='dot err';lat.textContent=d.error||'ошибка';}
-  }).catch(()=>{dot.className='dot err';lat.textContent='нет связи';});
+    if(d.ok){pill.textContent=d.ms+'мс';pill.className='pill green';}
+    else{pill.textContent=d.error||'err';pill.className='pill';}
+  }).catch(()=>{pill.textContent='офлайн';pill.className='pill';});
 }
 checkApi();setInterval(checkApi,60000);
 
-
-// SMTP removed, using Telegram alerts
+// Авто-загрузка конфига при вводе поля "История (дни)"
+function _tryAutoLoad(){
+  const days=parseInt(document.getElementById('wf_days').value);
+  if(!days||days<1) return;
+  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const tf=document.getElementById('wf_tf_sel').value;
+  const risk=parseFloat(document.getElementById('wf_risk').value)||10;
+  fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok) return; // нет конфига — тихо игнорируем
+      window._loadedSeed={best:d.best,top20:d.top20||[]};
+      if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
+      if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
+      if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
+      if(d.best) renderBest(d.best,d.top20||[]);
+      _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+      // Показываем конфиг только если оптимизатор не работает
+      if(!polling){ _loadChartFrame(); document.getElementById('chartBtn').style.display='flex'; }
+    }).catch(()=>{});
+}
+window.addEventListener('DOMContentLoaded', function(){
+  const daysEl=document.getElementById('wf_days');
+  daysEl.addEventListener('blur', _tryAutoLoad);
+  daysEl.addEventListener('keydown', function(e){ if(e.key==='Enter') _tryAutoLoad(); });
+});
 
 function getAlertCfg(){
-  const token=document.getElementById('al_tg_token').value.trim();
-  const chat=document.getElementById('al_tg_chat').value.trim();
-  if(!token||!chat) return null;
-  return {tg_token:token,tg_chat_id:chat};
+  const t=document.getElementById('al_tg_token').value.trim();
+  const c=document.getElementById('al_tg_chat').value.trim();
+  return (t&&c)?{tg_token:t,tg_chat_id:c}:null;
 }
 
 function sendTestEmail(){
   const cfg=getAlertCfg();
-  const statusEl=document.getElementById('alertStatusMsg');
+  const st=document.getElementById('alertStatusMsg');
   const btn=document.getElementById('testMailBtn');
-  if(!cfg){
-    statusEl.style.color='var(--red)';
-    statusEl.textContent='⚠️ Заполните токен бота и Chat ID';
-    return;
-  }
-  btn.disabled=true; btn.textContent='⏳ Отправка...';
-  statusEl.style.color='var(--muted)'; statusEl.textContent='';
+  if(!cfg){st.className='alert-msg err';st.textContent='Заполните токен и Chat ID';return;}
+  btn.disabled=true;btn.textContent='...';
   fetch('/test_email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_cfg:cfg})})
     .then(r=>r.json()).then(d=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
-      if(d.ok){statusEl.style.color='#4caf50';statusEl.textContent='✅ Сообщение отправлено в Telegram!';}
-      else{statusEl.style.color='var(--red)';statusEl.textContent='❌ Ошибка: '+(d.msg||'неизвестно');}
-    }).catch(e=>{
-      btn.disabled=false; btn.textContent='📨 Отправить тестовое сообщение';
-      statusEl.style.color='var(--red)'; statusEl.textContent='❌ Ошибка сети: '+e;
-    });
+      btn.disabled=false;btn.textContent='Тест';
+      if(d.ok){st.className='alert-msg ok';st.textContent='✓ Отправлено!';}
+      else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
+    }).catch(e=>{btn.disabled=false;btn.textContent='Тест';st.className='alert-msg err';st.textContent='✕ '+e;});
 }
 
-function _slStatus(msg, ok){
-  const els=[document.getElementById('saveLoadStatus')];
-  els.forEach(el=>{if(!el)return;el.style.display='block';el.style.color=ok?'#4caf50':'var(--red)';el.textContent=msg;});
-}
-function saveResult(){
-  const best=window._lastBest; const top20=window._lastTop20;
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
-  const tf=document.getElementById('wf_tf_sel').value;
-  if(!best){_slStatus('❌ Нет результата для сохранения',false);return;}
-  // Скачиваем JSON прямо на устройство
-  const data={best,top20:top20||[],symbol:sym,tf,saved_at:new Date().toLocaleString()};
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download=`wickfill_${sym.replace('/','_')}_${tf}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  _slStatus('✅ Файл скачан на устройство',true);
-}
-function loadResult(){
-  const input=document.createElement('input');
-  input.type='file';
-  input.accept='.json';
-  input.onchange=function(e){
-    const file=e.target.files[0];
-    if(!file)return;
-    const reader=new FileReader();
-    reader.onload=function(ev){
-      try{
-        const d=JSON.parse(ev.target.result);
-        if(!d.best){_slStatus('❌ Неверный формат файла',false);return;}
-        window._loadedSeed={best:d.best,top20:d.top20};
-        if(d.best) renderBest(d.best, d.top20||[]);
-        const eq=d.best?.equity?.toFixed(2)||'?';
-        const wr=d.best?.winrate?.toFixed(1)||'?';
-        _slStatus(`✅ Загружено: $${eq} WR ${wr}% | Запустите оптимизацию — начнёт с этой точки`,true);
-      }catch(err){_slStatus('❌ Ошибка файла: '+err,false);}
-    };
-    reader.readAsText(file);
-  };
-  input.click();
-}
+/* ── Save / Load ── */
 
+/* ── Start / Stop ── */
+function _slStatus(msg,ok){ /* статус убран из UI, авто-загрузка продолжает работать */ }
 function startOpt(){
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
@@ -1927,31 +3070,35 @@ function startOpt(){
   const alertCfg=getAlertCfg();
   const seed=window._loadedSeed||null;
   const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,infinite:infiniteMode,alert_cfg:alertCfg,seed});
-  fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body}).then(r=>r.json()).then(d=>{
-    if(!d.ok){logLine('[--] '+(d.msg||'Ошибка'),'error');return;}
-    lastLogCount=0;chartOpened=false;
-    _resetLog();
-    document.getElementById('bestSection').style.display='none';
-    document.getElementById('bestGrid').innerHTML='';
-    document.getElementById('bestParamsWrap').style.display='none';
-    document.getElementById('top20Wrap').style.display='none';
-    document.getElementById('top20Body').innerHTML='';
-    document.getElementById('progBar').style.width='0%';
-    document.getElementById('progParam').textContent='';
-    document.getElementById('chartBtn').style.display='none';
-    document.getElementById('swStopBtn').style.display='none';
-    document.getElementById('wfBtn').disabled=true;
-    document.getElementById('wfStopBtn').style.display='block';
-    document.getElementById('progWrap').style.display='flex';
-    startTs=Date.now();
-    function scheduleNext(){
-      const interval=document.hidden?5000:1500;
-      polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
-    }
-    scheduleNext();
-    if(alertCfg) document.getElementById('alertStatusMsg').innerHTML='<span style="color:var(--green2)">✅ Алерты настроены: Telegram chat '+alertCfg.tg_chat_id+'</span>';
-    else document.getElementById('alertStatusMsg').textContent='Email не настроен — алерты отключены';
-  }).catch(e=>logLine('[!!] '+e,'error'));
+  fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
+      lastLogCount=0;chartOpened=false;lastChartTs=-1;
+      _resetLog();
+      document.getElementById('bestSection').style.display='none';
+      document.getElementById('top20Wrap').style.display='none';
+      document.getElementById('progBar').style.width='0%';
+      document.getElementById('progParam').textContent='';
+      document.getElementById('chartBtn').style.display='none';
+      document.getElementById('swStopBtn').style.display='none';
+      document.getElementById('wfBtn').disabled=true;
+      document.getElementById('wfStopBtn').style.display='flex';
+      document.getElementById('progWrap').style.display='flex';
+      // Скрываем старый график до появления нового
+      const _cf=document.getElementById('chartFrame');
+      const _cp=document.getElementById('chartPlaceholder');
+      if(_cf){_cf.style.display='none';_cf.src='about:blank';}
+      if(_cp){_cp.style.display='flex';}
+      startTs=Date.now();
+      function scheduleNext(){
+        const interval=document.hidden?5000:1500;
+        polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
+      }
+      scheduleNext();
+      const st=document.getElementById('alertStatusMsg');
+      if(alertCfg){st.className='alert-msg ok';st.textContent='✓ Алерты: chat '+alertCfg.tg_chat_id;}
+      else{st.className='alert-msg';st.textContent='Алерты не настроены';}
+    }).catch(e=>addLogLine('[!!] '+e,'error'));
 }
 
 function stopOpt(){
@@ -1959,277 +3106,353 @@ function stopOpt(){
   if(polling){clearTimeout(polling);polling=null;}
   document.getElementById('wfBtn').disabled=false;
   document.getElementById('wfStopBtn').style.display='none';
-  document.getElementById('swStopBtn').style.display='block';
-  logLine('⏹ Оптимизатор остановлен. Скользящее окно продолжает работать.','warn');
+  document.getElementById('swStopBtn').style.display='flex';
+  addLogLine('⏹ Остановлен','warn');
 }
 function stopSW(){
   fetch('/sw_stop').then(()=>{});
   document.getElementById('swStopBtn').style.display='none';
-  logLine('⏹ Скользящее окно остановлено','warn');
+  addLogLine('⏹ Скользящее окно остановлено','warn');
+}
+function _loadChartFrame(){
+  const frame=document.getElementById('chartFrame');
+  const ph=document.getElementById('chartPlaceholder');
+  if(!frame) return;
+  frame.src='/chart?t='+Date.now();
+  frame.style.display='block';
+  if(ph) ph.style.display='none';
+}
+function openChart(){window.open('/chart','_blank');}
+function listConfigs(){
+  fetch('/list_configs')
+    .then(r=>r.json())
+    .then(d=>{
+      if(!d.ok){addLogLine('⚠ Конфиги: '+d.msg,'warn');return;}
+      if(!d.files||!d.files.length){addLogLine('📂 Конфиги не найдены. Папки проверены: '+d.dirs.join(', '),'warn');return;}
+      addLogLine('📂 Найдено конфигов: '+d.files.length,'info');
+      d.files.forEach(f=>{
+        const size=f.size_kb?` [${f.size_kb} KB]`:'';
+        addLogLine(`  • ${f.name}${size} → ${f.dir}`,'info');
+      });
+    })
+    .catch(e=>addLogLine('⚠ Ошибка загрузки конфигов: '+e,'warn'));
 }
 
-function openChart(){window.open('/chart','_blank');}
-
+/* ── Poll ── */
 function poll(){
   fetch('/opt_status').then(r=>r.json()).then(d=>{
     const elapsed=Math.round((Date.now()-startTs)/1000);
     document.getElementById('progTime').textContent=elapsed+'с';
     const pct=d.total>0?Math.round(d.progress/d.total*100):0;
     document.getElementById('progBar').style.width=pct+'%';
-    const cycleStr=d.infinite?` | Цикл #${d.cycle}`:'';
-    document.getElementById('progLabel').textContent=`Круг #${d.pass_num} · ${d.progress}/${d.total} (${pct}%)${cycleStr}`;
+    const cycleStr=d.infinite?` · Цикл #${d.cycle}`:'';
+    document.getElementById('progLabel').textContent=`Круг #${d.pass_num} · ${pct}%${cycleStr}`;
     if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
 
-    // Статус скользящего окна
-    const swEl=document.getElementById('swStatus');
+    // SW status
+    const sw2=document.getElementById('swStatus2');
     if(d.sw_running){
       const upd=d.sw_last_update?new Date(d.sw_last_update*1000).toLocaleTimeString('ru'):'—';
-      swEl.innerHTML=`<span style="color:var(--green2)">🔄 SW: ${d.sw_candle_count} св. · ${upd}</span>`;
-    } else swEl.textContent='';
+      sw2.textContent=`SW: ${d.sw_candle_count} св · ${upd}`;
+      sw2.style.color='var(--green)';
+    } else {sw2.textContent='';sw2.style.color='';}
 
-    // Badge
-    const badge=document.getElementById('statusBadge');
-    if(d.running&&d.infinite) badge.innerHTML='<span class="inf-badge">∞ БЕСКОНЕЧНЫЙ</span>';
-    else if(d.sw_running) badge.innerHTML='<span class="sw-badge">🔄 SW активен</span>';
-    else badge.innerHTML='';
-    if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='block';
+    // Badges
+    const badge=document.getElementById('statusBadge2');
+    const swb=document.getElementById('swBadge');
+    badge.innerHTML='';
+    // Быстродействие
+    const sp=document.getElementById('speedPill');
+    if(sp){
+      if(d.avg_cycle_s!=null){
+        sp.style.display='';
+        const mins=Math.floor(d.avg_cycle_s/60);
+        const secs=Math.round(d.avg_cycle_s%60);
+        sp.textContent='⚡ '+(mins>0?mins+'м ':'')+secs+'с/цикл';
+        sp.title='Среднее время одного цикла оптимизации';
+      } else {
+        sp.style.display='none';
+      }
+    }
+    if(d.sw_running) swb.innerHTML='<span class="pill green">🔄 SW</span>';
+    else swb.innerHTML='';
+    if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='flex';
     if(!d.sw_running) document.getElementById('swStopBtn').style.display='none';
 
     const logs=d.logs||[];
-    if(logs.length>lastLogCount){for(let i=lastLogCount;i<logs.length;i++)logLine(logs[i].msg,logs[i].level);lastLogCount=logs.length;}
-
+    if(logs.length>lastLogCount){
+      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
+      lastLogCount=logs.length;
+    }
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
-    if(d.top20&&d.top20.length) renderTop20(d.top20);
-
-    // Показываем кнопку графика как только chart_path есть
-    if(d.chart_path){
-      document.getElementById('chartBtn').style.display='block';
-      if(!chartOpened&&d.chart_updated_at>0){chartOpened=true;window.open('/chart','_blank');}
+    if(d.best) renderTop20([d.best]);  // таблица всегда показывает текущий best (тот же что на графике)
+    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
+    if(d.chart_updated_at>0){
+      document.getElementById('chartBtn').style.display='flex';
+      if(d.chart_updated_at!==lastChartTs){
+        lastChartTs=d.chart_updated_at;
+        _loadChartFrame();
+      }
     }
-
-    // Alert info
-    if(d.alert_sent!==undefined){
-      const msg=document.getElementById('alertStatusMsg');
-      if(d.alert_sent>0) msg.innerHTML=`<span style="color:var(--green2)">✅ Отправлено сигналов: ${d.alert_sent}</span>`;
-    }
-
     if(d.done&&!d.running&&!d.infinite){
       clearTimeout(polling);polling=null;
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
-      document.getElementById('progLabel').textContent=`✅ Готово за ${d.elapsed}с`;
+      document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
     }
   }).catch(()=>{});
 }
 
-/* ── Cycle-cards log renderer ───────────────────────────────── */
-let _cc = {};          // cycle cards map
-let _ccCur = null;     // current running card el
-let _prevEq = null;    // last finished cycle equity (for delta)
-let _startBuf = null;  // best {eq,wr,dd} seen during current cycle's starts
+/* ── Cycle cards ── */
+let _cc={}, _ccPrevEq=null, _startBuf=null;
 
 function _resetLog(){
-  document.getElementById('wfLog').innerHTML='<div class="cc-strip" id="ccStrip"></div>';
-  lastLogCount=0;
-  _cc={}; _prevEq=null; _startBuf=null;
+  document.getElementById('ccStrip').innerHTML='';
+  document.getElementById('wfLog').innerHTML='';
+  lastLogCount=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
-function _strip(){ return document.getElementById('ccStrip'); }
 
-// ── Activity spinner (below the strip) ───────────────────────
+function addLogLine(msg,level){
+  const el=document.createElement('div');
+  el.className='log-line '+(level||'info');
+  el.textContent=msg;
+  const wfLog=document.getElementById('wfLog');
+  wfLog.insertBefore(el,wfLog.firstChild);
+}
+
 function _setActivity(text){
   let el=document.getElementById('ccActivity');
-  if(!el){ el=document.createElement('div'); el.id='ccActivity'; el.className='cc-activity'; document.getElementById('wfLog').appendChild(el); }
-  el.innerHTML=`<span class="spin">⟳</span><span>${text}</span>`;
+  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';const wl=document.getElementById('wfLog');wl.insertBefore(el,wl.firstChild);}
+  el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
+  el.scrollIntoView({block:'nearest'});
 }
-function _clearActivity(){ const el=document.getElementById('ccActivity'); if(el) el.remove(); }
+function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
-function _statusLine(text, cls){
-  _clearActivity();
-  const el=document.createElement('div'); el.className='cc-status '+(cls||'');
-  el.textContent=text; document.getElementById('wfLog').appendChild(el);
-}
-
-// ── Create or update a cycle card ────────────────────────────
-function _cycleCard(n, eq, wr, dd, elapsed, done){
-  const isPos = eq > 100;
-  const delta = (_prevEq !== null) ? (eq - _prevEq) : null;
-
-  // bar width = % gain relative to best ever seen
-  const allEqs = Object.values(_cc).map(c=>parseFloat(c.dataset.eq||'100'));
-  allEqs.push(eq);
-  const maxEq = Math.max(...allEqs);
-  const minEq = Math.min(100, Math.min(...allEqs));
-  const range = maxEq - minEq || 1;
-  const barPct = Math.min(100, Math.max(3, ((eq - minEq) / range) * 100));
-
-  let card = _cc[n];
+function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
+  const isPos=eq>100;
+  let card=_cc[n];
   if(!card){
-    card = document.createElement('div');
-    card.dataset.n = n;
-    _cc[n] = card;
-    _strip().appendChild(card);
+    card=document.createElement('div');card.dataset.n=n;
+    _cc[n]=card;const strip=document.getElementById('ccStrip');strip.insertBefore(card,strip.firstChild);
   }
-  card.dataset.eq = eq;
-  card.className = 'cc ' + (done ? (isPos?'pos':'neg') : 'running');
-
-  const dStr = delta===null ? '' : (delta>=0?'↑ +':'↓ ')+Math.abs(delta).toFixed(0)+'$';
-  const dCls = delta===null?'flat':delta>=0?'pos':'neg';
-  const eqCls = done ? (isPos?'pos':'neg') : 'run';
-
-  card.innerHTML =
-    `<div class="cc-num">Цикл ${n}</div>`+
+  card.dataset.eq=eq;
+  card.className='cc '+(done?(isPos?'pos':'neg'):'running');
+  const eqCls=done?(isPos?'pos':'neg'):'run';
+  const recBadge=done?(isNewRec?'<span style="font-size:.55rem;color:var(--green);font-weight:700">🆕 рекорд</span>':'<span style="font-size:.55rem;color:var(--text3)">→ без изм.</span>'):'';
+  card.innerHTML=
+    `<div class="cc-n" style="display:flex;justify-content:space-between;align-items:center">Цикл ${n}${recBadge}</div>`+
     `<div class="cc-eq ${eqCls}">$${eq.toFixed(0)}</div>`+
-    (delta!==null ? `<div class="cc-delta ${dCls}">${dStr}</div>` : `<div class="cc-delta flat">—</div>`)+
-    `<div class="cc-meta">WR ${wr.toFixed(0)}%`+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
-    (elapsed ? `<div class="cc-meta">${elapsed}с</div>` : '')+
-    `<div class="cc-bar ${isPos?'':'neg'}" style="width:${barPct}%"></div>`;
-
-  if(done) _prevEq = eq;
+    `<div class="cc-m">WR <b>${wr.toFixed(0)}%</b>`+(trades>0?` · ${trades} сд`:'')+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
+    (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
+    `<div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>`;
 }
 
-function logLine(msg, level){
-  if(!msg || !msg.trim()) return;
-
-  // ── System init lines (shown once, plain) ─────────────────
-  if(/WickFill Optimizer|загрузка свечей|загружено \d+/i.test(msg)){
-    _statusLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''));
-    return;
+function logLine(msg,level){
+  if(!msg||!msg.trim()) return;
+  if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool|Сохранено|Авто-сохранение/i.test(msg)){
+    addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
   }
-
-  // ── Cycle start banner ────────────────────────────────────
-  const cycleM = msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
-  if(cycleM){
-    _startBuf = null;
-    const n = parseInt(cycleM[1]);
-    _cycleCard(n, 100, 0, 0, null, false);
-    _setActivity(`Цикл ${n} — идёт оптимизация...`);
-    return;
-  }
-
-  // ── Start within cycle (show in spinner only) ─────────────
-  const startM = msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
-  if(startM){ _setActivity(`${startM[1].trim()} — перебор...`); return; }
-
-  // ── Pass (Круг) ───────────────────────────────────────────
-  const passM = msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
-  if(passM){ _setActivity(`Круг #${passM[1]} · $${passM[2]}`); return; }
-
-  // ── Param improvement — track live best and update card ───
-  const foundM = msg.match(/✅\s*.+?→\s*\$([\d.]+)\s*\(\+?([-\d.]+)\$\)\s*\|\s*WR\s*([\d.]+)%\s*\|\s*Сд\s*(\d+)\s*\|\s*DD\s*([\d.]+)%/);
+  const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
+  if(cycleM){_startBuf=null;_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
+  const startM=msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
+  if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}
+  const passM=msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
+  if(passM){_setActivity('Круг #'+passM[1]+' · $'+passM[2]);return;}
+  const foundM=msg.match(/✅\s*.+?→\s*\$([\d.]+)\s*\(\+?([-\d.]+)\$\)\s*\|\s*WR\s*([\d.]+)%\s*\|\s*Сд\s*(\d+)\s*\|\s*DD\s*([\d.]+)%/);
   if(foundM){
-    const eq=parseFloat(foundM[1]), wr=parseFloat(foundM[3]), dd=parseFloat(foundM[5]);
-    if(!_startBuf || eq > _startBuf.eq) _startBuf={eq,wr,dd};
-    // live-update the running card
-    const ns = Object.keys(_cc);
-    if(ns.length){
-      const lastN = parseInt(ns[ns.length-1]);
-      if(!_cc[lastN].classList.contains('pos') && !_cc[lastN].classList.contains('neg'))
-        _cycleCard(lastN, eq, wr, dd, null, false);
-    }
+    const eq=parseFloat(foundM[1]),wr=parseFloat(foundM[3]),dd=parseFloat(foundM[5]);
+    if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};
+    const ns=Object.keys(_cc);
+    if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false,0,false);}
     return;
   }
-
-  // ── Start result ──────────────────────────────────────────
-  const endM = msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
-  if(endM){
-    const eq=parseFloat(endM[1]), wr=parseFloat(endM[2]), dd=parseFloat(endM[3]);
-    if(!_startBuf || eq > _startBuf.eq) _startBuf={eq,wr,dd};
-    return;
-  }
-
-  // ── Cycle done ────────────────────────────────────────────
-  const doneM = msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*🏆\s*\$([\d.]+)\s+WR\s+([\d.]+)%/);
+  const endM=msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
+  if(endM){const eq=parseFloat(endM[1]),wr=parseFloat(endM[2]),dd=parseFloat(endM[3]);if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};return;}
+  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*([🆕→]+)\s*\$([\d.]+)\s+WR\s+([\d.]+)%\s+Сд\s+(\d+)\s+DD\s+([\d.]+)%/);
   if(doneM){
     _clearActivity();
-    const n=parseInt(doneM[1]), elapsed=doneM[2], eq=parseFloat(doneM[3]), wr=parseFloat(doneM[4]);
-    _cycleCard(n, eq, wr, _startBuf?.dd||0, elapsed, true);
-    _startBuf = null;
-    return;
+    const isNewRec=doneM[3].includes('🆕');
+    _cycleCard(parseInt(doneM[1]),parseFloat(doneM[4]),parseFloat(doneM[5]),parseFloat(doneM[7]),doneM[2],true,parseInt(doneM[6]),isNewRec);
+    _startBuf=null;return;
   }
-
-  // ── Stop ──────────────────────────────────────────────────
-  if(/остановлен|остановлено/i.test(msg)){
-    _clearActivity();
-    _statusLine('⏹ '+msg.replace(/^[⏹\s]+/,''), 'warn');
-    return;
-  }
-
-  // ── Errors ────────────────────────────────────────────────
-  if(level==='error') _statusLine(msg, 'err');
+  if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn');return;}
+  if(level==='error') addLogLine(msg,'error');
 }
 
 function renderBest(b){
-  document.getElementById('bestSection').style.display='block';
+  // bestSection hidden — info shown in table above
   const eq=b.equity??100,wr=b.winrate??0,dd=b.max_dd??0,pf=b.profit_factor??0,tr=b.trades??0;
+  // Мобильная строка
+  const mobRow=document.getElementById('mob-best-row');
+  if(mobRow){
+    document.getElementById('mob-eq').textContent='$'+eq.toFixed(0);
+    document.getElementById('mob-eq').style.color=eq>100?'var(--green)':eq<100?'var(--red)':'var(--bark)';
+    document.getElementById('mob-wr').textContent='WR '+wr.toFixed(0)+'%';
+    document.getElementById('mob-dd').textContent='DD '+dd.toFixed(0)+'%';
+    document.getElementById('mob-dd').style.color=dd>25?'var(--red)':'var(--text2)';
+    document.getElementById('mob-tr').textContent=tr+' сд';
+    document.getElementById('mob-sl').textContent='SL '+(b.params?.sl_pct??'—')+'%';
+    document.getElementById('mob-tp').textContent='TP '+(b.params?.tp_pct??'—')+'%';
+  }
   const stats=[
-    {val:'$'+eq.toFixed(2),lbl:'Депозит',cls:eq>100?'good':eq<100?'bad':''},
-    {val:wr.toFixed(1)+'%',lbl:'Winrate',cls:wr>=55?'good':wr<45?'bad':''},
-    {val:tr,lbl:'Сделок',cls:''},
-    {val:dd.toFixed(1)+'%',lbl:'Max DD',cls:dd<15?'good':dd>30?'bad':''},
-    {val:pf===999?'∞':pf.toFixed(2),lbl:'Profit F',cls:pf>=1.5?'good':'bad'},
-    {val:(b.params?.sl_pct??'—')+'%',lbl:'SL',cls:''},
-    {val:(b.params?.tp_pct??'—')+'%',lbl:'TP',cls:''},
-    {val:b.params?.rsi_len??'—',lbl:'RSI len',cls:''},
+    {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>100?'good':eq<100?'bad':''},
+    {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=55?'good':wr<45?'bad':''},
+    {v:tr,l:'Сделок',c:''},
+    {v:dd.toFixed(1)+'%',l:'Max DD',c:dd<15?'good':dd>30?'bad':''},
+    {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.5?'good':'bad'},
+    {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
+    {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
+    {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
-  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat ${s.cls}"><div class="stat-val">${s.val}</div><div class="stat-lbl">${s.lbl}</div></div>`).join('');
+  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell"><div class="stat-v ${s.c}">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
   if(b.params){
     document.getElementById('bestParamsWrap').style.display='block';
     const lines=Object.entries(b.params).map(([k,v])=>{
-      let vs=typeof v==='boolean'?(v?'да':'нет'):typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):v;
-      return `<span style="color:var(--muted)">${k}:</span> <b>${vs}</b>`;
+      const vs=typeof v==='boolean'?(v?'да':'нет'):typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):v;
+      return `<span>${k}:</span> <b>${vs}</b>`;
     });
     document.getElementById('bestParams').innerHTML=lines.join('<br>');
   }
 }
-
 function toggleParams(){
-  const el=document.getElementById('bestParams'),btn=el.previousElementSibling,vis=el.style.display!=='none';
-  el.style.display=vis?'none':'block';btn.textContent=(vis?'▶':'▼')+' Параметры стратегии';
+  const el=document.getElementById('bestParams'),vis=el.style.display!=='none';
+  el.style.display=vis?'none':'block';
+}
+
+function renderValid(v, best, windows, minDays){
+  const wrap=document.getElementById('validSection');
+  if(!wrap) return;
+  if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
+  wrap.style.display='block';
+  const trainWr=best?.winrate??0;
+  const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
+  const ok=ratio>=0.75;
+  const color=ok?'var(--green)':'var(--red)';
+  const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
+
+  // Заголовок: иконка + статус + ключевые цифры в одну строку
+  const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
+  const validEq = v ? '$'+v.equity.toFixed(0) : '—';
+  const validDd = v ? v.max_dd.toFixed(0)+'%' : '—';
+  const eqColor = v ? (v.equity>=100?'var(--green)':'var(--red)') : 'var(--text3)';
+  const ddColor = v ? (v.max_dd<15?'var(--green)':v.max_dd>25?'var(--red)':'var(--yellow)') : 'var(--text3)';
+
+  let html=`<div style="margin-top:8px;padding:10px 12px;border-radius:12px;border:1.5px solid ${color};background:${bgColor}">`;
+
+  // Строка 1: статус + валид WR vs трейн WR
+  html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <span style="color:${color};font-weight:700;font-size:.88rem">${ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
+    <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
+  </div>`;
+
+  // Строка 2: Депозит · DD · Сделок
+  if(v){
+    html+=`<div style="display:flex;gap:10px;margin-bottom:10px;font-size:.78rem">
+      <span>💰 <b style="color:${eqColor}">${validEq}</b></span>
+      <span>📉 DD <b style="color:${ddColor}">${validDd}</b></span>
+      <span style="color:var(--text3)">${v.trades} сд · ${v.days}д</span>
+    </div>`;
+  }
+
+  // Строка 3: гистограмма окон — слева старое, справа свежее
+  if(windows&&windows.length){
+    const maxWr=Math.max(...windows.map(w=>w.winrate),1);
+    html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
+      <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
+      <div style="display:flex;align-items:flex-end;gap:3px;height:36px">`;
+    // окна идут от старого (#5) к свежему (#1) — разворачиваем
+    const sorted=[...windows].reverse();
+    for(const w of sorted){
+      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
+      const c=w.ok?'var(--green)':'var(--red)';
+      const bg=w.ok?'rgba(80,200,100,0.7)':'rgba(220,80,80,0.7)';
+      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сделок">
+        <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
+        <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
+      </div>`;
+    }
+    html+=`</div>
+      <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:.55rem;color:var(--text3)">
+        <span>−${Math.round(best?.params?._days||14)}д</span><span>сейчас</span>
+      </div>
+    </div>`;
+  }
+
+  // Строка 4: мин. стабильный период
+  if(minDays!=null){
+    const stableColor=minDays>=(best?.params?._days||14)*0.5?'var(--green)':'var(--yellow)';
+    html+=`<div style="font-size:.7rem;color:var(--text3)">Стабильна с последних <b style="color:${stableColor}">${minDays}д</b></div>`;
+  }
+
+  html+='</div>';
+  wrap.innerHTML=html;
 }
 
 function renderTop20(list){
   document.getElementById('top20Wrap').style.display='block';
-  document.getElementById('top20Count').textContent=list.length+' вариантов';
-  document.getElementById('top20Body').innerHTML=list.map((r,i)=>{
-    const eq=(r.equity??100).toFixed(2),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
+  const top=list.slice(0,1);
+  document.getElementById('top20Body').innerHTML=top.map((r)=>{
+    const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
-    const c=i===0?'color:var(--yellow);font-weight:700':'';
-    return `<tr><td style="${c}">${i+1}</td><td style="${c}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
+    const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
+    const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
+    const lev=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
+      ? (risk/parseFloat(sl)).toFixed(1)+'×' : '—';
+    const levColor=parseFloat(lev)>20?'var(--red)':parseFloat(lev)>10?'var(--yellow)':'inherit';
+    return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
-      <td style="color:${parseFloat(pf)>=1.5?'var(--green2)':'inherit'}">${pf}</td>
-      <td>${sl}</td><td>${tp}</td></tr>`;
+      <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
+      <td>${sl}</td><td>${tp}</td>
+      <td style="font-weight:600;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
 
 function deleteDownload(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  const btn=event.target;btn.disabled=true;btn.textContent='...';
   fetch('/delete_download').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅':'❌';
-    setTimeout(()=>{btn.disabled=false;btn.textContent='🗑';},2000);
-  }).catch(e=>{btn.textContent='❌';setTimeout(()=>{btn.disabled=false;btn.textContent='🗑';},2000);});
+    btn.textContent=d.ok?'✓':'✕';
+    setTimeout(()=>{btn.disabled=false;btn.textContent='✕';},2000);
+  }).catch(()=>{btn.textContent='✕';setTimeout(()=>{btn.disabled=false;btn.textContent='✕';},2000);});
 }
 function renameDownload(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  const btn=event.target;btn.disabled=true;btn.textContent='...';
   fetch('/rename_download').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅':'❌';
-    if(!d.ok) alert(d.msg||'Ошибка');
+    btn.textContent=d.ok?'✓':'✕';if(!d.ok)alert(d.msg||'Ошибка');
     setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);
-  }).catch(e=>{btn.textContent='❌';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
+  }).catch(()=>{btn.textContent='✕';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
 }
 function termuxUpdate(){
-  // Сначала сбрасываем зависший флаг оптимизации
-  fetch('/reset_running').then(()=>{
-    setTimeout(()=>location.reload(), 500);
+  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  fetch('/termux_update').then(r=>r.json()).then(d=>{
+    if(d.ok){
+      btn.textContent='✓';
+      addLogLine('⏳ Перезапуск скрипта...','info');
+      setTimeout(()=>location.reload(),3000);
+    } else {
+      btn.disabled=false;btn.textContent='↺ Обновить';
+      addLogLine('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
+    }
+  }).catch(()=>{
+    btn.textContent='✓';
+    addLogLine('⏳ Сервер перезапускается...','info');
+    setTimeout(()=>location.reload(),4000);
   });
 }
-function termuxUpdate_orig(){
-  const btn=event.target;btn.disabled=true;btn.textContent='⏳ wake-lock...';
-  fetch('/termux_update').then(r=>r.json()).then(d=>{
-    btn.textContent=d.ok?'✅ Перезапуск...':'❌ '+d.msg;
-    if(d.ok) setTimeout(()=>location.reload(),4000);
-    else setTimeout(()=>{btn.disabled=false;btn.textContent='⬆ Update';},4000);
-  }).catch(e=>{btn.textContent='❌ '+e;setTimeout(()=>{btn.disabled=false;btn.textContent='⬆ Update';},4000);});
+
+/* ── Mobile toggles ── */
+let _mobTopVisible=false, _mobLogVisible=false;
+function toggleMobTop(){
+  _mobTopVisible=!_mobTopVisible;
+  const el=document.getElementById('top20Wrap');
+  if(el){el.style.display=_mobTopVisible?'block':'none';}
+}
+function toggleMobLog(){
+  _mobLogVisible=!_mobLogVisible;
+  const el=document.getElementById('wfLog');
+  if(el){el.classList.toggle('mob-hidden',!_mobLogVisible);}
+  const btn=document.getElementById('mob-log-btn');
+  if(btn) btn.textContent=_mobLogVisible?'📋 Скрыть':'📋 Логи';
 }
 </script></body></html>"""
 
@@ -2258,7 +3481,11 @@ class Handler(BaseHTTPRequestHandler):
                     "current_param":  opt_state.get("current_param",""),
                     "best":           opt_state["best"],
                     "top20":          opt_state["top20"],
+                    "valid":          opt_state.get("valid", None),
+                    "windows":        opt_state.get("windows", []),
+                    "min_stable_days":opt_state.get("min_stable_days", None),
                     "elapsed":        opt_state["elapsed"],
+                    "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
                     "chart_path":     cr,
@@ -2289,8 +3516,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type","text/html;charset=utf-8")
                 self.send_header("Content-Length",str(len(data)))
                 self.send_header("Cache-Control","no-store")
-                if parsed.path=="/chart_download" and chart_path:
-                    self.send_header("Content-Disposition",f'attachment;filename="{os.path.basename(chart_path)}"')
+                if parsed.path=="/chart_download":
+                    self.send_header("Content-Disposition",f'attachment;filename="wickfill_live_{chart_symbol.replace("_","").lower()}_{chart_tf}.html"')
                 self.end_headers()
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
@@ -2335,23 +3562,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e: result={"ok":False,"ms":None,"error":str(e)}
             self._json(result)
         elif parsed.path == "/scan_stop":
+            import traceback
+            print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/sw_stop":
             with opt_lock: opt_state["sw_running"]=False
             self._json({"ok":True})
         elif parsed.path == "/reset_running":
+            # Только сбрасываем флаги UI — не трогаем оптимизатор
             with opt_lock:
-                opt_state["running"]=False
-                opt_state["done"]=False
                 opt_state["error"]=""
-            _opt_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
-            candidate_dirs=[os.path.expanduser("~/downloads"),os.path.expanduser("~/Download"),
-                "/sdcard/Download","/sdcard/Downloads","/storage/emulated/0/Download",
-                "/storage/emulated/0/Downloads",os.path.expanduser("~/Downloads")]
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             deleted=[]
             _pat=_re.compile(r'^screener_pro\s*\(\d+\)\.py$')
             for d in candidate_dirs:
@@ -2366,11 +3591,9 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
-            candidate_dirs = [os.path.expanduser("~/downloads"), os.path.expanduser("~/Download"),
-                "/sdcard/Download", "/sdcard/Downloads",
-                "/storage/emulated/0/Download", "/storage/emulated/0/Downloads",
-                os.path.expanduser("~/Downloads")]
-            _pat2 = _re.compile(r'^screener_pro\s*\(\d+\)\.py$')
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
+            # Паттерн: screener_pro + что-то + .py (длинное имя от браузера)
+            _pat2 = _re.compile(r'^screener_pro.+\.py$')
             renamed = False
             msg = ""
             for d in candidate_dirs:
@@ -2380,10 +3603,13 @@ class Handler(BaseHTTPRequestHandler):
                 src = os.path.join(d, sorted(matches)[-1])
                 dst = os.path.join(d, script_name)
                 try:
-                    if os.path.exists(dst): os.remove(dst)
+                    # Шаг 1: явно удаляем screener_pro.py если существует
+                    if os.path.exists(dst):
+                        os.remove(dst)
+                    # Шаг 2: переименовываем длинный файл в screener_pro.py
                     os.rename(src, dst)
                     renamed = True
-                    msg = f"Переименован: {os.path.basename(src)} → {script_name}"
+                    msg = f"Удалён старый → переименован: {os.path.basename(src)} → {script_name}"
                     break
                 except Exception as e:
                     msg = str(e)
@@ -2395,9 +3621,7 @@ class Handler(BaseHTTPRequestHandler):
             import subprocess, sys, shutil
             script_name=os.path.basename(os.path.abspath(__file__))
             script_path=os.path.abspath(__file__)
-            candidate_dirs=[os.path.expanduser("~/downloads"),os.path.expanduser("~/Download"),
-                "/sdcard/Download","/sdcard/Downloads","/storage/emulated/0/Download",
-                "/storage/emulated/0/Downloads",os.path.expanduser("~/Downloads")]
+            candidate_dirs=["/sdcard/Download", os.path.dirname(script_path)]
             src=next((os.path.join(d,script_name) for d in candidate_dirs if os.path.exists(os.path.join(d,script_name))),None)
             if not src: self._json({"ok":False,"msg":f"'{script_name}' не найден в downloads"}); return
             try:
@@ -2420,17 +3644,66 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=_die,daemon=True).start()
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         elif parsed.path == "/load_result":
-            from urllib.parse import parse_qs
             qs=parse_qs(parsed.query)
             symbol=qs.get("symbol",["BTC_USDT"])[0]; tf=qs.get("tf",["1h"])[0]
-            fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-            fpath=os.path.join(os.path.dirname(os.path.abspath(__file__)),fname)
-            if not os.path.exists(fpath):
-                self._json({"ok":False,"msg":f"Файл не найден: {fname}"}); return
+            days=int(qs.get("days",["3"])[0]); risk_pct=float(qs.get("risk",["20"])[0])
+            # Сначала ищем по новому формату (с days+risk+equity)
+            fpath, data = _find_auto_config(symbol, tf, days, risk_pct)
+            # Если не нашли — ищем любой файл по паре+tf без учёта days/risk
+            if not data:
+                import glob as _glob
+                sym2 = symbol.replace("_","").replace("/","").lower()
+                pat2 = f"wickfill_{sym2}_{tf}_*.json"
+                search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
+                best_eq2 = -1
+                for d in search_dirs:
+                    if not os.path.isdir(d): continue
+                    for fp in _glob.glob(os.path.join(d, pat2)):
+                        try:
+                            with open(fp,"r",encoding="utf-8") as f2: d2=json.load(f2)
+                            if not (d2.get("best") and d2["best"].get("params")): continue
+                            if d2.get("days") and d2.get("days") != days: continue
+                            eq2=d2["best"].get("equity",0)
+                            if eq2>best_eq2: best_eq2=eq2; fpath=fp; data=d2
+                        except Exception: pass
+                # Также проверяем старый формат имени
+                if not data:
+                    old_fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
+                    for d in search_dirs:
+                        candidate=os.path.join(d,old_fname)
+                        if os.path.exists(candidate):
+                            try:
+                                with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2)
+                                if data.get("days") and data.get("days") != days:
+                                    data = None; continue
+                                fpath=candidate; break
+                            except Exception: pass
+            if not data:
+                self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}. Проверенные папки: {[d for d in _AUTO_DIRS if os.path.isdir(d)]}"}); return
             try:
-                with open(fpath,"r",encoding="utf-8") as f: data=json.load(f)
-                self._json({"ok":True,"best":data.get("best"),"top20":data.get("top20",[]),"saved_at":data.get("saved_at","")})
+                self._json({"ok":True,"best":data.get("best"),"top20":data.get("top20",[]),
+                            "saved_at":data.get("saved_at",""),
+                            "symbol":data.get("symbol",symbol),"tf":data.get("tf",tf),
+                            "days":data.get("days",days),"risk_pct":data.get("risk_pct",risk_pct),
+                            "file":os.path.basename(fpath) if fpath else "",
+                            "path":fpath if fpath else ""})
             except Exception as e: self._json({"ok":False,"msg":str(e)})
+        elif parsed.path == "/list_configs":
+            import glob as _glob
+            files_found = []
+            search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
+            checked_dirs = []
+            for d in search_dirs:
+                if d in checked_dirs: continue
+                checked_dirs.append(d)
+                if not os.path.isdir(d): continue
+                for fp in sorted(_glob.glob(os.path.join(d, "wickfill_*.json"))):
+                    try:
+                        size_kb = round(os.path.getsize(fp) / 1024, 1)
+                        files_found.append({"name": os.path.basename(fp), "dir": d, "size_kb": size_kb})
+                    except Exception:
+                        files_found.append({"name": os.path.basename(fp), "dir": d})
+            self._json({"ok": True, "files": files_found, "dirs": [d for d in checked_dirs if os.path.isdir(d)]})
         else:
             self.send_response(404); self.end_headers()
 
@@ -2443,14 +3716,11 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             best=params.get("best"); top20=params.get("top20",[]); symbol=params.get("symbol","UNK"); tf=params.get("tf","1h")
+            days=int(params.get("days",3)); risk_pct=float(params.get("risk_pct",20.0))
             if not best: self._json({"ok":False,"msg":"Нет данных"}); return
-            fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-            fpath=os.path.join(os.path.dirname(os.path.abspath(__file__)),fname)
-            try:
-                with open(fpath,"w",encoding="utf-8") as f:
-                    json.dump({"best":best,"top20":top20,"symbol":symbol,"tf":tf,"saved_at":time.strftime("%Y-%m-%d %H:%M:%S")},f,ensure_ascii=False,indent=2)
-                self._json({"ok":True,"file":fname})
-            except Exception as e: self._json({"ok":False,"msg":str(e)})
+            saved=_auto_save_config(symbol, tf, days, risk_pct, best, top20)
+            if saved: self._json({"ok":True,"file":os.path.basename(saved),"path":saved})
+            else: self._json({"ok":False,"msg":"Не удалось записать файл — нет доступа к папке Download. Убедитесь что termux-setup-storage выполнен."})
             return
 
         if parsed.path == "/test_email":
@@ -2464,11 +3734,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/scan":
-            if opt_state.get("running",False):
-                self._json({"ok":False,"msg":"Оптимизация уже запущена"}); return
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
-            threading.Thread(target=run_optimizer, args=(params,), daemon=True).start()
+            global _opt_thread
+            print(f"[SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
+            # Если тред жив — не перезапускаем, чтобы не сбрасывать циклы
+            if _opt_thread and _opt_thread.is_alive():
+                self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
+            _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
+            _opt_thread.start()
             self._json({"ok":True})
         else:
             self.send_response(404); self.end_headers()
@@ -2499,6 +3773,12 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError,ConnectionResetError): pass
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    # spawn — безопаснее для multiprocessing на всех платформах
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
     port=8080
     import socket as _sock
     def _get_local_ip():
