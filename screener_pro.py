@@ -2978,15 +2978,15 @@ function listConfigs(){
   fetch('/list_configs')
     .then(r=>r.json())
     .then(d=>{
-      if(!d.ok){addLog('⚠ Конфиги: '+d.msg,'warn');return;}
-      if(!d.files||!d.files.length){addLog('📂 Конфиги не найдены. Папки проверены: '+d.dirs.join(', '),'warn');return;}
-      addLog('📂 Найдено конфигов: '+d.files.length,'info');
+      if(!d.ok){addLogLine('⚠ Конфиги: '+d.msg,'warn');return;}
+      if(!d.files||!d.files.length){addLogLine('📂 Конфиги не найдены. Папки проверены: '+d.dirs.join(', '),'warn');return;}
+      addLogLine('📂 Найдено конфигов: '+d.files.length,'info');
       d.files.forEach(f=>{
         const size=f.size_kb?` [${f.size_kb} KB]`:'';
-        addLog(`  • ${f.name}${size} → ${f.dir}`,'info');
+        addLogLine(`  • ${f.name}${size} → ${f.dir}`,'info');
       });
     })
-    .catch(e=>addLog('⚠ Ошибка загрузки конфигов: '+e,'warn'));
+    .catch(e=>addLogLine('⚠ Ошибка загрузки конфигов: '+e,'warn'));
 }
 
 /* ── Poll ── */
@@ -3280,16 +3280,15 @@ function termuxUpdate(){
   fetch('/termux_update').then(r=>r.json()).then(d=>{
     if(d.ok){
       btn.textContent='✓';
-      addLog('⏳ Перезапуск скрипта...','info');
+      addLogLine('⏳ Перезапуск скрипта...','info');
       setTimeout(()=>location.reload(),3000);
     } else {
       btn.disabled=false;btn.textContent='↺ Обновить';
-      addLog('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
+      addLogLine('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
     }
   }).catch(()=>{
-    // Сервер упал — это нормально при pkill, просто ждём перезапуска
     btn.textContent='✓';
-    addLog('⏳ Сервер перезапускается...','info');
+    addLogLine('⏳ Сервер перезапускается...','info');
     setTimeout(()=>location.reload(),4000);
   });
 }
