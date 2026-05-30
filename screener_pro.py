@@ -2623,7 +2623,7 @@ details summary::-webkit-details-marker{display:none}
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <button class="icon-btn success" onclick="termuxUpdate()">↑ Update</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
-    <button class="icon-btn danger" onclick="deleteDownload()">✕</button>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python">↺ Обновить</button>
   </div>
 </header>
 
