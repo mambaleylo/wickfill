@@ -1227,9 +1227,8 @@ render();
 </script></body></html>"""
 
 def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
-    downloads_dir = os.path.expanduser("~/downloads")
-    os.makedirs(downloads_dir, exist_ok=True)
-    fpath = os.path.join(downloads_dir, f"wickfill_live_{symbol.replace('_','').lower()}_{tf}.html")
+    chart_dir = "/sdcard/Download" if os.path.isdir("/sdcard/Download") else os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(chart_dir, f"wickfill_live_{symbol.replace('_','').lower()}_{tf}.html")
     html = _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui)
     try:
         with open(fpath, "w", encoding="utf-8") as f:
@@ -1582,13 +1581,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
 # ═══════════════════════════════════════════════════════════════
 _AUTO_DIRS = [
     "/sdcard/Download",
-    "/sdcard/Downloads",
-    "/storage/emulated/0/Download",
-    "/storage/emulated/0/Downloads",
-    os.path.expanduser("~/downloads"),
-    os.path.expanduser("~/Download"),
-    os.path.expanduser("~/Downloads"),
-    os.path.dirname(os.path.abspath(__file__)),  # папка рядом со скриптом — всегда доступна
+    os.path.dirname(os.path.abspath(__file__)),
 ]
 
 def _config_key(symbol, tf, days, risk_pct):
@@ -1606,14 +1599,13 @@ def _config_filename(symbol, tf, days, risk_pct, equity):
 def _find_auto_config(symbol, tf, days, risk_pct):
     """Ищет лучший конфиг в Downloads по (symbol,tf,days,risk). Возвращает (path, data) или (None,None)."""
     import glob as _glob
-    days = int(days)  # гарантируем int
+    days = int(days)
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
     best_path, best_data, best_eq = None, None, -1
     for d in _AUTO_DIRS:
         if not os.path.isdir(d): continue
-        # Ищем по точному паттерну
         for fpath in _glob.glob(os.path.join(d, pat)):
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
@@ -1626,18 +1618,6 @@ def _find_auto_config(symbol, tf, days, risk_pct):
                     best_eq = eq; best_path = fpath; best_data = data
             except Exception:
                 pass
-        # Если по точному не нашли — ищем любой wickfill для этой пары+tf (мягкий фолбек)
-        if not best_path:
-            for fpath in _glob.glob(os.path.join(d, f"wickfill_{sym}_{tf}_*.json")):
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if not (data.get("best") and data["best"].get("params")): continue
-                    eq = data["best"].get("equity", 0)
-                    if eq > best_eq:
-                        best_eq = eq; best_path = fpath; best_data = data
-                except Exception:
-                    pass
     return best_path, best_data
 
 def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
@@ -1655,10 +1635,9 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
 
     # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
-    for d in ("/sdcard/Download", "/sdcard/Downloads"):
-        if not os.path.isdir(d):
-            try: os.makedirs(d, exist_ok=True)
-            except Exception: pass
+    if not os.path.isdir("/sdcard/Download"):
+        try: os.makedirs("/sdcard/Download", exist_ok=True)
+        except Exception: pass
 
     # Найти папку для записи (первая существующая и доступная для записи)
     save_dir = None
@@ -1799,14 +1778,15 @@ def run_optimizer(params):
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
         existing_dirs = [d for d in _AUTO_DIRS if os.path.isdir(d)]
-        olog(f"🗂 Ищу конфиг в: {existing_dirs or ['нет доступных папок']}", "info")
-        # Показываем что реально лежит в папках
         import glob as _glob2
         sym2 = symbol.replace("_","").replace("/","").lower()
+        r2   = int(round(risk_pct))
+        search_pat = f"wickfill_{sym2}_{tf}_{days}d_$*_r{r2}.json"
+        olog(f"🗂 Ищу: {search_pat}", "info")
         for d in existing_dirs:
-            found = _glob2.glob(os.path.join(d, "wickfill_*.json"))
-            if found:
-                olog(f"   📁 {d}: {[os.path.basename(f) for f in found]}", "info")
+            all_wf = _glob2.glob(os.path.join(d, "wickfill_*.json"))
+            if all_wf:
+                olog(f"   📁 {d}: {[os.path.basename(f) for f in all_wf]}", "info")
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
@@ -3459,9 +3439,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
-            candidate_dirs=[os.path.expanduser("~/downloads"),os.path.expanduser("~/Download"),
-                "/sdcard/Download","/sdcard/Downloads","/storage/emulated/0/Download",
-                "/storage/emulated/0/Downloads",os.path.expanduser("~/Downloads")]
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             deleted=[]
             _pat=_re.compile(r'^screener_pro\s*\(\d+\)\.py$')
             for d in candidate_dirs:
@@ -3476,10 +3454,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
-            candidate_dirs = [os.path.expanduser("~/downloads"), os.path.expanduser("~/Download"),
-                "/sdcard/Download", "/sdcard/Downloads",
-                "/storage/emulated/0/Download", "/storage/emulated/0/Downloads",
-                os.path.expanduser("~/Downloads")]
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             # Паттерн: screener_pro + что-то + .py (длинное имя от браузера)
             _pat2 = _re.compile(r'^screener_pro.+\.py$')
             renamed = False
@@ -3509,9 +3484,7 @@ class Handler(BaseHTTPRequestHandler):
             import subprocess, sys, shutil
             script_name=os.path.basename(os.path.abspath(__file__))
             script_path=os.path.abspath(__file__)
-            candidate_dirs=[os.path.expanduser("~/downloads"),os.path.expanduser("~/Download"),
-                "/sdcard/Download","/sdcard/Downloads","/storage/emulated/0/Download",
-                "/storage/emulated/0/Downloads",os.path.expanduser("~/Downloads")]
+            candidate_dirs=["/sdcard/Download", os.path.dirname(script_path)]
             src=next((os.path.join(d,script_name) for d in candidate_dirs if os.path.exists(os.path.join(d,script_name))),None)
             if not src: self._json({"ok":False,"msg":f"'{script_name}' не найден в downloads"}); return
             try:
