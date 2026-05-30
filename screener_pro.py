@@ -3408,17 +3408,6 @@ function _clearActivity(){const el=document.getElementById('ccActivity');if(el)e
 function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   const isPos=eq>100;
   const strip=document.getElementById('ccStrip');
-  if(done && !isNewRec){
-    // Не рекорд — обновляем счётчик на последней карточке вместо новой
-    const last=strip.firstChild;
-    if(last){
-      const ctr=last.querySelector('.cc-skip-ctr');
-      if(ctr){ ctr.textContent='×'+(parseInt(ctr.dataset.v||1)+1); ctr.dataset.v=parseInt(ctr.dataset.v||1)+1; }
-      else { const s=document.createElement('span'); s.className='cc-skip-ctr'; s.dataset.v=2; s.textContent='×2';
-        s.style.cssText='font-size:.55rem;color:var(--text3);margin-left:4px'; last.querySelector('.cc-n')?.appendChild(s); }
-    }
-    return;
-  }
   let card=strip.querySelector(`[data-n="${n}"]`);
   if(!card){
     card=document.createElement('div');
@@ -3429,7 +3418,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   card.dataset.eq=eq;
   card.className='cc '+(done?(isPos?'pos':'neg'):'running');
   const eqCls=done?(isPos?'pos':'neg'):'run';
-  const recBadge=done?'<span style="font-size:.55rem;color:var(--green);font-weight:700">🆕 рекорд</span>':'';
+  const recBadge=done?(isNewRec?'<span style="font-size:.55rem;color:var(--green);font-weight:700">🆕 рекорд</span>':'<span style="font-size:.55rem;color:var(--text3)">→ без изм.</span>'):'';
   card.innerHTML=
     `<div class="cc-n" style="display:flex;justify-content:space-between;align-items:center">Цикл ${n}${recBadge}</div>`+
     `<div class="cc-eq ${eqCls}">$${eq.toFixed(0)}</div>`+
