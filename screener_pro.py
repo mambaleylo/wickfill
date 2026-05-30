@@ -2103,6 +2103,8 @@ html,body{
   font-family:'DM Sans',sans-serif;
   font-size:14px;
   overflow:hidden;
+  overscroll-behavior:none;
+  touch-action:none;
 }
 
 /* Subtle noise texture */
@@ -2182,6 +2184,7 @@ body>*{position:relative;z-index:1}
   border-right:1px solid var(--border);
   overflow-y:auto;padding:18px 16px;
   display:flex;flex-direction:column;gap:14px;
+  touch-action:pan-y;
 }
 
 /* Card */
@@ -2537,7 +2540,7 @@ details summary::-webkit-details-marker{display:none}
   .sidebar{
     width:100%;border-right:none;border-bottom:1px solid var(--border);
     padding:8px 10px;gap:6px;
-    overflow:visible;
+    overflow:hidden;
     flex-shrink:0;
   }
 
