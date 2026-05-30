@@ -3179,50 +3179,60 @@ function renderValid(v, best, windows, minDays){
   const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
   const ok=ratio>=0.75;
   const color=ok?'var(--green)':'var(--red)';
-  const bgColor=ok?'rgba(80,200,100,0.08)':'rgba(220,80,80,0.08)';
-  const icon=ok?'✅':'⚠️';
-  const stab=ok?'Стабильная':'Нестабильная';
+  const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
 
-  let html=`<div style="margin-top:8px;padding:10px 12px;border-radius:10px;border:1.5px solid ${color};background:${bgColor};font-size:13px">`;
+  // Заголовок: иконка + статус + ключевые цифры в одну строку
+  const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
+  const validEq = v ? '$'+v.equity.toFixed(0) : '—';
+  const validDd = v ? v.max_dd.toFixed(0)+'%' : '—';
+  const eqColor = v ? (v.equity>=100?'var(--green)':'var(--red)') : 'var(--text3)';
+  const ddColor = v ? (v.max_dd<15?'var(--green)':v.max_dd>25?'var(--red)':'var(--yellow)') : 'var(--text3)';
 
-  html+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-    <span style="font-size:1.2rem">${icon}</span>
-    <span style="color:${color};font-weight:700;font-size:.95rem">${stab} стратегия</span>
+  let html=`<div style="margin-top:8px;padding:10px 12px;border-radius:12px;border:1.5px solid ${color};background:${bgColor}">`;
+
+  // Строка 1: статус + валид WR vs трейн WR
+  html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <span style="color:${color};font-weight:700;font-size:.88rem">${ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
+    <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
   </div>`;
 
+  // Строка 2: Депозит · DD · Сделок
   if(v){
-    const metrics=[
-      {l:'Депозит', v:'$'+v.equity.toFixed(0), c:v.equity>=100?'var(--green)':'var(--red)'},
-      {l:'WR (валид)', v:v.winrate.toFixed(1)+'%', c:v.winrate>=55?'var(--green)':'var(--red)'},
-      {l:'WR (трейн)', v:trainWr.toFixed(0)+'%', c:'var(--text2)'},
-      {l:'Max DD', v:v.max_dd.toFixed(1)+'%', c:v.max_dd<15?'var(--green)':v.max_dd>30?'var(--red)':'var(--text2)'},
-      {l:'Сделок', v:v.trades+'', c:'var(--text2)'},
-      {l:'Период', v:v.days+'д', c:'var(--text2)'},
-    ];
-    html+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:${windows&&windows.length||minDays?'8px':'0'}">`;
-    for(const m of metrics){
-      html+=`<div style="background:var(--card);border-radius:7px;padding:5px 7px;text-align:center">
-        <div style="font-size:.6rem;color:var(--text3);margin-bottom:2px">${m.l}</div>
-        <div style="font-size:.82rem;font-weight:600;color:${m.c}">${m.v}</div>
+    html+=`<div style="display:flex;gap:10px;margin-bottom:10px;font-size:.78rem">
+      <span>💰 <b style="color:${eqColor}">${validEq}</b></span>
+      <span>📉 DD <b style="color:${ddColor}">${validDd}</b></span>
+      <span style="color:var(--text3)">${v.trades} сд · ${v.days}д</span>
+    </div>`;
+  }
+
+  // Строка 3: гистограмма окон — слева старое, справа свежее
+  if(windows&&windows.length){
+    const maxWr=Math.max(...windows.map(w=>w.winrate),1);
+    html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
+      <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
+      <div style="display:flex;align-items:flex-end;gap:3px;height:36px">`;
+    // окна идут от старого (#5) к свежему (#1) — разворачиваем
+    const sorted=[...windows].reverse();
+    for(const w of sorted){
+      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
+      const c=w.ok?'var(--green)':'var(--red)';
+      const bg=w.ok?'rgba(80,200,100,0.7)':'rgba(220,80,80,0.7)';
+      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сделок">
+        <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
+        <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
       </div>`;
     }
-    html+='</div>';
+    html+=`</div>
+      <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:.55rem;color:var(--text3)">
+        <span>−${Math.round(best?.params?._days||14)}д</span><span>сейчас</span>
+      </div>
+    </div>`;
   }
 
-  if(windows&&windows.length){
-    html+=`<div style="margin-bottom:${minDays?'6px':'0'}">
-      <div style="font-size:.62rem;color:var(--text3);margin-bottom:4px">📊 Скользящие окна</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap">`;
-    for(const w of windows){
-      const c=w.ok?'var(--green)':'var(--red)';
-      const bg=w.ok?'rgba(80,200,100,0.12)':'rgba(220,80,80,0.12)';
-      html+=`<span style="background:${bg};border:1px solid ${c};border-radius:5px;padding:2px 6px;font-size:.65rem;color:${c};white-space:nowrap">#${w.i} WR${w.winrate}%${w.ok?'✓':'✗'}</span>`;
-    }
-    html+='</div></div>';
-  }
-
+  // Строка 4: мин. стабильный период
   if(minDays!=null){
-    html+=`<div style="margin-top:4px;font-size:.7rem;color:var(--text2)">📐 Мин. стабильный период: <b style="color:var(--green)">${minDays}д</b></div>`;
+    const stableColor=minDays>=(best?.params?._days||14)*0.5?'var(--green)':'var(--yellow)';
+    html+=`<div style="font-size:.7rem;color:var(--text3)">Стабильна с последних <b style="color:${stableColor}">${minDays}д</b></div>`;
   }
 
   html+='</div>';
