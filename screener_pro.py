@@ -8,6 +8,7 @@ WickFill Optimizer v3.0
 """
 
 import json, time, threading, random, math, os
+import math as _math  # используется в fitness внутри _simulate
 import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -132,7 +133,7 @@ opt_state = {
     "cycle": 0,       # номер цикла бесконечного режима
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
     "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
-    "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None, "cycle_times": [], "avg_cycle_s": None,
+    "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None,
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
     # sliding window
@@ -592,8 +593,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         last_c=candles_list[-1]; exit_p=last_c["close"]
         move=(exit_p-t_ep)/t_ep*100 if t_dir==1 else (t_ep-exit_p)/t_ep*100
         rr_r=move/t_orig_sl if t_orig_sl>0 else 0
-        pnl_ot=t_pos*risk_pct/100*rr_r
-        # Незакрытая позиция — засчитываем полностью чтобы avg_pnl и PF были корректны
+        pnl_ot=t_pos*risk_pct/100*rr_r*0.5  # коэф. 0.5: исход неизвестен, не искажаем equity
         equity+=pnl_ot; pnls.append(pnl_ot)
         is_win_ot=pnl_ot>0
         trades+=1
@@ -614,7 +614,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     if trades<15: fitness=-9999.0
     elif max_dd>=50.0: fitness=-9999.0
     else:
-        import math as _math
         net_return=equity-100.0
 
         # --- Calmar: логарифмически нормирован ---
@@ -1266,7 +1265,9 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
             dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
             res_str  = "✅ Тейк-профит" if is_win else "❌ Стоп-лосс"
             pct_str  = ("+" if pct >= 0 else "") + f"{pct:.2f}%"
-            dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(int(time.time()) + moscow_offset))
+            # Берём время закрытия свечи входа (t свечи + интервал таймфрейма), а не time.time()
+            exit_candle_t = s.get("t", int(time.time())) + TF_SECONDS.get(tf, 3600)
+            dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(exit_candle_t + moscow_offset))
             text = (
                 f"🔔 <b>WickFill — Сделка закрыта</b>\n\n"
                 f"{dir_str} <b>{symbol}</b> {tf}\n"
@@ -1527,7 +1528,6 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        olog(f"  BH {bh_i+1}/12...", "info")
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
@@ -1558,7 +1558,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
     ok_windows = 0; total_windows = 0
     for wi in range(3):
         wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
-        if wres and wres["trades"] >= 2:
+        if wres and wres["trades"] >= 5:
             total_windows += 1
             if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.65:
                 ok_windows += 1
