@@ -2024,7 +2024,7 @@ def run_optimizer(params):
 
             # Накапливаем top20 между циклами — сначала merge, потом выбираем best
             if infinite:
-                merged = list(top20) + [r for r in prev_top20 if r not in top20]
+                merged = list(top20) + list(prev_top20)
                 merged.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
                 seen_vf=set(); deduped=[]
                 for item in merged:
