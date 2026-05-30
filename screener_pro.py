@@ -2041,7 +2041,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+            "logs": [], "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
@@ -2338,6 +2338,12 @@ def run_optimizer(params):
                 opt_state["chart_path"]     = chart_path or ""
                 opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
+                # all_time_best обновляется только если стало лучше — никогда не откатывается назад
+                prev_atb = opt_state.get("all_time_best")
+                prev_atb_vfit = (prev_atb.get("validated_fitness") or prev_atb["fitness"]) if prev_atb else -1e18
+                cur_vfit = all_time_best.get("validated_fitness") or all_time_best["fitness"]
+                if cur_vfit >= prev_atb_vfit:
+                    opt_state["all_time_best"] = all_time_best
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
@@ -3351,8 +3357,9 @@ function poll(){
       for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
       lastLogCount=logs.length;
     }
-    if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
-    if(d.best) renderTop20([d.best]);  // таблица всегда показывает текущий best (тот же что на графике)
+    const _atb=d.all_time_best||d.best;
+    if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
+    if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
     if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
     if(d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
@@ -3647,6 +3654,7 @@ class Handler(BaseHTTPRequestHandler):
                     "pass_num":       opt_state.get("pass_num",0),
                     "current_param":  opt_state.get("current_param",""),
                     "best":           opt_state["best"],
+                    "all_time_best":   opt_state.get("all_time_best"),
                     "top20":          opt_state["top20"],
                     "valid":          opt_state.get("valid", None),
                     "windows":        opt_state.get("windows", []),
