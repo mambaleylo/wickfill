@@ -1606,27 +1606,38 @@ def _config_filename(symbol, tf, days, risk_pct, equity):
 def _find_auto_config(symbol, tf, days, risk_pct):
     """Ищет лучший конфиг в Downloads по (symbol,tf,days,risk). Возвращает (path, data) или (None,None)."""
     import glob as _glob
-    key = _config_key(symbol, tf, days, risk_pct)
-    # Паттерн: wickfill_{key_без_equity}_*.json  →  wickfill_{sym}_{tf}_{days}d_$*_r{r}.json
+    days = int(days)  # гарантируем int
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
     best_path, best_data, best_eq = None, None, -1
     for d in _AUTO_DIRS:
         if not os.path.isdir(d): continue
+        # Ищем по точному паттерну
         for fpath in _glob.glob(os.path.join(d, pat)):
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if not (data.get("best") and data["best"].get("params")): continue
-                # Дополнительная проверка: days и risk совпадают
-                if data.get("days") != days: continue
-                if abs(data.get("risk_pct", risk_pct) - risk_pct) > 0.1: continue
+                if int(data.get("days", days)) != days: continue
+                if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
                 eq = data["best"].get("equity", 0)
                 if eq > best_eq:
                     best_eq = eq; best_path = fpath; best_data = data
             except Exception:
                 pass
+        # Если по точному не нашли — ищем любой wickfill для этой пары+tf (мягкий фолбек)
+        if not best_path:
+            for fpath in _glob.glob(os.path.join(d, f"wickfill_{sym}_{tf}_*.json")):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not (data.get("best") and data["best"].get("params")): continue
+                    eq = data["best"].get("equity", 0)
+                    if eq > best_eq:
+                        best_eq = eq; best_path = fpath; best_data = data
+                except Exception:
+                    pass
     return best_path, best_data
 
 def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
@@ -1787,9 +1798,15 @@ def run_optimizer(params):
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
-        # Диагностика: какие папки проверяются
         existing_dirs = [d for d in _AUTO_DIRS if os.path.isdir(d)]
         olog(f"🗂 Ищу конфиг в: {existing_dirs or ['нет доступных папок']}", "info")
+        # Показываем что реально лежит в папках
+        import glob as _glob2
+        sym2 = symbol.replace("_","").replace("/","").lower()
+        for d in existing_dirs:
+            found = _glob2.glob(os.path.join(d, "wickfill_*.json"))
+            if found:
+                olog(f"   📁 {d}: {[os.path.basename(f) for f in found]}", "info")
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
