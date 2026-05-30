@@ -2183,7 +2183,17 @@ body>*{position:relative;z-index:1}
 /* Field */
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .field label{font-size:.72rem;color:var(--text3);font-weight:500}
-.field-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.field-inset{position:relative}
+.field-inset label{
+  position:absolute;top:5px;left:10px;
+  font-size:.58rem;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;
+  pointer-events:none;line-height:1;
+}
+.field-inset input,.field-inset select{
+  padding:18px 10px 5px;font-size:.9rem;
+  border-radius:10px;
+}
 
 input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
@@ -2636,14 +2646,12 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
-      <div class="card-title">Настройки</div>
-
-      <div class="field-row" style="margin-bottom:10px">
-        <div class="field">
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset">
           <label>Символ</label>
           <input type="text" id="wf_symbol" value="BTC_USDT">
         </div>
-        <div class="field">
+        <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
             <option value="5m">5m</option>
@@ -2655,13 +2663,12 @@ details summary::-webkit-details-marker{display:none}
           </select>
         </div>
       </div>
-
       <div class="field-row" style="margin-bottom:0">
-        <div class="field">
+        <div class="field-inset">
           <label>История (дни)</label>
           <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" style="width:100%">
         </div>
-        <div class="field">
+        <div class="field-inset">
           <label>Риск %</label>
           <input type="number" id="wf_risk" min="1" max="100" value="10" step="1" style="width:100%">
         </div>
