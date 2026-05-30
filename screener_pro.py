@@ -1227,15 +1227,8 @@ render();
 </script></body></html>"""
 
 def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
-    chart_dir = "/sdcard/Download" if os.path.isdir("/sdcard/Download") else os.path.dirname(os.path.abspath(__file__))
-    fpath = os.path.join(chart_dir, f"wickfill_live_{symbol.replace('_','').lower()}_{tf}.html")
-    html = _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui)
-    try:
-        with open(fpath, "w", encoding="utf-8") as f:
-            f.write(html)
-        return fpath
-    except Exception as e:
-        print(f"[chart] err: {e}"); return None
+    # Локальное сохранение файла отключено — график доступен через /chart
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 # CHECK SIGNAL ON LAST CANDLE & SEND EMAIL
@@ -3381,8 +3374,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type","text/html;charset=utf-8")
                 self.send_header("Content-Length",str(len(data)))
                 self.send_header("Cache-Control","no-store")
-                if parsed.path=="/chart_download" and chart_path:
-                    self.send_header("Content-Disposition",f'attachment;filename="{os.path.basename(chart_path)}"')
+                if parsed.path=="/chart_download":
+                    self.send_header("Content-Disposition",f'attachment;filename="wickfill_live_{chart_symbol.replace("_","").lower()}_{chart_tf}.html"')
                 self.end_headers()
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
