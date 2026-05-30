@@ -1496,7 +1496,7 @@ def _perf_save(symbol, tf):
         return
     ts = time.strftime("%Y%m%d_%H%M%S")
     sym = symbol.replace("_","").replace("/","").lower()
-    fname = f"wickfill_perf_{sym}_{tf}_{ts}.txt"
+    fname = f"wickfill_perf_{sym}_{tf}.txt"
     lines = [f"WickFill perf-log  symbol={symbol}  tf={tf}  saved={time.strftime('%Y-%m-%d %H:%M:%S')}\n",
              f"{'время':>8}  {'событие':<28}  детали\n",
              "-"*80 + "\n"]
