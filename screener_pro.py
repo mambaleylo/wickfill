@@ -891,6 +891,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
             opt_state["pass_num"]=pass_num; opt_state["total"]=steps_in_pass; opt_state["progress"]=0
 
         step_in_pass=0; improved_in_pass=False
+        _pass_t0 = time.time()
 
         for param_idx, key in enumerate(keys_shuffled):
             if stop_flag and stop_flag(): break
@@ -898,12 +899,14 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
             with opt_lock:
                 opt_state["current_param"]=label; opt_state["generation"]=param_idx+1
 
+            _param_t0 = time.time()
             candidates=[{**current, key:val} for val in grid]
             use_key=FILTER_GROUPS.get(key)
             if use_key and current.get(use_key,True):
                 candidates.append({**current, use_key:False})
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
+            _param_dt = round(time.time() - _param_t0, 3)
             param_best=results[0]; best_val=param_best["params"][key]
 
             if param_best["fitness"]>best_result["fitness"]:
@@ -912,10 +915,15 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
 
+            _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
+
             step_in_pass+=len(grid)+(1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0)
             with opt_lock:
                 opt_state["progress"]=step_in_pass
                 opt_state["elapsed"]=round(time.time()-t0,1)
+
+        _pass_dt = round(time.time() - _pass_t0, 3)
+        _plog("pass_done", pass_n=pass_num, sec=_pass_dt, improved=improved_in_pass, start=start_label)
 
         if stop_flag and stop_flag(): break
 
@@ -1466,6 +1474,58 @@ _opt_stop_flag = threading.Event()
 _opt_thread = None
 _last_fetch_error = None
 
+# ═══════════════════════════════════════════════════════════════
+# PERF LOG — замеры для диагностики торможения
+# ═══════════════════════════════════════════════════════════════
+_perf_log = []          # список dict-записей
+_perf_lock = threading.Lock()
+_perf_t0   = 0.0       # время старта сессии
+
+def _plog(event, **kw):
+    """Добавить запись в perf-лог. Потокобезопасно."""
+    entry = {"t": round(time.time() - _perf_t0, 3), "ev": event}
+    entry.update(kw)
+    with _perf_lock:
+        _perf_log.append(entry)
+
+def _perf_save(symbol, tf):
+    """Сохранить perf-лог в файл рядом с конфигами."""
+    with _perf_lock:
+        data = list(_perf_log)
+    if not data:
+        return
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    sym = symbol.replace("_","").replace("/","").lower()
+    fname = f"wickfill_perf_{sym}_{tf}_{ts}.txt"
+    lines = [f"WickFill perf-log  symbol={symbol}  tf={tf}  saved={time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+             f"{'время':>8}  {'событие':<28}  детали\n",
+             "-"*80 + "\n"]
+    prev_t = 0.0
+    for e in data:
+        t = e["t"]; dt = t - prev_t; prev_t = t
+        ev = e["ev"]
+        details = "  ".join(f"{k}={v}" for k,v in e.items() if k not in ("t","ev"))
+        flag = ""
+        # Помечаем записи где прошло много времени
+        if dt > 5:   flag = f"  ⚠ +{dt:.1f}s"
+        if dt > 30:  flag = f"  🔴 +{dt:.1f}s ЗАТЫК"
+        lines.append(f"{t:>8.1f}s  {ev:<28}  {details}{flag}\n")
+    txt = "".join(lines)
+    saved = False
+    for d in _AUTO_DIRS:
+        if not os.path.isdir(d): continue
+        try:
+            fpath = os.path.join(d, fname)
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(txt)
+            print(f"[perf] Сохранён: {fpath}", flush=True)
+            saved = True
+            break
+        except Exception as e:
+            print(f"[perf] Ошибка записи {d}: {e}", flush=True)
+    if not saved:
+        print(f"[perf] Не удалось сохранить лог\n{txt[:2000]}", flush=True)
+
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                    prev_best_params=None, prev_top20=None):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
@@ -1488,7 +1548,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         if not candidates:
             return []
         chunk = max(1, len(candidates) // (n_workers * 2))
-        return list(_pool.map(_worker_evaluate, candidates, chunksize=chunk))
+        _pt0 = time.time()
+        result = list(_pool.map(_worker_evaluate, candidates, chunksize=chunk))
+        _dt = round(time.time() - _pt0, 3)
+        _plog("pmap", n=len(candidates), workers=n_workers, sec=_dt,
+              sec_per_cand=round(_dt/len(candidates),4) if candidates else 0)
+        return result
 
     def stop_flag():
         return _opt_stop_flag.is_set()
@@ -1532,8 +1597,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
         olog(f"── {label} ──", "ok")
         with opt_lock: opt_state["generation"]=i+1
+        _plog("phase1_start", start=i+1, label=label)
+        _st0 = time.time()
         result, cur, top20_global = _coordinate_descent_from(
             start_ind, pmap, olog, t0, top20_global, label, max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        _plog("phase1_done", start=i+1, sec=round(time.time()-_st0,1),
+              equity=round(result["equity"],2), wr=round(result["winrate"],1))
         local_bests.append((result["fitness"], result, cur))
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
@@ -1568,8 +1637,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
+        _plog("bh_start", bh=bh_i+1)
+        _bht0 = time.time()
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        _plog("bh_done", bh=bh_i+1, sec=round(time.time()-_bht0,1),
+              equity=round(bh_r["equity"],2), improved=bh_r["fitness"]>bh_best["fitness"])
         if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
@@ -1794,6 +1867,13 @@ def run_optimizer(params):
     _opt_stop_flag.clear()
     _sw_risk = risk_pct
 
+    # Сбрасываем perf-лог для новой сессии
+    global _perf_t0, _perf_log
+    _perf_t0 = time.time()
+    with _perf_lock:
+        _perf_log = []
+    _plog("start", symbol=symbol, tf=tf, days=days, risk=risk_pct, pool=_POOL_TYPE, cpus=os.cpu_count())
+
     with opt_lock:
         # Сохраняем sw_running — не обрываем уже живой тред скользящего окна
         sw_was_running = opt_state.get("sw_running", False)
@@ -1922,11 +2002,14 @@ def run_optimizer(params):
         with opt_lock:
             current_candles = list(_sw_candles)
 
+        _plog("cycle_start", cycle=cycle, n_candles=len(current_candles))
         cycle_t0 = time.time()
         final_result, final_params, top20 = _run_one_cycle(
             current_candles, days, risk_pct, olog, t0, tf,
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None)
+        _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
+              stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
         if _opt_stop_flag.is_set():
             print(f"[DBG] while-loop: stop_flag сработал на cycle={cycle}", flush=True); break
@@ -2108,6 +2191,9 @@ def run_optimizer(params):
         if not _opt_stop_flag.is_set():
             olog(f"⟳ Запускаем следующий цикл улучшения...", "info")
 
+    _plog("optimizer_done", reason="stop_flag" if _opt_stop_flag.is_set() else "finished")
+    _perf_save(symbol, tf)
+
     with opt_lock:
         opt_state["running"] = False
         opt_state["done"]    = True
@@ -2122,6 +2208,14 @@ def run_optimizer_safe(params):
         with opt_lock:
             opt_state["running"] = False
             opt_state["error"] = str(e)
+        # Сохраняем perf-лог даже при краше
+        try:
+            _plog("crash", error=str(e))
+            sym = params.get("wf_symbol","unknown")
+            tf2 = params.get("wf_tf","?")
+            _perf_save(sym, tf2)
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
