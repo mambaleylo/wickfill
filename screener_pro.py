@@ -1748,15 +1748,9 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
         with opt_lock:
-            # Показываем лучшее из top20, но не хуже seed-флора
-            best_so_far = top20_global[0] if top20_global else result
-            best_so_far_fit = best_so_far.get("validated_fitness") or best_so_far["fitness"]
-            if _seed_floor and best_so_far_fit < _seed_floor_fit:
-                best_so_far = _seed_floor
-            opt_state["best"] = best_so_far
             opt_state["top20"] = top20_global
             opt_state["elapsed"] = round(time.time()-t0, 1)
-            _sw_params = dict(best_so_far["params"])
+            # best и all_time_best НЕ трогаем здесь — они обновляются только в конце цикла
 
     if stop_flag(): return None, None, top20_global
 
@@ -1805,11 +1799,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
             bh_no_improve = 0  # OPT: сбрасываем счётчик при успехе
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock:
-                show_best = final_result
-                show_fit = show_best.get("validated_fitness") or show_best["fitness"]
-                if _seed_floor and show_fit < _seed_floor_fit:
-                    show_best = _seed_floor
-                opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
+                opt_state["top20"] = top20_global
+                # best и all_time_best НЕ трогаем здесь — только в конце цикла
         else:
             bh_no_improve += 1  # OPT: увеличиваем счётчик неудач
 
@@ -3659,7 +3650,7 @@ class Handler(BaseHTTPRequestHandler):
                     "generation":     opt_state["generation"],
                     "pass_num":       opt_state.get("pass_num",0),
                     "current_param":  opt_state.get("current_param",""),
-                    "best":           opt_state["best"],
+                    "best":           opt_state.get("all_time_best") or opt_state["best"],
                     "all_time_best":   opt_state.get("all_time_best"),
                     "top20":          opt_state["top20"],
                     "valid":          opt_state.get("valid", None),
