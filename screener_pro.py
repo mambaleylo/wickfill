@@ -2098,6 +2098,9 @@ def run_optimizer(params):
     prev_top20       = []     # накопленный top20 всех циклов
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
     _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
+    # Сразу заполняем из seed если он есть
+    if seed and seed.get("best") and seed["best"].get("params"):
+        _global_best_ever = seed["best"]
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
@@ -2215,14 +2218,9 @@ def run_optimizer(params):
                 cycle_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
             else:
                 cycle_best = _clamp_tp_result(final_result, tf)
-            # Обновляем глобальный рекорд только если стало лучше
-            cycle_vfit = cycle_best.get("validated_fitness") or cycle_best["fitness"]
-            if _global_best_ever is None:
+            # Обновляем глобальный рекорд только если equity стало лучше — никогда не откатывается
+            if _global_best_ever is None or cycle_best.get("equity", 0) > _global_best_ever.get("equity", 0):
                 _global_best_ever = cycle_best
-            else:
-                prev_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever["fitness"]
-                if cycle_vfit > prev_vfit:
-                    _global_best_ever = cycle_best
             all_time_best = _global_best_ever
             prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
