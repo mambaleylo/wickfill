@@ -858,7 +858,7 @@ def _fetch_current_candle(symbol, tf):
 # ═══════════════════════════════════════════════════════════════
 def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
-                              stop_flag=None):
+                              stop_flag=None, grids=None):
     current = dict(start_ind)
     best_result = pmap_fn([current])[0]
     pass_num = 0
@@ -872,8 +872,9 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
         pass_num += 1
         keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
         # Круг/Депозит — отображается через pass_num в progLabel, лог не нужен
+        _grids = grids if grids is not None else _GRIDS
 
-        steps_in_pass = sum(len(_GRIDS[k]) for k in keys_shuffled)
+        steps_in_pass = sum(len(_grids[k]) for k in keys_shuffled)
         with opt_lock:
             opt_state["pass_num"]=pass_num; opt_state["total"]=steps_in_pass; opt_state["progress"]=0
 
@@ -881,7 +882,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 
         for param_idx, key in enumerate(keys_shuffled):
             if stop_flag and stop_flag(): break
-            label=PARAM_SPACE[key]["label"]; grid=_GRIDS[key]
+            label=PARAM_SPACE[key]["label"]; grid=_grids[key]
             with opt_lock:
                 opt_state["current_param"]=label; opt_state["generation"]=param_idx+1
 
@@ -1509,7 +1510,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         olog(f"── {label} ──", "ok")
         with opt_lock: opt_state["generation"]=i+1
         result, cur, top20_global = _coordinate_descent_from(
-            start_ind, pmap, olog, t0, top20_global, label, max_passes=4, stop_flag=stop_flag)
+            start_ind, pmap, olog, t0, top20_global, label, max_passes=4, stop_flag=stop_flag, grids=_grids_local)
         local_bests.append((result["fitness"], result, cur))
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
@@ -1533,7 +1534,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         if stop_flag(): break
         perturbed=dict(bh_current)
         for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
-            spec=PARAM_SPACE[k]; grid=_GRIDS[k]
+            spec=PARAM_SPACE[k]; grid=_grids_local[k]
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
@@ -1541,7 +1542,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
         bh_r, bh_p, top20_global = _coordinate_descent_from(
-            perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag)
+            perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
         if bh_r["fitness"] > bh_best["fitness"]:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
