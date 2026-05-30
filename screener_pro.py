@@ -2106,6 +2106,7 @@ def run_optimizer(params):
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
+    _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
@@ -2217,12 +2218,22 @@ def run_optimizer(params):
             else:
                 prev_top20 = top20
 
-            # all_time_best берём из top20 по validated_fitness (учитывает стабильность)
+            # all_time_best — лучший за все циклы, никогда не откатывается назад
+            # Кандидат этого цикла: лучший в prev_top20 по validated_fitness
             if prev_top20:
-                all_time_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
+                cycle_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
             else:
-                all_time_best = _clamp_tp_result(final_result, tf)
-            prev_best_params = dict(all_time_best["params"])
+                cycle_best = _clamp_tp_result(final_result, tf)
+            # Обновляем глобальный рекорд только если стало лучше
+            cycle_vfit = cycle_best.get("validated_fitness") or cycle_best["fitness"]
+            if _global_best_ever is None:
+                _global_best_ever = cycle_best
+            else:
+                prev_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever["fitness"]
+                if cycle_vfit > prev_vfit:
+                    _global_best_ever = cycle_best
+            all_time_best = _global_best_ever
+            prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
             if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
                 olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
@@ -2338,12 +2349,7 @@ def run_optimizer(params):
                 opt_state["chart_path"]     = chart_path or ""
                 opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
-                # all_time_best обновляется только если стало лучше — никогда не откатывается назад
-                prev_atb = opt_state.get("all_time_best")
-                prev_atb_vfit = (prev_atb.get("validated_fitness") or prev_atb["fitness"]) if prev_atb else -1e18
-                cur_vfit = all_time_best.get("validated_fitness") or all_time_best["fitness"]
-                if cur_vfit >= prev_atb_vfit:
-                    opt_state["all_time_best"] = all_time_best
+                opt_state["all_time_best"]  = all_time_best  # всегда = глобальный рекорд
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
