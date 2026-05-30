@@ -2230,14 +2230,11 @@ def run_optimizer(params):
             all_time_best = _global_best_ever
             prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
-            if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
-                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
-            else:
-                _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
-                is_new_rec = all_time_best.get("equity", 0) > _prev_best_eq
-                run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
-                rec_flag = "🆕" if is_new_rec else "→"
-                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "ok" if cycle==1 else "found")
+            _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
+            is_new_rec = all_time_best.get("equity", 0) > _prev_best_eq
+            run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
+            rec_flag = "🆕" if is_new_rec else "→"
+            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found" if is_new_rec else "ok")
 
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
@@ -3412,8 +3409,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   if(!card){
     card=document.createElement('div');
     card.dataset.n=n;
-    strip.appendChild(card);
-    strip.scrollLeft = strip.scrollWidth;
+    strip.insertBefore(card, strip.firstChild);
     _cc[n]=card;
   }
   card.dataset.eq=eq;
