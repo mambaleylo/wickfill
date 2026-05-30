@@ -1923,9 +1923,11 @@ def run_optimizer(params):
             prev_best_params = dict(all_time_best["params"])
 
             if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
-                olog(f"  Цикл #{cycle}: ${final_result['equity']:.2f} — не улучшил рекорд (${all_time_best['equity']:.2f})", "info")
+                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
             else:
-                olog(f"✅ Цикл #{cycle} готов за {elapsed}с | 🏆 ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}%", "ok" if cycle==1 else "found")
+                is_new_rec = (cycle==1) or (all_time_best.get("validated_fitness", all_time_best["fitness"]) >= final_result.get("validated_fitness", final_result["fitness"]))
+                rec_flag = "🆕" if is_new_rec else "→"
+                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "ok" if cycle==1 else "found")
 
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
@@ -3080,13 +3082,8 @@ function _setActivity(text){
 }
 function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
-function _cycleCard(n,eq,wr,dd,elapsed,done){
+function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   const isPos=eq>100;
-  const delta=(_ccPrevEq!==null)?(eq-_ccPrevEq):null;
-  const allEqs=Object.values(_cc).map(c=>parseFloat(c.dataset.eq||'100'));
-  allEqs.push(eq);
-  const maxEq=Math.max(...allEqs),minEq=Math.min(100,...allEqs),range=maxEq-minEq||1;
-  const barPct=Math.min(100,Math.max(3,((eq-minEq)/range)*100));
   let card=_cc[n];
   if(!card){
     card=document.createElement('div');card.dataset.n=n;
@@ -3094,17 +3091,14 @@ function _cycleCard(n,eq,wr,dd,elapsed,done){
   }
   card.dataset.eq=eq;
   card.className='cc '+(done?(isPos?'pos':'neg'):'running');
-  const dStr=delta===null?'':(delta>=0?'↑ +':'↓ ')+Math.abs(delta).toFixed(0)+'$';
-  const dCls=delta===null?'flat':delta>=0?'pos':'neg';
   const eqCls=done?(isPos?'pos':'neg'):'run';
+  const recBadge=done?(isNewRec?'<span style="font-size:.55rem;color:var(--green);font-weight:700">🆕 рекорд</span>':'<span style="font-size:.55rem;color:var(--text3)">→ без изм.</span>'):'';
   card.innerHTML=
-    `<div class="cc-n">Цикл ${n}</div>`+
+    `<div class="cc-n" style="display:flex;justify-content:space-between;align-items:center">Цикл ${n}${recBadge}</div>`+
     `<div class="cc-eq ${eqCls}">$${eq.toFixed(0)}</div>`+
-    (delta!==null?`<div class="cc-d ${dCls}">${dStr}</div>`:`<div class="cc-d flat">—</div>`)+
-    `<div class="cc-m">WR ${wr.toFixed(0)}%`+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
+    `<div class="cc-m">WR <b>${wr.toFixed(0)}%</b>`+(trades>0?` · ${trades} сд`:'')+(dd>0?` · DD ${dd.toFixed(0)}%`:'')+`</div>`+
     (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
-    `<div class="cc-bar ${isPos?'':'neg'}" style="width:${barPct}%"></div>`;
-  if(done) _ccPrevEq=eq;
+    `<div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>`;
 }
 
 function logLine(msg,level){
@@ -3113,7 +3107,7 @@ function logLine(msg,level){
     addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
   }
   const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
-  if(cycleM){_startBuf=null;_cycleCard(parseInt(cycleM[1]),100,0,0,null,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
+  if(cycleM){_startBuf=null;_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
   const startM=msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
   if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}
   const passM=msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
@@ -3123,15 +3117,16 @@ function logLine(msg,level){
     const eq=parseFloat(foundM[1]),wr=parseFloat(foundM[3]),dd=parseFloat(foundM[5]);
     if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};
     const ns=Object.keys(_cc);
-    if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false);}
+    if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false,0,false);}
     return;
   }
   const endM=msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
   if(endM){const eq=parseFloat(endM[1]),wr=parseFloat(endM[2]),dd=parseFloat(endM[3]);if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};return;}
-  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*🏆\s*\$([\d.]+)\s+WR\s+([\d.]+)%/);
+  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*([🆕→]+)\s*\$([\d.]+)\s+WR\s+([\d.]+)%\s+Сд\s+(\d+)\s+DD\s+([\d.]+)%/);
   if(doneM){
     _clearActivity();
-    _cycleCard(parseInt(doneM[1]),parseFloat(doneM[3]),parseFloat(doneM[4]),_startBuf?.dd||0,doneM[2],true);
+    const isNewRec=doneM[3].includes('🆕');
+    _cycleCard(parseInt(doneM[1]),parseFloat(doneM[4]),parseFloat(doneM[5]),parseFloat(doneM[7]),doneM[2],true,parseInt(doneM[6]),isNewRec);
     _startBuf=null;return;
   }
   if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn');return;}
