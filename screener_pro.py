@@ -1464,7 +1464,6 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
     global _sw_params
 
     n_workers = max(1, os.cpu_count() or 1)
-    olog(f"   {'Thread' if _POOL_TYPE=='thread' else 'Process'}Pool: {n_workers} {'потоков' if _POOL_TYPE=='thread' else 'процессов'} (все ядра CPU)")
     _pool = PoolExecutor(
         max_workers=n_workers,
         initializer=_worker_init,
