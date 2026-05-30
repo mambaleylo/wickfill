@@ -2594,13 +2594,14 @@ details summary::-webkit-details-marker{display:none}
   .sidebar .div{display:none}
 
   /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
-  .right{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
+  .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
 
-  /* Top strip — вертикально на мобилке */
-  .top-strip{flex-direction:column;height:auto;flex-shrink:0;}
-  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;}
-  .cc-strip{flex-wrap:nowrap;overflow-x:auto;}
-  .log-col{max-height:300px;min-height:120px;}
+  /* Top strip — вертикально на мобилке, сам скроллится */
+  .top-strip{flex-direction:column;height:auto;max-height:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;flex-shrink:0;}
+  .cc-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .log-col{flex:1;min-height:120px;overflow:visible;}
+  .log-area{min-height:150px;overflow-y:visible;touch-action:pan-y;}
 
   /* График — под таблицей, компактнее */
   .chart-area{height:220px;flex:none;}
