@@ -872,7 +872,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
         if stop_flag and stop_flag(): break
         pass_num += 1
         keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
-        olog(f"  {start_label} | Круг #{pass_num} | Депозит: ${best_result['equity']:.2f}", "ok")
+        # Круг/Депозит — отображается через pass_num в progLabel, лог не нужен
 
         steps_in_pass = sum(len(_GRIDS[k]) for k in keys_shuffled)
         with opt_lock:
