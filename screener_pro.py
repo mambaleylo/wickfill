@@ -3124,7 +3124,7 @@ function logLine(msg,level){
 }
 
 function renderBest(b){
-  document.getElementById('bestSection').style.display='block';
+  // bestSection hidden — info shown in table above
   const eq=b.equity??100,wr=b.winrate??0,dd=b.max_dd??0,pf=b.profit_factor??0,tr=b.trades??0;
   // Мобильная строка
   const mobRow=document.getElementById('mob-best-row');
@@ -3229,7 +3229,8 @@ function renderTop20(list){
     const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
-    return `<tr><td>$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
+    const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
+    return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td></tr>`;
