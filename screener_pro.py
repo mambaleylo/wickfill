@@ -3437,6 +3437,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/sdcard/Download", "/sdcard/Downloads",
                 "/storage/emulated/0/Download", "/storage/emulated/0/Downloads",
                 os.path.expanduser("~/Downloads")]
+            # Паттерн: screener_pro + что-то + .py (длинное имя от браузера)
             _pat2 = _re.compile(r'^screener_pro.+\.py$')
             renamed = False
             msg = ""
@@ -3447,10 +3448,13 @@ class Handler(BaseHTTPRequestHandler):
                 src = os.path.join(d, sorted(matches)[-1])
                 dst = os.path.join(d, script_name)
                 try:
-                    if os.path.exists(dst): os.remove(dst)
+                    # Шаг 1: явно удаляем screener_pro.py если существует
+                    if os.path.exists(dst):
+                        os.remove(dst)
+                    # Шаг 2: переименовываем длинный файл в screener_pro.py
                     os.rename(src, dst)
                     renamed = True
-                    msg = f"Переименован: {os.path.basename(src)} → {script_name}"
+                    msg = f"Удалён старый → переименован: {os.path.basename(src)} → {script_name}"
                     break
                 except Exception as e:
                     msg = str(e)
