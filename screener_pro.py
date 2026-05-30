@@ -1813,6 +1813,7 @@ def run_optimizer(params):
                     opt_state["chart_updated_at"] = int(time.time())
                     opt_state["best"]             = pre_best
                     opt_state["top20"]            = prev_top20
+                    _sw_params = dict(prev_best_params)  # алерты сразу на базе seed
                 olog(f"✅ График готов: {len(sigs_pre)} сигналов", "ok")
         except Exception as e:
             olog(f"⚠ Предварительный график не удался: {e}", "warn")
