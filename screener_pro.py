@@ -2720,7 +2720,6 @@ details summary::-webkit-details-marker{display:none}
       <span id="mob-sl" style="font-size:.78rem;color:var(--text3)">SL —</span>
       <span id="mob-tp" style="font-size:.78rem;color:var(--text3)">TP —</span>
       <span style="flex:1"></span>
-      <span style="font-size:.72rem;cursor:pointer;color:var(--text3);padding:0 8px" onclick="toggleParams()">⚙</span>
     </div>
 
     <!-- Мобильные кнопки Сохранить / Загрузить -->
@@ -2734,10 +2733,6 @@ details summary::-webkit-details-marker{display:none}
       <div class="div"></div>
       <div class="card-title" style="margin-bottom:8px">Лучший результат</div>
       <div class="stats-grid" id="bestGrid"></div>
-      <div id="bestParamsWrap" style="display:none;margin-top:8px">
-        <div class="params-toggle" onclick="toggleParams()">› Параметры стратегии</div>
-        <div class="params-box" id="bestParams"></div>
-      </div>
     </div>
     <div id="validSection" style="display:none"></div>
 
