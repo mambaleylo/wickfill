@@ -1918,6 +1918,23 @@ def run_optimizer(params):
     _sw_candles = list(candles)
     n_sw = len(candles)   # сохраняем размер окна
 
+    # Запускаем прогрев пула ПАРАЛЛЕЛЬНО с остальной подготовкой (критично для Windows spawn)
+    _n_workers = max(1, os.cpu_count() or 1)
+    _plog("pool_create", workers=_n_workers, pool_type=_POOL_TYPE, n_candles=len(candles))
+    olog(f"⚙ Запуск {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'} ({_n_workers} {'потоков' if _POOL_TYPE=='thread' else 'процессов'})...", "info")
+    _pool_ready = threading.Event()
+    _shared_pool_holder = [None]
+
+    def _create_pool():
+        _shared_pool_holder[0] = PoolExecutor(
+            max_workers=_n_workers,
+            initializer=_worker_init,
+            initargs=(candles, 0, risk_pct)
+        )
+        _pool_ready.set()
+
+    threading.Thread(target=_create_pool, daemon=True).start()
+
     cycle = 0
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
@@ -1973,14 +1990,13 @@ def run_optimizer(params):
         except Exception as e:
             olog(f"⚠ Предварительный график не удался: {e}", "warn")
 
-    # Создаём пул один раз на всю сессию оптимизации — не пересоздаём между циклами/стартами
-    _n_workers = max(1, os.cpu_count() or 1)
-    _plog("pool_create", workers=_n_workers, pool_type=_POOL_TYPE, n_candles=len(candles))
-    _shared_pool = PoolExecutor(
-        max_workers=_n_workers,
-        initializer=_worker_init,
-        initargs=(candles, 0, risk_pct)
-    )
+    # Ждём готовности пула (он создавался параллельно с подготовкой)
+    if not _pool_ready.wait(timeout=120):
+        olog("❌ Пул воркеров не запустился за 120с", "error")
+        with opt_lock: opt_state["running"]=False; opt_state["error"]="Pool timeout"
+        return
+    _shared_pool = _shared_pool_holder[0]
+    _plog("pool_ready", sec=round(time.time()-t0, 1), workers=_n_workers)
 
     while True:
         if _opt_stop_flag.is_set(): break
