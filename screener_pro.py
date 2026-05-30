@@ -2707,7 +2707,10 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         ⏹ SW
       </button>
-      <button class="btn-ghost green2" id="chartBtn" onclick="listConfigs()">
+      <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="openChart()">
+        📊 График
+      </button>
+      <button class="btn-ghost" onclick="listConfigs()">
         🗂 Конфиги
       </button>
     </div>
