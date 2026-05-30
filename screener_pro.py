@@ -3413,6 +3413,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
     card=document.createElement('div');
     card.dataset.n=n;
     strip.insertBefore(card, strip.firstChild);
+    strip.scrollLeft = 0;  // прокручиваем к новой карточке слева
     _cc[n]=card;
   }
   card.dataset.eq=eq;
