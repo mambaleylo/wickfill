@@ -2184,14 +2184,13 @@ body>*{position:relative;z-index:1}
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .field label{font-size:.72rem;color:var(--text3);font-weight:500}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.field-inset{position:relative}
+.field-inset{display:flex;flex-direction:column;gap:3px}
 .field-inset label{
-  position:absolute;top:5px;left:10px;
   font-size:.58rem;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;
-  pointer-events:none;line-height:1;
+  pointer-events:none;line-height:1;padding-left:2px;
 }
 .field-inset input,.field-inset select{
-  padding:18px 10px 5px;font-size:.9rem;
+  padding:8px 10px;font-size:.9rem;
   border-radius:10px;
 }
 
@@ -2699,8 +2698,8 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         ⏹ SW
       </button>
-      <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="openChart()">
-        📊 График
+      <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="listConfigs()">
+        🗂 Конфиги
       </button>
     </div>
 
@@ -2976,6 +2975,20 @@ function _loadChartFrame(){
   if(ph) ph.style.display='none';
 }
 function openChart(){window.open('/chart','_blank');}
+function listConfigs(){
+  fetch('/list_configs')
+    .then(r=>r.json())
+    .then(d=>{
+      if(!d.ok){addLog('⚠ Конфиги: '+d.msg,'warn');return;}
+      if(!d.files||!d.files.length){addLog('📂 Конфиги не найдены. Папки проверены: '+d.dirs.join(', '),'warn');return;}
+      addLog('📂 Найдено конфигов: '+d.files.length,'info');
+      d.files.forEach(f=>{
+        const size=f.size_kb?` [${f.size_kb} KB]`:'';
+        addLog(`  • ${f.name}${size} → ${f.dir}`,'info');
+      });
+    })
+    .catch(e=>addLog('⚠ Ошибка загрузки конфигов: '+e,'warn'));
+}
 
 /* ── Poll ── */
 function poll(){
@@ -3518,6 +3531,22 @@ class Handler(BaseHTTPRequestHandler):
                             "file":os.path.basename(fpath) if fpath else "",
                             "path":fpath if fpath else ""})
             except Exception as e: self._json({"ok":False,"msg":str(e)})
+        elif parsed.path == "/list_configs":
+            import glob as _glob
+            files_found = []
+            search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
+            checked_dirs = []
+            for d in search_dirs:
+                if d in checked_dirs: continue
+                checked_dirs.append(d)
+                if not os.path.isdir(d): continue
+                for fp in sorted(_glob.glob(os.path.join(d, "wickfill_*.json"))):
+                    try:
+                        size_kb = round(os.path.getsize(fp) / 1024, 1)
+                        files_found.append({"name": os.path.basename(fp), "dir": d, "size_kb": size_kb})
+                    except Exception:
+                        files_found.append({"name": os.path.basename(fp), "dir": d})
+            self._json({"ok": True, "files": files_found, "dirs": [d for d in checked_dirs if os.path.isdir(d)]})
         else:
             self.send_response(404); self.end_headers()
 
