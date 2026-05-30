@@ -1493,7 +1493,14 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
             ind = dict(ind); ind["tp_pct"] = 1.2
         return ind
 
-    top20_global = list(prev_top20) if prev_top20 else []
+    def _clamp_result(r):
+        """Обрезает tp_pct в result-объекте (params + пересчёт не нужен — просто обрезаем сетку)."""
+        if not _small_tf or not r: return r
+        if r.get("params", {}).get("tp_pct", 0) <= 1.2: return r
+        r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.2
+        return r2
+
+    top20_global = [_clamp_result(r) for r in prev_top20] if prev_top20 else []
 
     # Фаза 1: многоточечный старт
     if prev_best_params:
@@ -1554,6 +1561,9 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
         final_result = top20_global[0]
         final_params = dict(final_result["params"])
+    # Гарантируем ограничение TP для малых TF в итоговом результате
+    final_result = _clamp_result(final_result)
+    final_params = dict(final_result["params"])
 
     # --- Валидация стабильности финального результата цикла ---
     # Прогоняем по 3 окнам (старая треть / средняя / свежая треть)
@@ -1605,6 +1615,20 @@ _AUTO_DIRS = [
     "/sdcard/Download",
     _script_dir(),
 ]
+
+def _clamp_tp_result(r, tf):
+    """Обрезает tp_pct > 1.2 для TF < 1h в result-объекте (модульный уровень)."""
+    if not r or TF_SECONDS.get(tf, 3600) >= 3600: return r
+    if r.get("params", {}).get("tp_pct", 0) <= 1.2: return r
+    r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.2
+    return r2
+
+def _clamp_tp_params(p, tf):
+    """Обрезает tp_pct > 1.2 для TF < 1h в dict params."""
+    if not p or TF_SECONDS.get(tf, 3600) >= 3600: return p
+    if p.get("tp_pct", 0) <= 1.2: return p
+    p2 = dict(p); p2["tp_pct"] = 1.2
+    return p2
 
 def _config_key(symbol, tf, days, risk_pct):
     """Уникальный ключ набора параметров для имени файла."""
@@ -1820,8 +1844,8 @@ def run_optimizer(params):
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
-        prev_best_params = dict(seed["best"]["params"])
-        prev_top20       = list(seed.get("top20") or [])
+        prev_best_params = _clamp_tp_params(dict(seed["best"]["params"]), tf)
+        prev_top20       = [_clamp_tp_result(r, tf) for r in (seed.get("top20") or [])]
         olog(f"📂 Загружен seed: ${seed['best'].get('equity',0):.2f} WR {seed['best'].get('winrate',0):.1f}% | top20: {len(prev_top20)} записей", "ok")
         # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
         try:
@@ -1893,9 +1917,9 @@ def run_optimizer(params):
 
             # all_time_best берём из top20 по validated_fitness (учитывает стабильность)
             if prev_top20:
-                all_time_best = max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"]))
+                all_time_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
             else:
-                all_time_best = final_result
+                all_time_best = _clamp_tp_result(final_result, tf)
             prev_best_params = dict(all_time_best["params"])
 
             if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
