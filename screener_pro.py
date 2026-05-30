@@ -350,6 +350,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 if abs(c["low"]-level_price)<=zone_tol: cnt+=1
         return cnt
 
+    # Предвычисляем массивы high/low/upwick/dnwick для быстрых скользящих окон
+    _all_hi  = [c["high"] for c in candles_list]
+    _all_lo  = [c["low"]  for c in candles_list]
+    _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
+    _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
+
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
     in_trade=False; t_dir=0; t_ep=0.0; t_tp=0.0; t_sl=0.0
@@ -403,14 +409,18 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         rsi_ok_l=(not urf) or rsi_now<=rlmax
         rsi_ok_s=(not urf) or rsi_now>=rsmin
 
-        prev_hi=max(candles_list[j]["high"] for j in range(max(0,i-ll),i)) if ulf else hi
-        prev_lo=min(candles_list[j]["low"]  for j in range(max(0,i-ll),i)) if ulf else lo
+        if ulf:
+            _s=max(0,i-ll)
+            prev_hi=max(_all_hi[_s:i]) if i>_s else hi
+            prev_lo=min(_all_lo[_s:i]) if i>_s else lo
+        else:
+            prev_hi=hi; prev_lo=lo
         near_hi=(not ulf) or (abs(hi-prev_hi)/prev_hi*100<=ltol if prev_hi>0 else False)
         near_lo=(not ulf) or (abs(lo-prev_lo)/prev_lo*100<=ltol if prev_lo>0 else False)
 
         if ugf:
-            hist_up=[candles_list[j]["high"]-max(candles_list[j]["open"],candles_list[j]["close"]) for j in range(max(0,i-gl),i)]
-            hist_dn=[min(candles_list[j]["open"],candles_list[j]["close"])-candles_list[j]["low"] for j in range(max(0,i-gl),i)]
+            _s=max(0,i-gl)
+            hist_up=_all_upw[_s:i]; hist_dn=_all_dnw[_s:i]
             geo_up=sum(1 for w in hist_up if up_w>w)/len(hist_up)*100 if hist_up else 0
             geo_dn=sum(1 for w in hist_dn if dn_w>w)/len(hist_dn)*100 if hist_dn else 0
             geo_ok_l=geo_up>=gmin; geo_ok_s=geo_dn>=gmin
@@ -445,18 +455,20 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             quiet_ok=True
 
         if uswf:
-            sw_hi=max((candles_list[j]["high"] for j in range(max(0,i-sw_len),i)), default=hi)
-            sw_lo=min((candles_list[j]["low"]  for j in range(max(0,i-sw_len),i)), default=lo)
+            _s=max(0,i-sw_len)
+            sw_hi=max(_all_hi[_s:i]) if i>_s else hi
+            sw_lo=min(_all_lo[_s:i]) if i>_s else lo
             sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
             sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
         else:
             sweep_ok_l=sweep_ok_s=True
 
         if umsf and i>=ms_lb*2:
-            swing_hi=max(candles_list[j]["high"] for j in range(i-ms_lb,i))
-            swing_lo=min(candles_list[j]["low"]  for j in range(i-ms_lb,i))
-            prev_s_hi=max(candles_list[j]["high"] for j in range(i-ms_lb*2,i-ms_lb))
-            prev_s_lo=min(candles_list[j]["low"]  for j in range(i-ms_lb*2,i-ms_lb))
+            _s1=i-ms_lb; _s2=i-ms_lb*2
+            swing_hi=max(_all_hi[_s1:i])
+            swing_lo=min(_all_lo[_s1:i])
+            prev_s_hi=max(_all_hi[_s2:_s1])
+            prev_s_lo=min(_all_lo[_s2:_s1])
             ms_up=swing_hi>prev_s_hi and swing_lo>prev_s_lo
             ms_down=swing_hi<prev_s_hi and swing_lo<prev_s_lo
             ms_ok_l=ms_down; ms_ok_s=ms_up
@@ -1679,6 +1691,8 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         else:
             with opt_lock:
                 opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+                if len(opt_state["logs"]) > 500:
+                    opt_state["logs"] = opt_state["logs"][-300:]
 
     # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
     if not os.path.isdir("/sdcard/Download"):
@@ -1789,6 +1803,8 @@ def run_optimizer(params):
     def olog(msg, level="info"):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+            if len(opt_state["logs"]) > 500:
+                opt_state["logs"] = opt_state["logs"][-300:]
 
     t0 = time.time()
 
@@ -1908,10 +1924,13 @@ def run_optimizer(params):
 
             # Накапливаем top20 между циклами — сначала merge, потом выбираем best
             if infinite:
-                merged = list(top20)
-                for r in prev_top20:
-                    merged = _update_top20(merged, r)
-                prev_top20 = merged
+                merged = list(top20) + [r for r in prev_top20 if r not in top20]
+                merged.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
+                seen_vf=set(); deduped=[]
+                for item in merged:
+                    k=round(item.get("validated_fitness") or item["fitness"], 6)
+                    if k not in seen_vf: seen_vf.add(k); deduped.append(item)
+                prev_top20 = deduped[:7]
             else:
                 prev_top20 = top20
 
