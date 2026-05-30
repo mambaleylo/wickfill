@@ -1428,8 +1428,10 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 _check_trade_close(prev_signals_for_close, chart_signals, alert_cfg, symbol, tf)
 
             chart_path = _save_chart(chart_candles_fmt, chart_signals, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            if chart_path:
-                with opt_lock: opt_state["chart_path"] = chart_path; opt_state["chart_updated_at"] = int(time.time())
+            with opt_lock:
+                if chart_path:
+                    opt_state["chart_path"] = chart_path
+                opt_state["chart_updated_at"] = int(time.time())
 
             print(f"[sw] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g} | всего={len(new_candles)}")
 
@@ -1589,9 +1591,18 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
 # ═══════════════════════════════════════════════════════════════
 # AUTO SAVE / LOAD CONFIG
 # ═══════════════════════════════════════════════════════════════
+def _script_dir():
+    """Безопасно возвращает папку скрипта — без краша если __file__ == '<stdin>'."""
+    try:
+        p = os.path.abspath(__file__)
+        d = os.path.dirname(p)
+        return d if d else os.getcwd()
+    except Exception:
+        return os.getcwd()
+
 _AUTO_DIRS = [
     "/sdcard/Download",
-    os.path.dirname(os.path.abspath(__file__)),
+    _script_dir(),
 ]
 
 def _config_key(symbol, tf, days, risk_pct):
@@ -1742,7 +1753,7 @@ def run_optimizer(params):
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
-            "chart_path": "", "chart_updated_at": 0,
+            "chart_path": "", "chart_updated_at": -1,
             "sw_last_update": 0, "sw_candle_count": 0,
             "last_signal_t": 0,
         })
@@ -2812,7 +2823,7 @@ details summary::-webkit-details-marker{display:none}
 </div><!-- /app -->
 
 <script>
-let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=0;
+let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=-1;
 const infiniteMode=true;
 function toggleInfinite(){} // режим всегда бесконечный
 
@@ -2843,8 +2854,8 @@ function _tryAutoLoad(){
       if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
       if(d.best) renderBest(d.best,d.top20||[]);
       _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
-      _loadChartFrame();
-      document.getElementById('chartBtn').style.display='flex';
+      // Показываем конфиг только если оптимизатор не работает
+      if(!polling){ _loadChartFrame(); document.getElementById('chartBtn').style.display='flex'; }
     }).catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded', function(){
@@ -2888,7 +2899,7 @@ function startOpt(){
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
       if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
-      lastLogCount=0;chartOpened=false;lastChartTs=0;
+      lastLogCount=0;chartOpened=false;lastChartTs=-1;
       _resetLog();
       document.getElementById('bestSection').style.display='none';
       document.getElementById('top20Wrap').style.display='none';
@@ -2899,6 +2910,11 @@ function startOpt(){
       document.getElementById('wfBtn').disabled=true;
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
+      // Скрываем старый график до появления нового
+      const _cf=document.getElementById('chartFrame');
+      const _cp=document.getElementById('chartPlaceholder');
+      if(_cf){_cf.style.display='none';_cf.src='about:blank';}
+      if(_cp){_cp.style.display='flex';}
       startTs=Date.now();
       function scheduleNext(){
         const interval=document.hidden?5000:1500;
