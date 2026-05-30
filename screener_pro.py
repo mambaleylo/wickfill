@@ -2997,8 +2997,7 @@ function poll(){
     // Badges
     const badge=document.getElementById('statusBadge2');
     const swb=document.getElementById('swBadge');
-    if(d.running&&d.infinite) badge.innerHTML='<span class="pill blue pulse">∞ бесконечный</span>';
-    else badge.innerHTML='';
+    badge.innerHTML='';
     // Быстродействие
     const sp=document.getElementById('speedPill');
     if(sp){
