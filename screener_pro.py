@@ -1747,8 +1747,6 @@ def run_optimizer(params):
     t0 = time.time()
 
     olog(f"   {symbol} | {tf} | {days}д | риск {risk_pct:.0f}%")
-    _nw = max(1, os.cpu_count() or 1)
-    olog(f"⚙ {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'}: {_nw} {'потоков' if _POOL_TYPE=='thread' else 'процессов'}", "found")
 
     # Загрузка свечей
     olog(f"📡 Загрузка свечей...")
@@ -1826,6 +1824,8 @@ def run_optimizer(params):
         if infinite:
             olog(f"", "info")
             if cycle == 1:
+                _nw = max(1, os.cpu_count() or 1)
+                olog(f"⚙ {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'}: {_nw} {'потоков' if _POOL_TYPE=='thread' else 'процессов'}", "found")
                 olog(f"═══ ЦИКЛ #{cycle} — ПЕРВЫЙ ПРОГОН ═══════════════════════════", "ok")
             else:
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
@@ -3053,13 +3053,13 @@ function addLogLine(msg,level){
   const el=document.createElement('div');
   el.className='log-line '+(level||'info');
   el.textContent=msg;
-  document.getElementById('wfLog').appendChild(el);
-  el.scrollIntoView({block:'nearest'});
+  const wfLog=document.getElementById('wfLog');
+  wfLog.insertBefore(el,wfLog.firstChild);
 }
 
 function _setActivity(text){
   let el=document.getElementById('ccActivity');
-  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';document.getElementById('wfLog').appendChild(el);}
+  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';const wl=document.getElementById('wfLog');wl.insertBefore(el,wl.firstChild);}
   el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
   el.scrollIntoView({block:'nearest'});
 }
