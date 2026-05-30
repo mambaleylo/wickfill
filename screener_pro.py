@@ -2631,9 +2631,8 @@ details summary::-webkit-details-marker{display:none}
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
-    <button class="icon-btn success" onclick="termuxUpdate()">↑ Update</button>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
-    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python">↺ Обновить</button>
   </div>
 </header>
 
@@ -3277,7 +3276,22 @@ function renameDownload(){
   }).catch(()=>{btn.textContent='✕';setTimeout(()=>{btn.disabled=false;btn.textContent='✏ Fix';},3000);});
 }
 function termuxUpdate(){
-  fetch('/reset_running').then(()=>setTimeout(()=>location.reload(),500));
+  const btn=event.target;btn.disabled=true;btn.textContent='⏳';
+  fetch('/termux_update').then(r=>r.json()).then(d=>{
+    if(d.ok){
+      btn.textContent='✓';
+      addLog('⏳ Перезапуск скрипта...','info');
+      setTimeout(()=>location.reload(),3000);
+    } else {
+      btn.disabled=false;btn.textContent='↺ Обновить';
+      addLog('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
+    }
+  }).catch(()=>{
+    // Сервер упал — это нормально при pkill, просто ждём перезапуска
+    btn.textContent='✓';
+    addLog('⏳ Сервер перезапускается...','info');
+    setTimeout(()=>location.reload(),4000);
+  });
 }
 
 /* ── Mobile toggles ── */
