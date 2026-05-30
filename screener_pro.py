@@ -2617,11 +2617,11 @@ details summary::-webkit-details-marker{display:none}
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
-    <span class="pill" id="latencyPill">— мс</span>
     <span class="pill" id="speedPill" style="display:none">⚡ —</span>
     <span id="statusBadge2"></span>
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
+    <span class="pill" id="latencyPill">— мс</span>
     <button class="icon-btn success" onclick="termuxUpdate()">↑ Update</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python">↺ Обновить</button>
