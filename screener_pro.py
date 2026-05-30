@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.106
+WickFill Optimizer v3.107-perf
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -293,61 +293,83 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     atr_series = _atr(candles_list, max(q_atr,2))
 
     def _calc_return_rate(i, is_up_wick):
+        # OPT: плоские массивы вместо candles_list[ki]["high"] и т.д.
         total=0.0; returns=0.0
         if i<=ret_n+1: return None
         max_look=min(ret_lb, i-ret_n-1)
         for k in range(ret_n+1, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_up=(c["high"]-max(c["open"],c["close"]))/k_rng*100
-            k_dn=(min(c["open"],c["close"])-c["low"])/k_rng*100
-            if is_up_wick and k_up>=ret_sim:
-                target=max(c["open"],c["close"]); total+=1
-                for j in range(1,ret_n+1):
-                    fi=ki+j
-                    if fi<n and candles_list[fi]["low"]<=target: returns+=1; break
-            elif not is_up_wick and k_dn>=ret_sim:
-                target=min(c["open"],c["close"]); total+=1
-                for j in range(1,ret_n+1):
-                    fi=ki+j
-                    if fi<n and candles_list[fi]["high"]>=target: returns+=1; break
+            if is_up_wick:
+                if _all_upw[ki]/k_rng*100>=ret_sim:
+                    target=_all_hi[ki]-_all_upw[ki]  # max(open,close)
+                    total+=1
+                    for j in range(1,ret_n+1):
+                        fi=ki+j
+                        if fi<n and _all_lo[fi]<=target: returns+=1; break
+            else:
+                if _all_dnw[ki]/k_rng*100>=ret_sim:
+                    target=_all_lo[ki]+_all_dnw[ki]  # min(open,close)
+                    total+=1
+                    for j in range(1,ret_n+1):
+                        fi=ki+j
+                        if fi<n and _all_hi[fi]>=target: returns+=1; break
         return (returns/total*100) if total>0 else None
 
+    # OPT: предвычисляем вспомогательные массивы для _count_tested_level / _count_wick_cluster
+    # Вместо доступа к candles_list[ki]["high"] и т.д. в горячем цикле — используем плоские массивы
+    # Они будут определены ниже (после _all_hi/_all_lo/_all_upw/_all_dnw/_all_rng),
+    # но функции замкнуты на нелокальный массив через nonlocal-ссылку (заполнится до вызова).
+    # Здесь определяем функции с захватом через closure.
+
     def _count_tested_level(i, level_price, is_up_search):
+        # OPT: использует _all_hi, _all_lo, _all_upw, _all_dnw, _all_rng вместо candles_list[ki]
         wins=0
         if i<3: return wins
         zone_tol=level_price*rep_zone/100.0; max_look=min(rep_lb,i-2)
+        closes = _worker_closes  # предвычисленный массив close в воркере (или None)
         for k in range(2, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_upw=c["high"]-max(c["open"],c["close"]); k_dnw=min(c["open"],c["close"])-c["low"]
-            k_up_pct=k_upw/k_rng*100; k_dn_pct=k_dnw/k_rng*100
-            if is_up_search and k_up_pct>=mwp:
-                if abs(c["high"]-level_price)<=zone_tol:
-                    fi=ki+1
-                    if fi<n and candles_list[fi]["close"]<max(c["open"],c["close"]): wins+=1
-            elif not is_up_search and k_dn_pct>=mwp:
-                if abs(c["low"]-level_price)<=zone_tol:
-                    fi=ki+1
-                    if fi<n and candles_list[fi]["close"]>min(c["open"],c["close"]): wins+=1
+            if is_up_search:
+                k_upw=_all_upw[ki]
+                if k_upw/k_rng*100>=mwp:
+                    if abs(_all_hi[ki]-level_price)<=zone_tol:
+                        fi=ki+1
+                        fi_close = (closes[fi] if closes is not None else candles_list[fi]["close"]) if fi<n else 0
+                        fi_open  = candles_list[fi]["open"] if fi<n else 0
+                        fi_hi    = _all_hi[fi] if fi<n else 0
+                        # close[fi] < max(open[fi], close_prev_wick_top) — используем open свечи fi
+                        body_top = _all_hi[ki] - _all_upw[ki]  # = max(open,close) свечи ki
+                        if fi<n and fi_close < body_top: wins+=1
+            else:
+                k_dnw=_all_dnw[ki]
+                if k_dnw/k_rng*100>=mwp:
+                    if abs(_all_lo[ki]-level_price)<=zone_tol:
+                        fi=ki+1
+                        body_bot = _all_lo[ki] + _all_dnw[ki]  # = min(open,close) свечи ki
+                        fi_close = (closes[fi] if closes is not None else candles_list[fi]["close"]) if fi<n else 0
+                        if fi<n and fi_close > body_bot: wins+=1
         return wins
 
     def _count_wick_cluster(i, level_price, is_up_search):
+        # OPT: использует предвычисленные плоские массивы
         cnt=0; zone_tol=level_price*clu_pct/100.0; max_look=min(clu_lb,i-1)
         for k in range(1, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_upw=c["high"]-max(c["open"],c["close"]); k_dnw=min(c["open"],c["close"])-c["low"]
-            if is_up_search and k_upw/k_rng*100>=mwp:
-                if abs(c["high"]-level_price)<=zone_tol: cnt+=1
-            elif not is_up_search and k_dnw/k_rng*100>=mwp:
-                if abs(c["low"]-level_price)<=zone_tol: cnt+=1
+            if is_up_search:
+                if _all_upw[ki]/k_rng*100>=mwp:
+                    if abs(_all_hi[ki]-level_price)<=zone_tol: cnt+=1
+            else:
+                if _all_dnw[ki]/k_rng*100>=mwp:
+                    if abs(_all_lo[ki]-level_price)<=zone_tol: cnt+=1
         return cnt
 
     # Предвычисляем массивы high/low/upwick/dnwick для быстрых скользящих окон
@@ -355,6 +377,47 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     _all_lo  = [c["low"]  for c in candles_list]
     _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
     _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
+    _all_rng = [c["high"]-c["low"] for c in candles_list]  # OPT: для _css без доступа к candles_list[j]
+
+    # OPT: скользящие deque для max(_all_hi[s:i]) и min(_all_lo[s:i]) — O(1) вместо O(window)
+    from collections import deque as _deque
+    def _build_sliding_max(arr, window):
+        """Возвращает массив, где result[i] = max(arr[max(0,i-window):i])."""
+        dq = _deque()  # хранит индексы, убывающие по значению
+        out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] <= v:
+                dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window:
+                dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+
+    def _build_sliding_min(arr, window):
+        dq = _deque()
+        out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] >= v:
+                dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window:
+                dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+
+    # Предвычисляем скользящие max/min для каждого фильтра с окном
+    _slide_hi_ll  = _build_sliding_max(_all_hi, ll)   if ulf  else None
+    _slide_lo_ll  = _build_sliding_min(_all_lo, ll)   if ulf  else None
+    _slide_upw_gl = _build_sliding_max(_all_upw, gl)  if ugf  else None  # не нужен, geo считает percentile
+    _slide_hi_sw  = _build_sliding_max(_all_hi, sw_len) if uswf else None
+    _slide_lo_sw  = _build_sliding_min(_all_lo, sw_len) if uswf else None
+    # Для geo filter: percentile — нужен полный слайс, оставляем как есть (окно gl <= 30, дёшево)
+    # Для ms filter: sliding max/min с окном ms_lb
+    _slide_hi_ms1 = _build_sliding_max(_all_hi, ms_lb)   if umsf else None
+    _slide_lo_ms1 = _build_sliding_min(_all_lo, ms_lb)   if umsf else None
+    _slide_hi_ms2 = _build_sliding_max(_all_hi, ms_lb*2) if umsf else None
+    _slide_lo_ms2 = _build_sliding_min(_all_lo, ms_lb*2) if umsf else None
 
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
@@ -409,10 +472,10 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         rsi_ok_l=(not urf) or rsi_now<=rlmax
         rsi_ok_s=(not urf) or rsi_now>=rsmin
 
+        # OPT: level filter — sliding deque O(1) вместо max/min по slice
         if ulf:
-            _s=max(0,i-ll)
-            prev_hi=max(_all_hi[_s:i]) if i>_s else hi
-            prev_lo=min(_all_lo[_s:i]) if i>_s else lo
+            prev_hi=_slide_hi_ll[i-1] if i>0 else hi
+            prev_lo=_slide_lo_ll[i-1] if i>0 else lo
         else:
             prev_hi=hi; prev_lo=lo
         near_hi=(not ulf) or (abs(hi-prev_hi)/prev_hi*100<=ltol if prev_hi>0 else False)
@@ -427,13 +490,14 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         else:
             geo_ok_l=geo_ok_s=True
 
+        # OPT: _css использует _all_rng вместо candles_list[j]["high"]-candles_list[j]["low"]
         def _css(is_long):
             wick=dn_w if is_long else up_w; w_pct=dn_w_pct if is_long else up_w_pct
             s1=min(w_pct/mwp*100,100) if mwp>0 else 100
             cp=(cl-lo)/rng*100 if rng>0 else 50
             s2=cp if is_long else 100-cp; s2=max(min(s2,100),0)
             s3=max(min((1-body/wick)*100,100),0) if wick>0 else 0
-            hist_rng=[candles_list[j]["high"]-candles_list[j]["low"] for j in range(max(0,i-20),i)]
+            _cs=max(0,i-20); hist_rng=_all_rng[_cs:i]
             s4=sum(1 for r2 in hist_rng if rng>r2)/len(hist_rng)*100 if hist_rng else 50
             wp_v=dn_w_pp if is_long else up_w_pp
             s5=min(wp_v/mwpp*100,100) if mwpp>0 else 100
@@ -447,28 +511,29 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             css_ok_l=css_ok_s=True
 
         if uqf and atr_now>0:
-            hist_atr=[atr_series[j] for j in range(max(0,i-q_atr),i) if atr_series[j]>0]
-            avg_atr=sum(hist_atr)/len(hist_atr) if hist_atr else atr_now
+            _qs=max(0,i-q_atr); hist_atr=atr_series[_qs:i]
+            valid_atr=[v for v in hist_atr if v>0]
+            avg_atr=sum(valid_atr)/len(valid_atr) if valid_atr else atr_now
             ratio=atr_now/avg_atr if avg_atr>0 else 1
             quiet_ok=q_min<=ratio<=q_max
         else:
             quiet_ok=True
 
+        # OPT: sweep filter — sliding deque O(1)
         if uswf:
-            _s=max(0,i-sw_len)
-            sw_hi=max(_all_hi[_s:i]) if i>_s else hi
-            sw_lo=min(_all_lo[_s:i]) if i>_s else lo
+            sw_hi=_slide_hi_sw[i-1] if i>0 else hi
+            sw_lo=_slide_lo_sw[i-1] if i>0 else lo
             sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
             sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
         else:
             sweep_ok_l=sweep_ok_s=True
 
+        # OPT: ms filter — sliding deque O(1) вместо max/min по двум slices
         if umsf and i>=ms_lb*2:
-            _s1=i-ms_lb; _s2=i-ms_lb*2
-            swing_hi=max(_all_hi[_s1:i])
-            swing_lo=min(_all_lo[_s1:i])
-            prev_s_hi=max(_all_hi[_s2:_s1])
-            prev_s_lo=min(_all_lo[_s2:_s1])
+            swing_hi  = _slide_hi_ms1[i-1]
+            swing_lo  = _slide_lo_ms1[i-1]
+            prev_s_hi = _slide_hi_ms2[i-ms_lb-1] if i-ms_lb-1>=0 else swing_hi
+            prev_s_lo = _slide_lo_ms2[i-ms_lb-1] if i-ms_lb-1>=0 else swing_lo
             ms_up=swing_hi>prev_s_hi and swing_lo>prev_s_lo
             ms_down=swing_hi<prev_s_hi and swing_lo<prev_s_lo
             ms_ok_l=ms_down; ms_ok_s=ms_up
@@ -868,6 +933,11 @@ def _fetch_current_candle(symbol, tf):
 # ═══════════════════════════════════════════════════════════════
 # COORDINATE DESCENT
 # ═══════════════════════════════════════════════════════════════
+# OPT: обратный маппинг use_X -> [dep_param1, dep_param2, ...] для батчинга
+_USE_TO_DEPS = {}
+for _dep_k, _use_k in FILTER_GROUPS.items():
+    _USE_TO_DEPS.setdefault(_use_k, []).append(_dep_k)
+
 def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
                               stop_flag=None, grids=None):
@@ -882,27 +952,100 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
     while True:
         if stop_flag and stop_flag(): break
         pass_num += 1
-        keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
-        # Круг/Депозит — отображается через pass_num в progLabel, лог не нужен
         _grids = grids if grids is not None else _GRIDS
 
-        steps_in_pass = sum(len(_grids[k]) for k in keys_shuffled)
+        # OPT: use_* параметры пропускаем отдельно — они обрабатываются вместе
+        # с зависимыми параметрами в одном батче (см. ниже)
+        keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
+        # Разбиваем на use_* и остальные
+        use_keys_set = set(_USE_TO_DEPS.keys())
+        # use_* будут обработаны внутри блока зависимых параметров
+        # Строим порядок: сначала use_* параметр (если ещё не обработан), потом его зависимые
+        processed_use = set()
+        ordered_keys = []
+        for k in keys_shuffled:
+            uk = FILTER_GROUPS.get(k)  # родительский use_* для зависимого параметра
+            if uk and uk not in processed_use:
+                # Первый зависимый параметр этой группы — вставляем use_* перед ним
+                ordered_keys.append(uk)
+                processed_use.add(uk)
+            if k not in use_keys_set:  # не добавляем use_* дважды
+                ordered_keys.append(k)
+            elif k not in processed_use:
+                ordered_keys.append(k)
+                processed_use.add(k)
+
+        steps_in_pass = sum(len(_grids[k]) for k in ordered_keys if k in _grids)
         with opt_lock:
             opt_state["pass_num"]=pass_num; opt_state["total"]=steps_in_pass; opt_state["progress"]=0
 
         step_in_pass=0; improved_in_pass=False
         _pass_t0 = time.time()
+        _visited_use = set()  # OPT: не обрабатываем use_* дважды
 
-        for param_idx, key in enumerate(keys_shuffled):
+        for param_idx, key in enumerate(ordered_keys):
             if stop_flag and stop_flag(): break
-            label=PARAM_SPACE[key]["label"]; grid=_grids[key]
+            if key not in PARAM_SPACE: continue  # защита
+            label=PARAM_SPACE[key]["label"]; grid=_grids.get(key, _GRIDS.get(key, []))
+            if not grid: continue
             with opt_lock:
                 opt_state["current_param"]=label; opt_state["generation"]=param_idx+1
 
             _param_t0 = time.time()
+
+            # OPT: если это use_* параметр — объединяем с зависимыми в один батч
+            # Смысл: вместо отдельного pmap([use=True, use=False]) + отдельного pmap([dep1_val1,...])
+            # делаем один pmap для use=False + все значения dep1 при use=True
+            # Это сокращает число pmap-вызовов для групп с 2+ зависимыми параметрами
+            if key in use_keys_set and key not in _visited_use:
+                _visited_use.add(key)
+                deps = _USE_TO_DEPS.get(key, [])
+                # Кандидат с use=False (все зависимые неважны)
+                candidates = [{**current, key: False}]
+                # Кандидаты с use=True + все значения первого зависимого параметра
+                # (остальные зависимые будут оптимизированы в своих итерациях)
+                if deps and current.get(key, True):
+                    first_dep = deps[0]
+                    dep_grid = _grids.get(first_dep, _GRIDS.get(first_dep, []))
+                    for val in dep_grid:
+                        candidates.append({**current, key: True, first_dep: val})
+                else:
+                    candidates.append({**current, key: True})
+
+                results = pmap_fn(candidates); results.sort(key=lambda x: -x["fitness"])
+                _param_dt = round(time.time() - _param_t0, 3)
+                param_best = results[0]
+                best_use_val = param_best["params"][key]
+
+                if param_best["fitness"] > best_result["fitness"]:
+                    delta = param_best["equity"] - best_result["equity"]
+                    # Применяем весь найденный набор параметров (use + первый dep если улучшился)
+                    for upd_k, upd_v in param_best["params"].items():
+                        if upd_k == key or upd_k in deps:
+                            current[upd_k] = upd_v
+                    best_result = param_best; improved_in_pass = True
+                    val_str = "да" if best_use_val else "нет"
+                    olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
+
+                _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
+                step_in_pass += len(grid)
+                with opt_lock:
+                    opt_state["progress"] = step_in_pass
+                    opt_state["elapsed"] = round(time.time()-t0, 1)
+                continue
+
+            # OPT: зависимый параметр — пропускаем если use_* = False (симуляция всё равно игнорирует)
+            use_key = FILTER_GROUPS.get(key)
+            if use_key and not current.get(use_key, True):
+                step_in_pass += len(grid)
+                with opt_lock:
+                    opt_state["progress"] = step_in_pass
+                    opt_state["elapsed"] = round(time.time()-t0, 1)
+                continue
+
             candidates=[{**current, key:val} for val in grid]
-            use_key=FILTER_GROUPS.get(key)
-            if use_key and current.get(use_key,True):
+            # Добавляем кандидата с отключённым родительским use_* (если ещё не оптимизировали его)
+            if use_key and use_key not in _visited_use and current.get(use_key, True):
                 candidates.append({**current, use_key:False})
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
@@ -911,13 +1054,18 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 
             if param_best["fitness"]>best_result["fitness"]:
                 delta=param_best["equity"]-best_result["equity"]
-                current[key]=best_val; best_result=param_best; improved_in_pass=True
+                current[key]=best_val
+                # Если лучший кандидат отключил use_*, обновляем его тоже
+                if use_key and param_best["params"].get(use_key) == False:
+                    current[use_key] = False
+                    _visited_use.add(use_key)
+                best_result=param_best; improved_in_pass=True
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
 
             _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
 
-            step_in_pass+=len(grid)+(1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0)
+            step_in_pass+=len(grid)
             with opt_lock:
                 opt_state["progress"]=step_in_pass
                 opt_state["elapsed"]=round(time.time()-t0,1)
@@ -1615,29 +1763,46 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     local_bests.sort(key=lambda x: -x[0])
     best_f, best_r1, best_p1 = local_bests[0]
 
-    # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
-    olog(f"━━ ФАЗА 2: Basin Hopping (12 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
+    # Фаза 2: Basin Hopping от лучшей точки
+    # OPT: early-stop после 4 итераций подряд без улучшения (экономит ~60% времени BH)
+    BH_MAX = 12; BH_PATIENCE = 4
+    olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}) ━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
+    bh_no_improve = 0  # OPT: счётчик подряд идущих неудач
     try:
-      for bh_i in range(12):
+      for bh_i in range(BH_MAX):
         if stop_flag(): break
+        # OPT: early-stop по patience
+        if bh_no_improve >= BH_PATIENCE:
+            olog(f"  ⏭ BH early-stop: {BH_PATIENCE} итераций без улучшения", "info")
+            break
+        # OPT: при perturbation учитываем FILTER_GROUPS — не меняем зависимые параметры
+        # если их родительский use_* = False (симуляция всё равно их игнорирует,
+        # но coordinate_descent потом не найдёт улучшения и тратит время впустую)
         perturbed=dict(bh_current)
-        for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
+        keys_to_perturb = random.sample(_KEYS, max(1, int(len(_KEYS)*0.35)))
+        for k in keys_to_perturb:
+            # Пропускаем зависимый параметр если его родитель отключён
+            parent = FILTER_GROUPS.get(k)
+            if parent and not perturbed.get(parent, True):
+                continue
             spec=PARAM_SPACE[k]; grid=_grids_local[k]
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
+        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/{BH_MAX}"
         _plog("bh_start", bh=bh_i+1)
         _bht0 = time.time()
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        improved = bh_r["fitness"] > bh_best["fitness"]
         _plog("bh_done", bh=bh_i+1, sec=round(time.time()-_bht0,1),
-              equity=round(bh_r["equity"],2), improved=bh_r["fitness"]>bh_best["fitness"])
-        if bh_r["fitness"] > bh_best["fitness"]:
+              equity=round(bh_r["equity"],2), improved=improved)
+        if improved:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
+            bh_no_improve = 0  # OPT: сбрасываем счётчик при успехе
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock:
                 show_best = final_result
@@ -1645,6 +1810,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 if _seed_floor and show_fit < _seed_floor_fit:
                     show_best = _seed_floor
                 opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
+        else:
+            bh_no_improve += 1  # OPT: увеличиваем счётчик неудач
 
     finally:
         pass  # пул управляется снаружи (run_optimizer), не закрываем здесь
@@ -3795,7 +3962,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.0")
+    print(f"WickFill Optimizer v3.107-perf")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
