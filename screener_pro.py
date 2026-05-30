@@ -1588,6 +1588,7 @@ _AUTO_DIRS = [
     os.path.expanduser("~/downloads"),
     os.path.expanduser("~/Download"),
     os.path.expanduser("~/Downloads"),
+    os.path.dirname(os.path.abspath(__file__)),  # папка рядом со скриптом — всегда доступна
 ]
 
 def _config_key(symbol, tf, days, risk_pct):
@@ -1636,6 +1637,12 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     eq  = best.get("equity", 100)
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
 
+    def _log(msg, level="info"):
+        if olog: olog(msg, level)
+        else:
+            with opt_lock:
+                opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+
     # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
     for d in ("/sdcard/Download", "/sdcard/Downloads"):
         if not os.path.isdir(d):
@@ -1644,11 +1651,18 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
 
     # Найти папку для записи (первая существующая и доступная для записи)
     save_dir = None
+    tried = []
     for d in _AUTO_DIRS:
-        if os.path.isdir(d) and os.access(d, os.W_OK):
+        exists = os.path.isdir(d)
+        writable = os.access(d, os.W_OK) if exists else False
+        tried.append(f"{d} ({'✓' if writable else ('нет папки' if not exists else 'нет записи')})")
+        if exists and writable:
             save_dir = d; break
     if not save_dir:
         save_dir = os.path.dirname(os.path.abspath(__file__))
+        tried.append(f"{save_dir} (фолбек скрипта)")
+
+    _log(f"💾 Сохраняю в: {save_dir}", "info")
 
     fname = _config_filename(symbol, tf, days, risk_pct, eq)
     fpath = os.path.join(save_dir, fname)
@@ -1661,22 +1675,19 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     }
 
     # Атомарная запись: пишем во временный файл рядом, потом os.replace()
-    # os.replace() гарантирует замену без создания копий (1)
     tmp_path = None
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, fpath)   # атомарная замена — перезапишет если уже есть
+        os.replace(tmp_path, fpath)
     except Exception as e:
+        _log(f"⚠ Сохранение не удалось: {save_dir} → {e}", "warn")
+        _log(f"  Проверенные папки: {', '.join(tried)}", "warn")
         print(f"[auto_save] Ошибка записи: {e}", flush=True)
-        with opt_lock:
-            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"⚠ Сохранение не удалось: {save_dir} → {e}", "level": "warn"})
         if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+            try: os.remove(tmp_path)
+            except Exception: pass
         return None
 
     # Удалить ВСЕ старые файлы того же набора параметров (кроме только что сохранённого)
@@ -1699,11 +1710,10 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     except Exception:
         pass
 
-    if olog: olog(f"💾 Сохранено в {time.strftime('%H:%M:%S')}: {fpath}", "found")
+    if olog: olog(f"💾 Сохранено: {fpath}", "found")
     else:
-        # Логируем напрямую в opt_state если olog не передан (напр. из /save_result)
         with opt_lock:
-            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено в {time.strftime('%H:%M:%S')}: {fpath}", "level": "found"})
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "found"})
     print(f"[auto_save] Сохранён: {fpath}", flush=True)
     return fpath
 
