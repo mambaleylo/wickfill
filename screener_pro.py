@@ -2828,7 +2828,7 @@ details summary::-webkit-details-marker{display:none}
         <thead>
           <tr>
             <th>Депозит</th><th>WR%</th>
-            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th>
+            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th><th title="Риск / Стоп-лосс">Плечо×</th>
           </tr>
         </thead>
         <tbody id="top20Body"></tbody>
@@ -3255,10 +3255,15 @@ function renderTop20(list){
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
     const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
+    const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
+    const lev=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
+      ? (risk/parseFloat(sl)).toFixed(1)+'×' : '—';
+    const levColor=parseFloat(lev)>20?'var(--red)':parseFloat(lev)>10?'var(--yellow)':'inherit';
     return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
-      <td>${sl}</td><td>${tp}</td></tr>`;
+      <td>${sl}</td><td>${tp}</td>
+      <td style="font-weight:600;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
 
