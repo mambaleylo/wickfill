@@ -3412,8 +3412,8 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   if(!card){
     card=document.createElement('div');
     card.dataset.n=n;
-    strip.insertBefore(card, strip.firstChild);
-    strip.scrollLeft = 0;  // прокручиваем к новой карточке слева
+    strip.appendChild(card);
+    strip.scrollLeft = strip.scrollWidth;
     _cc[n]=card;
   }
   card.dataset.eq=eq;
