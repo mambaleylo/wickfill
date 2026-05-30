@@ -2741,6 +2741,9 @@ details summary::-webkit-details-marker{display:none}
       <div class="div"></div>
       <div class="card-title" style="margin-bottom:8px">Лучший результат</div>
       <div class="stats-grid" id="bestGrid"></div>
+      <div id="bestParamsWrap" style="display:none;margin-top:8px">
+        <div id="bestParams" style="font-size:.75rem;color:var(--text2);line-height:1.7"></div>
+      </div>
     </div>
     <div id="validSection" style="display:none"></div>
 
