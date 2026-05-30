@@ -2392,7 +2392,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Chart area — fills all remaining space */
 .chart-area{
   flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
-  background:var(--cream2);
+  background:var(--bg);
 }
 .chart-placeholder{
   flex:1;display:flex;align-items:center;justify-content:center;
@@ -2401,6 +2401,7 @@ input[type=number]{-moz-appearance:textfield}
 }
 #chartFrame{
   width:100%;height:100%;flex:1;border:none;display:none;min-height:0;
+  background:var(--bg);
 }
 
 /* Best combination table — inside log-col below log */
