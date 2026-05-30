@@ -1527,7 +1527,7 @@ def _perf_save(symbol, tf):
         print(f"[perf] Не удалось сохранить лог\n{txt[:2000]}", flush=True)
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
-                   prev_best_params=None, prev_top20=None):
+                   prev_best_params=None, prev_top20=None, pool=None, n_workers=1):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
@@ -1537,19 +1537,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     if _small_tf:
         _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
 
-    n_workers = max(1, os.cpu_count() or 1)
-    _pool = PoolExecutor(
-        max_workers=n_workers,
-        initializer=_worker_init,
-        initargs=(candles, 0, risk_pct)
-    )
-
     def pmap(candidates):
         if not candidates:
             return []
         chunk = max(1, len(candidates) // (n_workers * 2))
         _pt0 = time.time()
-        result = list(_pool.map(_worker_evaluate, candidates, chunksize=chunk))
+        result = list(pool.map(_worker_evaluate, candidates, chunksize=chunk))
         _dt = round(time.time() - _pt0, 3)
         _plog("pmap", n=len(candidates), workers=n_workers, sec=_dt,
               sec_per_cand=round(_dt/len(candidates),4) if candidates else 0)
@@ -1617,7 +1610,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
             opt_state["elapsed"] = round(time.time()-t0, 1)
             _sw_params = dict(best_so_far["params"])
 
-    if stop_flag(): _pool.shutdown(wait=False); return None, None, top20_global
+    if stop_flag(): return None, None, top20_global
 
     local_bests.sort(key=lambda x: -x[0])
     best_f, best_r1, best_p1 = local_bests[0]
@@ -1654,7 +1647,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
 
     finally:
-        _pool.shutdown(wait=False)
+        pass  # пул управляется снаружи (run_optimizer), не закрываем здесь
 
     if top20_global and top20_global[0]["fitness"] > final_result["fitness"]:
         final_result = top20_global[0]
@@ -1980,6 +1973,15 @@ def run_optimizer(params):
         except Exception as e:
             olog(f"⚠ Предварительный график не удался: {e}", "warn")
 
+    # Создаём пул один раз на всю сессию оптимизации — не пересоздаём между циклами/стартами
+    _n_workers = max(1, os.cpu_count() or 1)
+    _plog("pool_create", workers=_n_workers, pool_type=_POOL_TYPE, n_candles=len(candles))
+    _shared_pool = PoolExecutor(
+        max_workers=_n_workers,
+        initializer=_worker_init,
+        initargs=(candles, 0, risk_pct)
+    )
+
     while True:
         if _opt_stop_flag.is_set(): break
         cycle += 1
@@ -2007,7 +2009,8 @@ def run_optimizer(params):
         final_result, final_params, top20 = _run_one_cycle(
             current_candles, days, risk_pct, olog, t0, tf,
             prev_best_params=prev_best_params if infinite else None,
-            prev_top20=prev_top20 if infinite else None)
+            prev_top20=prev_top20 if infinite else None,
+            pool=_shared_pool, n_workers=_n_workers)
         _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
@@ -2015,6 +2018,7 @@ def run_optimizer(params):
             print(f"[DBG] while-loop: stop_flag сработал на cycle={cycle}", flush=True); break
 
         print(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}", flush=True)
+        cycle_elapsed = round(time.time() - cycle_t0, 1)   # вычисляем сразу — используется ниже
         if final_result:
             elapsed = round(time.time()-t0, 1)
 
@@ -2145,7 +2149,6 @@ def run_optimizer(params):
             if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
             chart_path = _save_chart(chart_candles_fmt, chart_signals, all_time_best, symbol, tf, risk_pct)
-            cycle_elapsed = round(time.time() - cycle_t0, 1)
             with opt_lock:
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
@@ -2191,6 +2194,7 @@ def run_optimizer(params):
         if not _opt_stop_flag.is_set():
             olog(f"⟳ Запускаем следующий цикл улучшения...", "info")
 
+    _shared_pool.shutdown(wait=False)
     _plog("optimizer_done", reason="stop_flag" if _opt_stop_flag.is_set() else "finished")
     _perf_save(symbol, tf)
 
