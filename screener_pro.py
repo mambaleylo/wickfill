@@ -3405,10 +3405,16 @@ function _clearActivity(){const el=document.getElementById('ccActivity');if(el)e
 
 function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   const isPos=eq>100;
-  let card=_cc[n];
+  const strip=document.getElementById('ccStrip');
+  // Ищем карточку в реальном DOM (не в кеше — кеш сбрасывается при очистке)
+  let card=strip.querySelector(`[data-n="${n}"]`);
   if(!card){
-    card=document.createElement('div');card.dataset.n=n;
-    _cc[n]=card;const strip=document.getElementById('ccStrip');strip.insertBefore(card,strip.firstChild);
+    card=document.createElement('div');
+    card.dataset.n=n;
+    // Новые карточки добавляем в КОНЕЦ, скролл тянем вправо
+    strip.appendChild(card);
+    strip.scrollLeft=strip.scrollWidth;
+    _cc[n]=card;
   }
   card.dataset.eq=eq;
   card.className='cc '+(done?(isPos?'pos':'neg'):'running');
@@ -3421,7 +3427,6 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
     (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
     `<div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>`;
 }
-
 function logLine(msg,level){
   if(!msg||!msg.trim()) return;
   if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool|Сохранено|Авто-сохранение/i.test(msg)){
