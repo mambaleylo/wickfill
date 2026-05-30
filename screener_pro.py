@@ -2233,7 +2233,9 @@ def run_optimizer(params):
             if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
                 olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
             else:
-                is_new_rec = (cycle==1) or (all_time_best.get("validated_fitness", all_time_best["fitness"]) >= final_result.get("validated_fitness", final_result["fitness"]))
+                _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
+                is_new_rec = all_time_best.get("equity", 0) > _prev_best_eq
+                run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
                 rec_flag = "🆕" if is_new_rec else "→"
                 olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "ok" if cycle==1 else "found")
 
@@ -3412,8 +3414,7 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
     card=document.createElement('div');
     card.dataset.n=n;
     // Новые карточки добавляем в КОНЕЦ, скролл тянем вправо
-    strip.appendChild(card);
-    strip.scrollLeft=strip.scrollWidth;
+    strip.insertBefore(card, strip.firstChild);
     _cc[n]=card;
   }
   card.dataset.eq=eq;
@@ -3505,8 +3506,8 @@ function renderValid(v, best, windows, minDays){
   if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
-  const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
-  const ok=ratio>=0.75;
+  const ratio=v&&trainWr>0?(v.winrate/trainWr):null;
+  const ok=ratio!==null&&ratio>=0.75;
   const color=ok?'var(--green)':'var(--red)';
   const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
 
@@ -3521,7 +3522,7 @@ function renderValid(v, best, windows, minDays){
 
   // Строка 1: статус + валид WR vs трейн WR
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <span style="color:${color};font-weight:700;font-size:.88rem">${ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
+    <span style="color:${color};font-weight:700;font-size:.88rem">${ratio===null?'— Нет данных':ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
     <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
   </div>`;
 
