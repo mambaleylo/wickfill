@@ -3412,7 +3412,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/sdcard/Download", "/sdcard/Downloads",
                 "/storage/emulated/0/Download", "/storage/emulated/0/Downloads",
                 os.path.expanduser("~/Downloads")]
-            _pat2 = _re.compile(r'^screener_pro\s*\(\d+\)\.py$')
+            _pat2 = _re.compile(r'^screener_pro.+\.py$')
             renamed = False
             msg = ""
             for d in candidate_dirs:
