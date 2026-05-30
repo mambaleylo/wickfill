@@ -2821,6 +2821,8 @@ function _tryAutoLoad(){
       if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
       if(d.best) renderBest(d.best,d.top20||[]);
       _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
+      _loadChartFrame();
+      document.getElementById('chartBtn').style.display='flex';
     }).catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded', function(){
@@ -2973,9 +2975,9 @@ function poll(){
     if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
     if(d.best) renderTop20([d.best]);  // таблица всегда показывает текущий best (тот же что на графике)
     if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
-    if(d.chart_path){
+    if(d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
-      if(d.chart_updated_at>0&&d.chart_updated_at!==lastChartTs){
+      if(d.chart_updated_at!==lastChartTs){
         lastChartTs=d.chart_updated_at;
         _loadChartFrame();
       }
