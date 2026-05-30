@@ -2286,7 +2286,7 @@ def run_optimizer(params):
                 d_from = days - wi * window_size
                 d_to   = days - (wi + 1) * window_size
                 ws = _wf_sim(d_from, d_to)
-                if ws:
+                if ws and ws["trades"] >= 3:
                     windows.append({
                         "i":      wi + 1,
                         "winrate": round(ws["winrate"], 1),
@@ -3507,7 +3507,11 @@ function renderValid(v, best, windows, minDays){
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
   const ratio=v&&trainWr>0?(v.winrate/trainWr):null;
-  const ok=ratio!==null&&ratio>=0.75;
+  // ok = стабильная только если И валид хорош И хотя бы часть окон работает
+  const okWindows=windows?windows.filter(w=>w.ok).length:0;
+  const totalWindows=windows?windows.length:0;
+  const windowsOk=totalWindows===0||okWindows/totalWindows>=0.4;  // хотя бы 2 из 5
+  const ok=ratio!==null&&ratio>=0.75&&windowsOk;
   const color=ok?'var(--green)':'var(--red)';
   const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
 
@@ -3536,7 +3540,7 @@ function renderValid(v, best, windows, minDays){
   }
 
   // Строка 3: гистограмма окон — слева старое, справа свежее
-  if(windows&&windows.length){
+  if(windows&&windows.length>0&&windows.some(w=>w.trades>0)){
     const maxWr=Math.max(...windows.map(w=>w.winrate),1);
     html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
       <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
