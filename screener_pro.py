@@ -659,12 +659,9 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         pf_val=min(profit_factor,4.0) if profit_factor!=float("inf") else 4.0
         pf_bonus=pf_val*1.2
 
-        # --- Штраф за "фиктивный" TP: если >60% сделок закрыто по смене сигнала ---
-        # Значит TP стоит слишком далеко и не отражает реальный RR
         sig_close_ratio = sig_closes / trades if trades > 0 else 0
-        sig_close_penalty = max(0.0, sig_close_ratio - 0.6) * 6.0
 
-        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+rr_bonus+pf_bonus-dd_penalty-sig_close_penalty
+        fitness=calmar_score*2.0+profit_bonus+wr_bonus+trade_bonus+rr_bonus+pf_bonus-dd_penalty
 
     return {
         "equity": round(equity,2), "trades": trades, "wins": wins, "losses": losses_n,
@@ -1459,10 +1456,17 @@ _opt_stop_flag = threading.Event()
 _opt_thread = None
 _last_fetch_error = None
 
-def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
+def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                    prev_best_params=None, prev_top20=None):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
+
+    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.2%
+    _small_tf = TF_SECONDS.get(tf, 3600) < 3600
+    import copy as _copy
+    _grids_local = dict(_GRIDS)
+    if _small_tf:
+        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
 
     n_workers = max(1, os.cpu_count() or 1)
     _pool = PoolExecutor(
@@ -1480,14 +1484,27 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, n_restarts=8,
     def stop_flag():
         return _opt_stop_flag.is_set()
 
+    def _rand_ind():
+        ind = {}
+        for k, spec in PARAM_SPACE.items():
+            if spec["type"] in ("bool", "cat"): ind[k] = random.choice(spec["values"])
+            else: ind[k] = random.choice(_grids_local[k])
+        return ind
+
+    def _clamp_tp(ind):
+        """Зажать tp_pct до максимума для малых ТФ."""
+        if _small_tf and ind and ind.get("tp_pct", 0) > 1.2:
+            ind = dict(ind); ind["tp_pct"] = 1.2
+        return ind
+
     top20_global = list(prev_top20) if prev_top20 else []
 
     # Фаза 1: многоточечный старт
     if prev_best_params:
-        start_points = [prev_best_params] + [_random_individual() for _ in range(n_restarts - 1)]
+        start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
         olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
     else:
-        start_points = [_default_individual()] + [_random_individual() for _ in range(n_restarts - 1)]
+        start_points = [_default_individual()] + [_rand_ind() for _ in range(n_restarts - 1)]
         olog(f"━━ ФАЗА 1: {n_restarts} стартов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
 
     local_bests = []
@@ -1849,7 +1866,7 @@ def run_optimizer(params):
 
         cycle_t0 = time.time()
         final_result, final_params, top20 = _run_one_cycle(
-            current_candles, days, risk_pct, olog, t0,
+            current_candles, days, risk_pct, olog, t0, tf,
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None)
 
