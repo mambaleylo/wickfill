@@ -3797,10 +3797,10 @@ function _renderSymCards(){
     const levRaw=sl&&sl>0?Math.round(risk/sl):null;
     const levStr=levRaw?levRaw+'×':'—';
     const levColor=levRaw>50?'var(--red)':levRaw>25?'var(--yellow)':'var(--text3)';
-    // Detail lines
-    const line1=`WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}`;
-    const line2=sl&&tp?`SL ${sl}% · TP ${tp}%`:(hasCycle?'нет параметров':'');
-    const line3=sl&&tp?`Плечо <b style="color:${levColor}">${levStr}</b> · PF ${pf>=999?'∞':pf.toFixed(1)}`:'';
+    // Detail lines — always 3 lines for equal card height
+    const line1=hasCycle?`WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}`:'WR — · —сд';
+    const line2=sl&&tp?`SL ${sl}% · TP ${tp}%`:'SL — · TP —';
+    const line3=sl&&tp?`Плечо <b style="color:${levColor}">${levStr}</b> · PF ${pf>=999?'∞':pf.toFixed(1)}`:'Плечо — · PF —';
     const cycleStr=running?`<span style="color:var(--green);font-size:.55rem">⟳ Цикл ${s.cycle||'?'}</span>`:(hasCycle?`<span style="font-size:.55rem;color:var(--text3)">Цикл ${s.cycle}</span>`:'<span style="font-size:.55rem;color:var(--text3)">ожидание</span>');
     html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}" style="min-width:120px;max-width:155px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
@@ -3808,8 +3808,8 @@ function _renderSymCards(){
       </div>
       <div class="${eqCls}">$${eq.toFixed(0)}</div>
       <div class="sym-meta">${line1}</div>
-      ${line2?`<div class="sym-meta">${line2}</div>`:''}
-      ${line3?`<div class="sym-meta">${line3}</div>`:''}
+      <div class="sym-meta">${line2}</div>
+      <div class="sym-meta">${line3}</div>
       <div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>
     </div>`;
   }
@@ -4408,8 +4408,9 @@ class Handler(BaseHTTPRequestHandler):
                     main_logs = all_logs[-300:]  # последние 300 строк
                     any_running = any(opt_states.get(s, {}).get("running", False) for s in syms)
                 main_running = any_running or multi_thread_alive
-                main_done    = not multi_thread_alive
-                main_inf     = multi_thread_alive
+                # done только если тред реально мёртв И ни один символ не running
+                main_done    = not multi_thread_alive and not any_running
+                main_inf     = multi_thread_alive or any_running
                 # Берём прогресс из opt_state — туда пишет _coordinate_descent_from
                 with opt_lock:
                     main_cycle    = opt_state.get("cycle", 0)
@@ -4785,10 +4786,17 @@ class Handler(BaseHTTPRequestHandler):
                                      "trades": saved_tr, "pf": saved_pf, "sl": saved_sl, "tp": saved_tp,
                                      "cycle": 0, "running": True, "chart_updated_at": -1,
                                      "valid": None, "windows": [], "min_stable_days": None, "days": days}
+            _opt_stop_flag.clear()
             if len(sym_list) == 1:
                 _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
                 _opt_thread.start()
             else:
+                # Сбрасываем opt_state для чистого прогресс-бара в параллельном режиме
+                with opt_lock:
+                    opt_state.update({"running": True, "done": False, "cycle": 0,
+                                      "progress": 0, "total": 0, "pass_num": 0,
+                                      "current_param": "", "elapsed": 0.0, "error": "",
+                                      "logs": [], "best": None, "all_time_best": None})
                 _opt_thread = threading.Thread(target=_run_multi_parallel, args=(sym_list, params), daemon=True)
                 _opt_thread.start()
             self._json({"ok":True, "symbols": sym_list})
