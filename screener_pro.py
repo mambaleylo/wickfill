@@ -2047,8 +2047,6 @@ def run_optimizer(params):
     def olog(msg, level="info"):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
-            if len(opt_state["logs"]) > 500:
-                opt_state["logs"] = opt_state["logs"][-300:]
 
     t0 = time.time()
 
@@ -3353,12 +3351,9 @@ function poll(){
     if(!d.sw_running) document.getElementById('swStopBtn').style.display='none';
 
     const logs=d.logs||[];
-    const logsOffset=d.logs_offset||0;
-    const globalCount=logsOffset+logs.length;
-    if(globalCount>lastLogCount){
-      const startIdx=Math.max(0,lastLogCount-logsOffset);
-      for(let i=startIdx;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
-      lastLogCount=globalCount;
+    if(logs.length>lastLogCount){
+      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
+      lastLogCount=logs.length;
     }
     const _atb=d.all_time_best||d.best;
     if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
@@ -3672,7 +3667,6 @@ class Handler(BaseHTTPRequestHandler):
                     "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
-                    "logs_offset":    opt_state.get("logs_dropped", 0),
                     "chart_path":     cr,
                     "chart_updated_at": opt_state.get("chart_updated_at",0),
                     "sw_running":     opt_state.get("sw_running",False),
