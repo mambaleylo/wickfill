@@ -2641,6 +2641,252 @@ def _run_multi_safe(sym_list, base_params):
                     opt_states[sym]["running"] = False
         print("[multi] Round-robin завершён", flush=True)
 
+
+def _run_sym_worker(sym, base_params, n_workers, stop_event):
+    """Параллельный воркер: бесконечно оптимизирует один символ.
+    Пишет результаты напрямую в opt_states[sym]. Не трогает глобальный opt_state."""
+    import traceback, copy, time as _time
+    tf       = base_params.get("wf_tf", "1h")
+    days     = int(base_params.get("wf_days", 30) or 30)
+    risk_pct = float(base_params.get("wf_risk", 10) or 10)
+    alert_cfg = base_params.get("alert_cfg") or None
+
+    def _slog(msg, level="info"):
+        with opt_states_lock:
+            s = opt_states.setdefault(sym, {})
+            logs = s.setdefault("logs", [])
+            logs.append({"ts": _time.strftime("%H:%M:%S"), "msg": f"[{sym.replace('_USDT','')}] {msg}", "level": level})
+            # Ограничиваем буфер
+            if len(logs) > 400:
+                s["logs"] = logs[-200:]
+
+    print(f"[par] {sym}: воркер запущен ({n_workers} воркеров)", flush=True)
+    _slog(f"⚙ Параллельный режим · {n_workers} {'процессов' if _POOL_TYPE=='proc' else 'потоков'} · {tf} · {days}д", "info")
+
+    # Загружаем свечи
+    _slog("📡 Загрузка свечей...", "info")
+    candles = _fetch_candles(sym, tf, days)
+    if len(candles) < 30:
+        _slog(f"❌ Мало свечей: {len(candles)}", "error")
+        with opt_states_lock:
+            opt_states.setdefault(sym, {})["running"] = False
+        return
+
+    _slog(f"   Загружено {len(candles)} свечей", "ok")
+
+    # Создаём пул с выделенными воркерами
+    try:
+        pool = PoolExecutor(max_workers=n_workers, initializer=_worker_init, initargs=(candles, 0, risk_pct))
+    except Exception as e:
+        _slog(f"❌ Ошибка пула: {e}", "error")
+        with opt_states_lock:
+            opt_states.setdefault(sym, {})["running"] = False
+        return
+
+    cycle = 0
+    prev_best_params = None
+    prev_top20 = []
+    global_best = None
+    global_best_vfit = -1e18
+    local_candles = list(candles)
+    sw_thread_started = False
+    sw_candles_ref = [list(candles)]  # mutable ref для SW-треда
+
+    # Загружаем seed из автосохранения
+    try:
+        _, auto_data = _find_auto_config(sym, tf, days, risk_pct)
+        if auto_data and auto_data.get("best"):
+            b = auto_data["best"]
+            prev_best_params = dict(b.get("params", {})) if b.get("params") else None
+            global_best = b
+            global_best_vfit = b.get("validated_fitness", b.get("fitness", 0))
+            _slog(f"💾 Загружен сохранённый конфиг: ${b.get('equity',100):.2f}", "ok")
+    except Exception:
+        pass
+
+    try:
+        while not stop_event.is_set() and not _opt_stop_flag.is_set():
+            cycle += 1
+            with opt_states_lock:
+                s = opt_states.setdefault(sym, {})
+                s["cycle"] = cycle
+                s["running"] = True
+
+            # Между циклами сдвигаем окно свечей
+            if cycle > 1:
+                try:
+                    new_c = _fetch_latest_candle(sym, tf)
+                    if new_c and local_candles and new_c["t"] > local_candles[-1]["t"]:
+                        local_candles = local_candles[1:] + [new_c]
+                        sw_candles_ref[0] = list(local_candles)
+                        _slog(f"🕯 Новая свеча, окно сдвинуто", "info")
+                except Exception:
+                    pass
+
+            _slog(f"═══ ЦИКЛ #{cycle} ═══", "ok")
+            cycle_t0 = _time.time()
+
+            try:
+                result, params_out, top20 = _run_one_cycle(
+                    local_candles, days, risk_pct, _slog, cycle_t0, tf,
+                    prev_best_params=prev_best_params,
+                    prev_top20=prev_top20,
+                    pool=pool, n_workers=n_workers
+                )
+            except Exception as e:
+                _slog(f"❌ Ошибка цикла: {e}", "error")
+                print(f"[par] {sym} цикл {cycle} ошибка: {e}\n{traceback.format_exc()}", flush=True)
+                _time.sleep(2)
+                continue
+
+            if stop_event.is_set() or _opt_stop_flag.is_set():
+                break
+
+            cycle_elapsed = round(_time.time() - cycle_t0, 1)
+
+            if result:
+                # Накапливаем top20
+                merged = list(top20) + list(prev_top20)
+                merged.sort(key=lambda x: -(x.get("validated_fitness") or x["fitness"]))
+                seen_vf = set(); deduped = []
+                for item in merged:
+                    k = round(item.get("validated_fitness") or item["fitness"], 6)
+                    if k not in seen_vf: seen_vf.add(k); deduped.append(item)
+                prev_top20 = deduped[:7]
+
+                if prev_top20:
+                    cycle_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
+                else:
+                    cycle_best = _clamp_tp_result(result, tf)
+
+                cb_vfit = cycle_best.get("validated_fitness") or cycle_best.get("fitness", 0)
+                if global_best is None or cb_vfit > global_best_vfit:
+                    global_best = cycle_best
+                    global_best_vfit = cb_vfit
+
+                prev_best_params = dict(cycle_best["params"])
+
+                best = global_best
+                _slog(f"✅ Цикл #{cycle} за {int(cycle_elapsed)}с | ${best['equity']:.2f} WR {best['winrate']:.1f}% DD {best['max_dd']:.1f}%", "found")
+
+                # Обновляем graph данные
+                cutoff = _time.time() - days * 86400
+                chart_src = [c for c in local_candles if c.get("t", 0) >= cutoff] or local_candles
+                try:
+                    sim = _simulate(chart_src, dict(best["params"]), 0, _collect=True, risk_pct=risk_pct)
+                    chart_signals = sim["_signals"] if sim else []
+                except Exception:
+                    chart_signals = []
+                chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_src]
+
+                with opt_states_lock:
+                    s = opt_states.setdefault(sym, {})
+                    s["best"]             = best
+                    s["eq"]               = round(best.get("equity", 100), 2)
+                    s["wr"]               = round(best.get("winrate", 0), 1)
+                    s["dd"]               = round(best.get("max_dd", 0), 1)
+                    s["trades"]           = best.get("trades", 0)
+                    s["pf"]               = round(min(best.get("profit_factor", 0), 999), 2)
+                    s["sl"]               = best.get("params", {}).get("sl_pct")
+                    s["tp"]               = best.get("params", {}).get("tp_pct")
+                    s["chart_candles"]    = chart_candles_fmt
+                    s["chart_signals"]    = chart_signals
+                    s["chart_tf"]         = tf
+                    s["chart_updated_at"] = int(_time.time())
+                    s["symbol"]           = sym
+
+                # Автосохранение
+                try:
+                    _auto_save_config(sym, tf, days, risk_pct, best, prev_top20, _slog)
+                except Exception:
+                    pass
+
+                # Запускаем скользящее окно (один раз)
+                if not sw_thread_started:
+                    sw_thread_started = True
+                    n_sw = len(local_candles)
+                    _sw_t = threading.Thread(
+                        target=_sliding_window_thread,
+                        args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                        daemon=True
+                    )
+                    _sw_t.start()
+                    _slog(f"🔄 Скользящее окно запущено", "ok")
+
+            else:
+                _slog(f"⚠ Цикл #{cycle} без результата", "warn")
+
+    except Exception as e:
+        _slog(f"❌ Критическая ошибка: {e}", "error")
+        print(f"[par] {sym} критическая ошибка: {e}\n{traceback.format_exc()}", flush=True)
+    finally:
+        try:
+            pool.shutdown(wait=False)
+        except Exception:
+            pass
+        with opt_states_lock:
+            opt_states.setdefault(sym, {})["running"] = False
+        print(f"[par] {sym}: воркер завершён", flush=True)
+
+
+def _run_multi_parallel(sym_list, base_params):
+    """Запускает параллельную оптимизацию: каждый символ в своём треде.
+    Число символов ограничено числом ядер. Ядра делятся поровну."""
+    import traceback
+    global _active_chart_symbol
+
+    cpu = max(1, os.cpu_count() or 1)
+    n_syms = min(len(sym_list), cpu)
+    if n_syms < len(sym_list):
+        print(f"[par] Ограничено ядрами: запускаем {n_syms} из {len(sym_list)} символов", flush=True)
+        sym_list = sym_list[:n_syms]
+
+    workers_per_sym = max(1, cpu // n_syms)
+    print(f"[par] {n_syms} символов × {workers_per_sym} воркеров (CPU={cpu})", flush=True)
+
+    with opt_states_lock:
+        _active_chart_symbol = sym_list[0]
+        for sym in sym_list:
+            s = opt_states.setdefault(sym, {})
+            s["running"] = True
+            s["cycle"] = 0
+            s.setdefault("logs", [])
+
+    stop_events = {sym: threading.Event() for sym in sym_list}
+    threads = []
+    for sym in sym_list:
+        t = threading.Thread(
+            target=_run_sym_worker,
+            args=(sym, base_params, workers_per_sym, stop_events[sym]),
+            daemon=True
+        )
+        threads.append(t)
+        t.start()
+        print(f"[par] Запущен тред для {sym}", flush=True)
+
+    # Ждём всех (или глобальный стоп)
+    try:
+        while True:
+            alive = any(t.is_alive() for t in threads)
+            if not alive:
+                break
+            if _opt_stop_flag.is_set():
+                for ev in stop_events.values():
+                    ev.set()
+                for t in threads:
+                    t.join(timeout=5)
+                break
+            threading.Event().wait(timeout=1)
+    except Exception as e:
+        print(f"[par] Ошибка координатора: {e}\n{traceback.format_exc()}", flush=True)
+    finally:
+        for ev in stop_events.values():
+            ev.set()
+        with opt_states_lock:
+            for sym in sym_list:
+                opt_states.setdefault(sym, {})["running"] = False
+        print("[par] Все параллельные треды завершены", flush=True)
+
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
 # ═══════════════════════════════════════════════════════════════
@@ -4142,25 +4388,42 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 active = _active_chart_symbol
             # also include main opt_state for single-symbol compat
-            with opt_lock:
-                main_logs = list(opt_state.get("logs",[]))
-                main_running = opt_state.get("running", False)
-                main_cycle = opt_state.get("cycle", 0)
-                main_progress = opt_state.get("progress", 0)
-                main_total = opt_state.get("total", 0)
-                main_pass = opt_state.get("pass_num", 0)
-                main_param = opt_state.get("current_param","")
-                main_elapsed = opt_state.get("elapsed", 0)
-                main_avg = opt_state.get("avg_cycle_s")
-                main_done = opt_state.get("done", False)
-                main_inf = opt_state.get("infinite", False)
-            # В мультирежиме round-robin бесконечен пока жив _opt_thread
-            # done/running/infinite должны отражать весь цикл, а не один прогон
             multi_thread_alive = bool(_opt_thread and _opt_thread.is_alive())
             if len(syms) > 1:
+                # Параллельный режим: агрегируем логи из opt_states всех символов
+                with opt_states_lock:
+                    all_logs = []
+                    for s_sym in syms:
+                        all_logs.extend(opt_states.get(s_sym, {}).get("logs", []))
+                    all_logs.sort(key=lambda x: x.get("ts", ""))
+                    main_logs = all_logs[-300:]  # последние 300 строк
+                    any_running = any(opt_states.get(s, {}).get("running", False) for s in syms)
+                main_running = any_running or multi_thread_alive
+                main_done    = not multi_thread_alive
+                main_inf     = multi_thread_alive
+                main_cycle   = 0
+                main_progress = 0
+                main_total   = 0
+                main_pass    = 0
+                main_param   = ""
+                main_elapsed = 0
+                main_avg     = None
+            else:
+                with opt_lock:
+                    main_logs = list(opt_state.get("logs",[]))
+                    main_running = opt_state.get("running", False)
+                    main_cycle = opt_state.get("cycle", 0)
+                    main_progress = opt_state.get("progress", 0)
+                    main_total = opt_state.get("total", 0)
+                    main_pass = opt_state.get("pass_num", 0)
+                    main_param = opt_state.get("current_param","")
+                    main_elapsed = opt_state.get("elapsed", 0)
+                    main_avg = opt_state.get("avg_cycle_s")
+                    main_done = opt_state.get("done", False)
+                    main_inf = opt_state.get("infinite", False)
                 main_running = main_running or multi_thread_alive
                 main_done    = not multi_thread_alive
-                main_inf     = multi_thread_alive  # чтобы JS не останавливал поллинг
+                main_inf     = multi_thread_alive
             self._json({
                 "symbols": syms,
                 "active": active,
@@ -4515,7 +4778,7 @@ class Handler(BaseHTTPRequestHandler):
                 _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
                 _opt_thread.start()
             else:
-                _opt_thread = threading.Thread(target=_run_multi_safe, args=(sym_list, params), daemon=True)
+                _opt_thread = threading.Thread(target=_run_multi_parallel, args=(sym_list, params), daemon=True)
                 _opt_thread.start()
             self._json({"ok":True, "symbols": sym_list})
         else:
