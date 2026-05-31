@@ -1135,6 +1135,7 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
         params_rows+=f"<tr><td>{label}</td><td><b>{vs}</b></td></tr>"
     candles_json=_j.dumps(candles,ensure_ascii=False)
     signals_json=_j.dumps(signals,ensure_ascii=False)
+    tf_sec=TF_SECONDS.get(tf,3600)
     updated=time.strftime("%Y-%m-%d %H:%M:%S")
 
     return f"""<!DOCTYPE html>
@@ -1193,6 +1194,7 @@ canvas{{display:block;width:100%;height:100%}}
 <script>
 const CANDLES={candles_json};
 const SIGNALS={signals_json};
+const TF_SEC={tf_sec};
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
@@ -1323,7 +1325,7 @@ function render(){{
   const isMobile=W<500;
   const mskOffset=3*3600*1000;
   for(let i=0;i<vis.length;i+=step){{
-    const t=new Date(vis[i].t*1000+mskOffset);
+    const t=new Date((vis[i].t+TF_SEC)*1000+mskOffset);
     let lbl;
     if(isMobile){{
       // On mobile: just HH:MM to avoid overlap
@@ -1366,7 +1368,7 @@ wrap.addEventListener('mousemove',e=>{{
   const W=wrap.clientWidth,vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=W/vis.length,i=Math.floor(e.offsetX/cw2);
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
   const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
-  const mskMs=c.t*1000+3*3600*1000,d=new Date(mskMs);
+  const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
   const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
   let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
   if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
