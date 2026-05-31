@@ -2169,6 +2169,10 @@ def run_optimizer(params):
 
     _sw_candles = list(candles)
     n_sw = len(candles)   # сохраняем размер окна
+    # В мультирежиме инициализируем per-symbol candles чтобы SW-тред использовал правильные данные
+    if len(_multi_symbols) > 1 and symbol in _sw_state:
+        with _sw_state_lock:
+            _sw_state[symbol]["candles"] = list(candles)
 
     # Запускаем прогрев пула ПАРАЛЛЕЛЬНО с остальной подготовкой (критично для Windows spawn)
     _n_workers = max(1, os.cpu_count() or 1)
@@ -2417,13 +2421,18 @@ def run_optimizer(params):
                     olog(f"⚠ Авто-сохранение не удалось (проверь папку Download)", "warn")
 
             # Обновляем chart — показываем сигналы за то же окно что и оптимизация
-            with opt_lock:
-                current_candles2 = list(_sw_candles)
+            # В мультирежиме _sw_candles перезаписывается другим символом — используем локальные candles
+            is_multi_run = len(_multi_symbols) > 1
+            if is_multi_run:
+                chart_candles_src = list(candles)  # локальные свечи текущего символа
+            else:
+                with opt_lock:
+                    chart_candles_src = list(_sw_candles)
             # Обрезаем свечи по тому же days_limit что и оптимизатор
             cutoff = time.time() - days * 86400
-            chart_candles_window = [c for c in current_candles2 if c.get("t", 0) >= cutoff]
+            chart_candles_window = [c for c in chart_candles_src if c.get("t", 0) >= cutoff]
             if len(chart_candles_window) < 10:
-                chart_candles_window = current_candles2  # fallback
+                chart_candles_window = chart_candles_src  # fallback
             sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
             chart_signals = sim["_signals"] if sim else []
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
