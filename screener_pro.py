@@ -3022,7 +3022,7 @@ details summary::-webkit-details-marker{display:none}
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
-    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">🌙</button>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
   </div>
@@ -3731,7 +3731,7 @@ class Handler(BaseHTTPRequestHandler):
             if not chart_best or not chart_candles:
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
-                self.wfile.write("<html><body style='background:#0d1117;color:#e6edf3;font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:#8b949e;margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
+                self.wfile.write("<html><body style='background:#fafafa;color:#252b35;font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:#848d9e;margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
                 return
             try:
                 data = _build_chart_html(chart_candles, chart_signals, chart_best, chart_symbol, chart_tf).encode("utf-8")
