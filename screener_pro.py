@@ -3605,19 +3605,28 @@ function renderValid(v, best, windows, minDays, days){
     const fmtD=ts=>{const d=new Date(ts*1000);return (d.getMonth()+1)+'/'+(d.getDate());};
     html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
       <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
-      <div style="display:flex;align-items:flex-end;gap:3px;height:36px">`;
+      <div style="display:flex;align-items:flex-end;gap:4px;height:28px">`;
     // окна идут от старого (#5) к свежему (#1) — разворачиваем
     const sorted=[...windows].reverse();
     for(const w of sorted){
-      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
+      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*24));
       const c=w.ok?'var(--green)':'var(--red)';
       const bg=w.ok?'var(--green)':'var(--red)';
       const fromLbl=w.ts_from?fmtD(w.ts_from):'';
       const toLbl=w.ts_to?fmtD(w.ts_to):'';
-      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сд | ${fromLbl}–${toLbl}">
-        <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
+      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center" title="WR ${w.winrate}% · ${w.trades} сд · ${fromLbl}–${toLbl}">
         <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
-        <span style="font-size:.48rem;color:var(--text3);white-space:nowrap;margin-top:1px">${fromLbl}–${toLbl}</span>
+      </div>`;
+    }
+    html+=`</div>
+      <div style="display:flex;gap:4px;margin-top:3px">`;
+    for(const w of sorted){
+      const c=w.ok?'var(--green)':'var(--red)';
+      const fromLbl=w.ts_from?fmtD(w.ts_from):'';
+      const toLbl=w.ts_to?fmtD(w.ts_to):'';
+      html+=`<div style="flex:1;text-align:center">
+        <div style="font-size:.52rem;font-weight:700;color:${c}">${w.winrate}%</div>
+        <div style="font-size:.46rem;color:var(--text3);white-space:nowrap">${fromLbl}–${toLbl}</div>
       </div>`;
     }
     html+=`</div>
