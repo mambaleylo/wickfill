@@ -3838,8 +3838,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
-            candidate_dirs = [_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
-            _pat2 = _re.compile(r'^screener_pro.+\.py$')
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             renamed = False
             msg = ""
             for d in candidate_dirs:
@@ -3867,7 +3866,7 @@ class Handler(BaseHTTPRequestHandler):
             import subprocess, sys, shutil
             script_name=os.path.basename(os.path.abspath(__file__))
             script_path=os.path.abspath(__file__)
-            candidate_dirs=[_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(script_path)]
+            candidate_dirs=["/sdcard/Download", os.path.dirname(script_path)]
             src=next((os.path.join(d,script_name) for d in candidate_dirs if os.path.exists(os.path.join(d,script_name))),None)
             if not src: self._json({"ok":False,"msg":f"'{script_name}' не найден в downloads"}); return
             try:
