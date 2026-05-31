@@ -2032,7 +2032,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+            "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
