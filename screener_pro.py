@@ -2626,7 +2626,7 @@ input[type=text],input[type=password],input[type=number],select{
   transition:border-color .18s;
   -webkit-appearance:none;appearance:none;
 }
-input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
+input:focus,select:focus{outline:none;border-color:var(--sand2);background:var(--cream)}
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
@@ -2641,7 +2641,7 @@ input[type=number]{-moz-appearance:textfield}
 }
 .slider-wrap input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:16px;height:16px;
-  border-radius:50%;background:#fff;
+  border-radius:50%;background:var(--cream);
   border:2px solid var(--bark);
   box-shadow:0 1px 4px rgba(92,79,67,.2);
   transition:transform .15s;
@@ -2668,7 +2668,7 @@ input[type=number]{-moz-appearance:textfield}
 .toggle-sw::after{
   content:'';position:absolute;
   width:14px;height:14px;border-radius:50%;
-  background:#fff;top:2px;left:2px;
+  background:var(--cream);top:2px;left:2px;
   box-shadow:0 1px 3px rgba(0,0,0,.15);
   transition:left .22s;
 }
@@ -3684,7 +3684,7 @@ function toggleTheme(){
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   const next=isDark?'light':'dark';
   document.documentElement.setAttribute('data-theme',next);
-  document.getElementById('themeBtn').textContent=next==='dark'?'☀':'🌙';
+  document.getElementById('themeBtn').textContent=next==='dark'?'🌙':'☀';
   localStorage.setItem('wf_theme',next);
   // Reload chart iframe with new theme
   const frame=document.getElementById('chartFrame');
@@ -3695,7 +3695,7 @@ function toggleTheme(){
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
   const t=document.documentElement.getAttribute('data-theme')||'light';
-  if(btn) btn.textContent=t==='dark'?'☀':'🌙';
+  if(btn) btn.textContent=t==='dark'?'🌙':'☀';
 });
 
 </script></body></html>"""
