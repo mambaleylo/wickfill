@@ -2499,11 +2499,18 @@ def _run_multi_safe(sym_list, base_params):
                 s["min_stable_days"]  = min_stable
                 s["days"]             = days
                 if best:
-                    s["best"]   = best
-                    s["eq"]     = round(best.get("equity", 100), 2)
-                    s["wr"]     = round(best.get("winrate", 0), 1)
-                    s["dd"]     = round(best.get("max_dd", 0), 1)
-                    s["trades"] = best.get("trades", 0)
+                    prev_eq = s.get("eq", 0)
+                    new_eq  = round(best.get("equity", 100), 2)
+                    # Фиксируем максимум — не откатываем назад
+                    if new_eq >= prev_eq:
+                        s["best"]   = best
+                        s["eq"]     = new_eq
+                        s["wr"]     = round(best.get("winrate", 0), 1)
+                        s["dd"]     = round(best.get("max_dd", 0), 1)
+                        s["trades"] = best.get("trades", 0)
+                        s["pf"]     = round(min(best.get("profit_factor", 0), 999), 2)
+                        s["sl"]     = best.get("params", {}).get("sl_pct", None)
+                        s["tp"]     = best.get("params", {}).get("tp_pct", None)
     with opt_states_lock:
         for sym in sym_list:
             if sym in opt_states:
@@ -2848,7 +2855,7 @@ input[type=number]{-moz-appearance:textfield}
   flex-shrink:0;
   height:auto;
   min-height:90px;
-  max-height:130px;
+  max-height:160px;
 }
 .cycles-col{
   flex-shrink:0;
@@ -2902,7 +2909,7 @@ input[type=number]{-moz-appearance:textfield}
 .sym-btn{font-size:.65rem;font-weight:600;padding:3px 9px;border-radius:20px;border:1.5px solid var(--border2);background:var(--cream2);color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
 .sym-btn.active{background:var(--bark);color:#fff;border-color:var(--bark)}
 .sym-btn.running{animation:cc-glow 1.6s ease-in-out infinite}
-.sym-card{min-width:100px;max-width:130px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border2);background:var(--glass);position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.sym-card{min-width:120px;max-width:160px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border2);background:var(--glass);position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
 .sym-card:hover{border-color:var(--sand2)}
 .sym-card.active{border-color:var(--bark)}
 .sym-card.pos{border-color:rgba(74,124,89,.4);background:var(--green-light)}
@@ -3384,7 +3391,7 @@ let _symList=[], _activeChart='', _symStates={};
 
 function _renderSymCards(){
   const strip=document.getElementById('ccStrip');
-  // Sort: running first (current), then by eq descending
+  // Sort: running first, then by eq descending
   const sorted=[..._symList].sort((a,b)=>{
     const sa=_symStates[a]||{}, sb=_symStates[b]||{};
     if(sa.running&&!sb.running) return -1;
@@ -3392,23 +3399,36 @@ function _renderSymCards(){
     const ea=sa.eq??100, eb=sb.eq??100;
     return eb-ea;
   });
+  const risk=parseFloat(document.getElementById('wf_risk')?.value)||10;
   let html='';
   for(const sym of sorted){
     const s=_symStates[sym]||{};
     const eq=s.eq??100, wr=s.wr??0, dd=s.dd??0, tr=s.trades??0;
+    const pf=s.pf??0, sl=s.sl??null, tp=s.tp??null;
     const running=s.running||false;
-    const hasCycle=s.cycle>0;
+    const hasCycle=s.cycle>0||(eq!==100||wr>0);
     const isPos=eq>100, isNeg=eq<100;
     const isActive=sym===_activeChart;
     const cls='sym-card'+(running?' running':hasCycle?(isPos?' pos':isNeg?' neg':''):'')+(isActive?' active':'');
     const eqCls='sym-eq'+(hasCycle?(isPos?' pos':isNeg?' neg':''):'');
     const symShort=sym.replace('_USDT','').replace('_BTC','').replace('_ETH','');
-    const cycleStr=hasCycle?`Цикл ${s.cycle}`:(running?'запуск...':'ожидание');
-    html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}">
-      <div class="sym-name">${symShort}${running?'<span style="margin-left:3px;color:var(--green);animation:spin .9s linear infinite;display:inline-block">⟳</span>':''}</div>
+    // Leverage calc
+    const levRaw=sl&&sl>0?Math.round(risk/sl):null;
+    const levStr=levRaw?levRaw+'×':'—';
+    const levColor=levRaw>50?'var(--red)':levRaw>25?'var(--yellow)':'var(--text3)';
+    // Detail lines
+    const line1=`WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}`;
+    const line2=sl&&tp?`SL ${sl}% · TP ${tp}%`:(hasCycle?'нет параметров':'');
+    const line3=sl&&tp?`Плечо <b style="color:${levColor}">${levStr}</b> · PF ${pf>=999?'∞':pf.toFixed(1)}`:'';
+    const cycleStr=running?`<span style="color:var(--green);font-size:.55rem">⟳ Цикл ${s.cycle||'?'}</span>`:(hasCycle?`<span style="font-size:.55rem;color:var(--text3)">Цикл ${s.cycle}</span>`:'<span style="font-size:.55rem;color:var(--text3)">ожидание</span>');
+    html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}" style="min-width:120px;max-width:155px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+        <span class="sym-name">${symShort}</span>${cycleStr}
+      </div>
       <div class="${eqCls}">$${eq.toFixed(0)}</div>
-      <div class="sym-meta">WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}</div>
-      <div class="sym-meta" style="color:var(--text3);font-size:.55rem">${cycleStr}</div>
+      <div class="sym-meta">${line1}</div>
+      ${line2?`<div class="sym-meta">${line2}</div>`:''}
+      ${line3?`<div class="sym-meta">${line3}</div>`:''}
       <div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>
     </div>`;
   }
@@ -4276,10 +4296,29 @@ class Handler(BaseHTTPRequestHandler):
             with opt_states_lock:
                 _multi_symbols = sym_list
                 _active_chart_symbol = sym_list[0]
+                tf   = params.get("wf_tf", "1h")
+                days = int(params.get("wf_days", 3) or 3)
+                risk = float(params.get("wf_risk", 20) or 20)
                 for s in sym_list:
-                    opt_states[s] = {"symbol": s, "eq": 100, "wr": 0, "dd": 0, "trades": 0,
+                    # Пробуем загрузить сохранённый конфиг чтобы сразу показать eq
+                    saved_eq, saved_wr, saved_dd, saved_tr, saved_pf, saved_sl, saved_tp = 100, 0, 0, 0, 0, None, None
+                    try:
+                        _, auto_data = _find_auto_config(s, tf, days, risk)
+                        if auto_data and auto_data.get("best"):
+                            b = auto_data["best"]
+                            saved_eq = round(b.get("equity", 100), 2)
+                            saved_wr = round(b.get("winrate", 0), 1)
+                            saved_dd = round(b.get("max_dd", 0), 1)
+                            saved_tr = b.get("trades", 0)
+                            saved_pf = round(min(b.get("profit_factor", 0), 999), 2)
+                            saved_sl = b.get("params", {}).get("sl_pct", None)
+                            saved_tp = b.get("params", {}).get("tp_pct", None)
+                    except Exception:
+                        pass
+                    opt_states[s] = {"symbol": s, "eq": saved_eq, "wr": saved_wr, "dd": saved_dd,
+                                     "trades": saved_tr, "pf": saved_pf, "sl": saved_sl, "tp": saved_tp,
                                      "cycle": 0, "running": True, "chart_updated_at": -1,
-                                     "valid": None, "windows": [], "min_stable_days": None, "days": 30}
+                                     "valid": None, "windows": [], "min_stable_days": None, "days": days}
             if len(sym_list) == 1:
                 _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
                 _opt_thread.start()
