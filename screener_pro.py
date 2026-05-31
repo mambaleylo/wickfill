@@ -2691,6 +2691,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
     prev_top20 = []
     global_best = None
     global_best_vfit = -1e18
+    last_autosave_vfit = -1e18
     local_candles = list(candles)
     sw_thread_started = False
     sw_candles_ref = [list(candles)]  # mutable ref для SW-треда
@@ -2703,6 +2704,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             prev_best_params = dict(b.get("params", {})) if b.get("params") else None
             global_best = b
             global_best_vfit = b.get("validated_fitness", b.get("fitness", 0))
+            last_autosave_vfit = global_best_vfit
             _slog(f"💾 Загружен сохранённый конфиг: ${b.get('equity',100):.2f}", "ok")
     except Exception:
         pass
@@ -2798,9 +2800,13 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     s["chart_updated_at"] = int(_time.time())
                     s["symbol"]           = sym
 
-                # Автосохранение
+                # Автосохранение — только если vfit улучшился
                 try:
-                    _auto_save_config(sym, tf, days, risk_pct, best, prev_top20, _slog)
+                    new_vfit = best.get("validated_fitness", best.get("fitness", 0))
+                    if new_vfit > last_autosave_vfit:
+                        saved = _auto_save_config(sym, tf, days, risk_pct, best, prev_top20, _slog)
+                        if saved:
+                            last_autosave_vfit = new_vfit
                 except Exception:
                     pass
 
