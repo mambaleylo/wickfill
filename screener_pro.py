@@ -1527,6 +1527,11 @@ _sw_params  = {}
 _sw_cfg     = {}   # email cfg
 _sw_risk    = 20.0
 
+# Per-symbol SW state для мультирежима
+_sw_state      = {}  # {symbol: {"candles":[], "params":{}, "risk":20, "running":False, "opt_states_ref": None}}
+_sw_state_lock = threading.Lock()
+_sw_threads    = {}  # {symbol: Thread}
+
 def _try_slide_window(symbol, tf, olog):
     """Проверяет появление новой закрытой свечи и бесшовно сдвигает окно.
     Вызывается между циклами оптимизатора. Не блокирует, не ждёт."""
@@ -1550,108 +1555,157 @@ def _try_slide_window(symbol, tf, olog):
 
 
 def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
-    """Каждый TF-интервал: загружает последнюю закрытую свечу, добавляет, убирает первую."""
+    """Каждый TF-интервал: загружает последнюю закрытую свечу, добавляет, убирает первую.
+    В мультирежиме использует _sw_state[symbol], в одиночном — глобальный opt_state."""
     global _sw_candles, _sw_params, _sw_risk
     interval_sec = TF_SECONDS.get(tf, 3600)
+    is_multi = symbol in _sw_state  # мультирежим если символ зарегистрирован в _sw_state
 
-    print(f"[sw] Запущен. Символ={symbol} ТФ={tf} окно={n_candles} свечей интервал={interval_sec}с")
+    print(f"[sw:{symbol}] Запущен. ТФ={tf} окно={n_candles} интервал={interval_sec}с multi={is_multi}")
 
-    with opt_lock:
-        opt_state["sw_running"] = True
+    def _get_running():
+        if is_multi:
+            with _sw_state_lock:
+                return _sw_state.get(symbol, {}).get("running", False)
+        else:
+            with opt_lock:
+                return opt_state["sw_running"]
+
+    def _set_running(val):
+        if is_multi:
+            with _sw_state_lock:
+                if symbol in _sw_state:
+                    _sw_state[symbol]["running"] = val
+        else:
+            with opt_lock:
+                opt_state["sw_running"] = val
+
+    def _get_candles_params():
+        if is_multi:
+            with _sw_state_lock:
+                s = _sw_state.get(symbol, {})
+                return list(s.get("candles") or []), dict(s.get("params") or {}) or None
+        else:
+            with opt_lock:
+                return list(_sw_candles), dict(_sw_params) if _sw_params else None
+
+    def _set_candles(new_c):
+        if is_multi:
+            with _sw_state_lock:
+                if symbol in _sw_state:
+                    _sw_state[symbol]["candles"] = new_c
+        else:
+            global _sw_candles
+            with opt_lock:
+                _sw_candles = new_c
+
+    def _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val):
+        """Обновляет chart в opt_state (всегда) и в opt_states[symbol] (для мультирежима)."""
+        ts = int(time.time())
+        with opt_lock:
+            # Обновляем глобальный opt_state только если это активный символ
+            if not is_multi or symbol == _active_chart_symbol:
+                opt_state["chart_candles"]   = chart_candles_fmt
+                opt_state["chart_signals"]   = chart_signals_data
+                opt_state["chart_updated_at"] = ts
+                if chart_path_val:
+                    opt_state["chart_path"] = chart_path_val
+        if is_multi:
+            with opt_states_lock:
+                s = opt_states.get(symbol, {})
+                s["chart_candles"]    = chart_candles_fmt
+                s["chart_signals"]    = chart_signals_data
+                s["chart_updated_at"] = ts
+                if chart_path_val:
+                    s["chart_path"] = chart_path_val
+
+    _set_running(True)
 
     # Синхронизируем окно со свежими данными при старте
     days_needed = max(1, round(n_candles * interval_sec / 86400) + 1)
-    print(f"[sw] Синхронизация свежих свечей ({days_needed}д)...")
+    print(f"[sw:{symbol}] Синхронизация свежих свечей ({days_needed}д)...")
     fresh = _fetch_candles(symbol, tf, days_needed)
     if fresh and len(fresh) >= n_candles:
-        with opt_lock:
-            _sw_candles = fresh[-n_candles:]
-        print(f"[sw] Синхронизировано: {len(_sw_candles)} свечей, последняя={time.strftime('%H:%M', time.localtime(_sw_candles[-1]['t']))}")
+        _set_candles(fresh[-n_candles:])
+        candles_for_log, _ = _get_candles_params()
+        print(f"[sw:{symbol}] Синхронизировано: {len(candles_for_log)} свечей")
     else:
-        print(f"[sw] Синхронизация не удалась, используем старые данные")
+        print(f"[sw:{symbol}] Синхронизация не удалась, используем старые данные")
 
     while True:
-        with opt_lock:
-            if not opt_state["sw_running"]: break
+        if not _get_running(): break
 
-        # Вычисляем сколько секунд до следующего закрытия свечи по реальному времени
         now = int(time.time())
-        # Ближайшее время закрытия = ceil(now / interval_sec) * interval_sec
         next_close = ((now // interval_sec) + 1) * interval_sec
         wait_sec = next_close - now
-        # Ждём до закрытия + 5 секунд (чтобы Gate.io успел сформировать свечу)
         sleep_total = wait_sec + 5
-        print(f"[sw] Следующая свеча через {sleep_total}с (в {time.strftime('%H:%M:%S', time.localtime(next_close+5))})")
+        print(f"[sw:{symbol}] Следующая свеча через {sleep_total}с")
 
-        # Ждём порциями по 5с чтобы можно было остановить
         for _ in range(sleep_total):
-            with opt_lock:
-                if not opt_state["sw_running"]: break
+            if not _get_running(): break
             time.sleep(1)
 
-        with opt_lock:
-            if not opt_state["sw_running"]: break
+        if not _get_running(): break
 
-        # Загружаем последнюю закрытую свечу
         new_c = _fetch_latest_candle(symbol, tf)
         if not new_c:
-            print("[sw] Не удалось загрузить новую свечу"); continue
+            print(f"[sw:{symbol}] Не удалось загрузить новую свечу"); continue
 
-        with opt_lock:
-            candles = list(_sw_candles)  # копия под блокировкой — защита от race condition
-            best_p  = dict(_sw_params) if _sw_params else None
+        candles, best_p = _get_candles_params()
 
         if not candles:
-            print("[sw] Свечи ещё не загружены"); continue
+            print(f"[sw:{symbol}] Свечи ещё не загружены"); continue
 
-        # Проверяем — это действительно новая свеча?
         if new_c["t"] <= candles[-1]["t"]:
-            print(f"[sw] Свеча t={new_c['t']} уже есть, пропускаем"); continue
+            print(f"[sw:{symbol}] Свеча t={new_c['t']} уже есть, пропускаем"); continue
 
-        # Скользящее окно: добавляем новую, убираем первую
         new_candles = candles[1:] + [new_c]
 
-        # Обновляем chart
         if best_p:
             sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct)
-            chart_signals = sim["_signals"] if sim else []
+            chart_signals_data = sim["_signals"] if sim else []
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
-            # Добавляем незакрытую свечу только для отображения
             cur_c2 = _fetch_current_candle(symbol, tf)
             if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
 
+            # prev_signals для проверки закрытия сделки
+            prev_signals_for_close = []
             with opt_lock:
-                prev_signals_for_close = list(opt_state.get("chart_signals") or [])
-                _sw_candles = new_candles
-                opt_state["chart_candles"]  = chart_candles_fmt
-                opt_state["chart_signals"]  = chart_signals
-                opt_state["sw_last_update"] = int(time.time())
+                if not is_multi or symbol == _active_chart_symbol:
+                    prev_signals_for_close = list(opt_state.get("chart_signals") or [])
+            if is_multi:
+                with opt_states_lock:
+                    prev_signals_for_close = list(opt_states.get(symbol, {}).get("chart_signals") or []) or prev_signals_for_close
+
+            _set_candles(new_candles)
+
+            br = {}
+            if is_multi:
+                with opt_states_lock:
+                    br = dict(opt_states.get(symbol, {}).get("best") or {})
+            else:
+                with opt_lock:
+                    br = dict(opt_state.get("best") or {})
+
+            chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
+            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val)
+
+            with opt_lock:
+                opt_state["sw_last_update"]  = int(time.time())
                 opt_state["sw_candle_count"] = len(new_candles)
-                br = opt_state.get("best") or {}
 
-            # Уведомление о закрытии сделки
+            print(f"[sw:{symbol}] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g}")
+
             if alert_cfg and prev_signals_for_close:
-                _check_trade_close(prev_signals_for_close, chart_signals, alert_cfg, symbol, tf)
-
-            chart_path = _save_chart(chart_candles_fmt, chart_signals, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            with opt_lock:
-                if chart_path:
-                    opt_state["chart_path"] = chart_path
-                opt_state["chart_updated_at"] = int(time.time())
-
-            print(f"[sw] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g} | всего={len(new_candles)}")
-
-            # Проверка сигнала на новой свече
+                _check_trade_close(prev_signals_for_close, chart_signals_data, alert_cfg, symbol, tf)
             if alert_cfg:
                 _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg)
         else:
-            with opt_lock:
-                _sw_candles = new_candles
+            _set_candles(new_candles)
 
-    with opt_lock:
-        opt_state["sw_running"] = False
-    print("[sw] Остановлен")
+    _set_running(False)
+    print(f"[sw:{symbol}] Остановлен")
 
 # ═══════════════════════════════════════════════════════════════
 # OPTIMIZER MAIN LOOP
@@ -2455,15 +2509,25 @@ def _run_multi_safe(sym_list, base_params):
     import traceback, copy
     global _active_chart_symbol
     print(f"[multi] Старт round-robin: {sym_list}", flush=True)
-    # Собственные счётчики циклов на символ — не зависят от opt_state["cycle"]
     sym_cycles = {s: 0 for s in sym_list}
+    tf       = base_params.get("wf_tf", "1h")
+    days     = int(base_params.get("wf_days", 30) or 30)
+    risk_pct = float(base_params.get("wf_risk", 10) or 10)
+    alert_cfg = base_params.get("alert_cfg") or None
+
+    # Регистрируем все символы в _sw_state (per-symbol режим)
+    with _sw_state_lock:
+        for s in sym_list:
+            if s not in _sw_state:
+                _sw_state[s] = {"candles": [], "params": {}, "risk": risk_pct, "running": False}
+
     while not _opt_stop_flag.is_set():
         for sym in sym_list:
             if _opt_stop_flag.is_set():
                 break
             params = copy.deepcopy(base_params)
             params["wf_symbol"] = sym
-            params["infinite"] = False   # one cycle per call; we loop here
+            params["infinite"] = False
             sym_cycles[sym] = sym_cycles.get(sym, 0) + 1
             with opt_states_lock:
                 _active_chart_symbol = sym
@@ -2482,12 +2546,13 @@ def _run_multi_safe(sym_list, base_params):
                 valid = opt_state.get("valid")
                 windows = opt_state.get("windows", [])
                 min_stable = opt_state.get("min_stable_days")
-                days = opt_state.get("days", 30)
+                days_v = opt_state.get("days", 30)
                 chart_upd = opt_state.get("chart_updated_at", -1)
                 chart_candles = list(opt_state.get("chart_candles", []))
                 chart_signals = list(opt_state.get("chart_signals", []))
                 chart_tf = opt_state.get("chart_tf","")
                 chart_path = opt_state.get("chart_path","")
+                best_params = dict(opt_state.get("best",{}).get("params",{})) if opt_state.get("best") else {}
             with opt_states_lock:
                 s = opt_states.setdefault(sym, {})
                 s["symbol"]   = sym
@@ -2496,8 +2561,7 @@ def _run_multi_safe(sym_list, base_params):
                 s["valid"]    = valid
                 s["windows"]  = windows
                 s["min_stable_days"] = min_stable
-                s["days"]     = days
-                # Обновляем график только если он реально построился
+                s["days"]     = days_v
                 if chart_upd > 0:
                     s["chart_updated_at"] = chart_upd
                     s["chart_candles"]    = chart_candles
@@ -2509,7 +2573,6 @@ def _run_multi_safe(sym_list, base_params):
                 if best:
                     prev_eq = s.get("eq", 0)
                     new_eq  = round(best.get("equity", 100), 2)
-                    # Фиксируем максимум — не откатываем назад
                     if new_eq >= prev_eq:
                         s["best"]   = best
                         s["eq"]     = new_eq
@@ -2519,6 +2582,33 @@ def _run_multi_safe(sym_list, base_params):
                         s["pf"]     = round(min(best.get("profit_factor", 0), 999), 2)
                         s["sl"]     = best.get("params", {}).get("sl_pct", None)
                         s["tp"]     = best.get("params", {}).get("tp_pct", None)
+            # Запускаем per-symbol SW-тред после первого цикла (один раз на символ)
+            if sym_cycles[sym] == 1 and best_params:
+                with _sw_state_lock:
+                    _sw_state[sym]["params"] = best_params
+                    _sw_state[sym]["risk"]   = risk_pct
+                already = _sw_threads.get(sym)
+                if not already or not already.is_alive():
+                    n_sw = days * int(86400 / TF_SECONDS.get(tf, 3600))
+                    t = threading.Thread(
+                        target=_sliding_window_thread,
+                        args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                        daemon=True
+                    )
+                    _sw_threads[sym] = t
+                    t.start()
+                    print(f"[multi] SW-тред запущен для {sym}", flush=True)
+            elif sym_cycles[sym] > 1 and best_params:
+                # Обновляем параметры SW-треда при каждом новом лучшем результате
+                with _sw_state_lock:
+                    if sym in _sw_state:
+                        _sw_state[sym]["params"] = best_params
+
+    # Останавливаем все per-symbol SW-треды
+    with _sw_state_lock:
+        for sym in sym_list:
+            if sym in _sw_state:
+                _sw_state[sym]["running"] = False
     with opt_states_lock:
         for sym in sym_list:
             if sym in opt_states:
@@ -4329,10 +4419,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/scan":
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
-            global _opt_thread, _multi_symbols, _active_chart_symbol
+            global _opt_thread, _multi_symbols, _active_chart_symbol, _sw_threads, _sw_state
             print(f"[SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
             if _opt_thread and _opt_thread.is_alive():
                 self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
+            # Останавливаем старые SW-треды
+            with _sw_state_lock:
+                for s in list(_sw_state.keys()):
+                    _sw_state[s]["running"] = False
+            _sw_threads = {}
+            _sw_state   = {}
             # Parse comma-separated symbols
             raw_syms = params.get("wf_symbol","BTC_USDT")
             sym_list = [s.strip().upper() for s in raw_syms.replace(","," ").split() if s.strip()]
