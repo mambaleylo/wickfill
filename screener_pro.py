@@ -2317,11 +2317,13 @@ def run_optimizer(params):
                 ws = _wf_sim(d_from, d_to)
                 if ws and ws["trades"] >= 3:
                     windows.append({
-                        "i":      wi + 1,
+                        "i":       wi + 1,
                         "winrate": round(ws["winrate"], 1),
                         "equity":  round(ws["equity"], 2),
                         "trades":  ws["trades"],
                         "ok":      ws["winrate"] >= train_wr * 0.75,
+                        "ts_from": round(now_ts - d_from * 86400),
+                        "ts_to":   round(now_ts - d_to   * 86400),
                     })
             if windows:
                 ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
@@ -3600,6 +3602,7 @@ function renderValid(v, best, windows, minDays, days){
   // Строка 3: гистограмма окон — слева старое, справа свежее
   if(windows&&windows.length>0&&windows.some(w=>w.trades>0)){
     const maxWr=Math.max(...windows.map(w=>w.winrate),1);
+    const fmtD=ts=>{const d=new Date(ts*1000);return (d.getMonth()+1)+'/'+(d.getDate());};
     html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
       <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
       <div style="display:flex;align-items:flex-end;gap:3px;height:36px">`;
@@ -3609,15 +3612,15 @@ function renderValid(v, best, windows, minDays, days){
       const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
       const c=w.ok?'var(--green)':'var(--red)';
       const bg=w.ok?'var(--green)':'var(--red)';
-      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сделок">
+      const fromLbl=w.ts_from?fmtD(w.ts_from):'';
+      const toLbl=w.ts_to?fmtD(w.ts_to):'';
+      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сд | ${fromLbl}–${toLbl}">
         <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
         <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
+        <span style="font-size:.48rem;color:var(--text3);white-space:nowrap;margin-top:1px">${fromLbl}</span>
       </div>`;
     }
     html+=`</div>
-      <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:.55rem;color:var(--text3)">
-        <span>−${Math.round(days||30)}д</span><span>сейчас</span>
-      </div>
     </div>`;
   }
 
