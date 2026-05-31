@@ -2421,34 +2421,34 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#f7f3ee;
-  --cream2:#ede8e0;
-  --cream3:#e2dbd0;
-  --sand:#c9bfb0;
-  --sand2:#b5a896;
+  --cream:#faf8f5;
+  --cream2:#f2ede6;
+  --cream3:#e8e0d5;
+  --sand:#d4c9b8;
+  --sand2:#bfb09c;
   --warm:#8c7b6b;
-  --bark:#4a3f34;
-  --text:#1a1310;
-  --text2:#504438;
-  --text3:#7a6e63;
-  --glass:rgba(247,243,238,0.72);
-  --glass2:rgba(237,232,224,0.55);
+  --bark:#3a2e24;
+  --text:#1e1610;
+  --text2:#4a3e32;
+  --text3:#7a6a58;
+  --glass:rgba(250,248,245,0.85);
+  --glass2:rgba(242,237,230,0.70);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 20px rgba(92,79,67,0.10);
-  --shadow2:0 8px 40px rgba(92,79,67,0.14);
+  --shadow:0 2px 16px rgba(80,60,40,0.08);
+  --shadow2:0 8px 32px rgba(80,60,40,0.12);
   --radius:18px;
   --radius-sm:12px;
   --accent:#7c6a58;
-  --green:#4a7c59;
-  --green-light:#e8f2eb;
-  --red:#8b3a3a;
-  --red-light:#f5e8e8;
-  --blue:#4a6580;
-  --blue-light:#e8eef5;
-  --yellow:#8a7040;
-  --yellow-light:#f5f0e4;
-  --border:rgba(92,79,67,0.12);
-  --border2:rgba(92,79,67,0.08);
+  --green:#3a7048;
+  --green-light:#e4f0e8;
+  --red:#8b3030;
+  --red-light:#f5e6e6;
+  --blue:#3a5878;
+  --blue-light:#e4ecf5;
+  --yellow:#7a6030;
+  --yellow-light:#f5f0e0;
+  --border:rgba(80,60,40,0.10);
+  --border2:rgba(80,60,40,0.06);
 }
 
 [data-theme="dark"]{
@@ -2599,7 +2599,7 @@ body>*{position:relative;z-index:1}
 
 input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
-  background:rgba(247,243,238,0.9);
+  background:var(--cream);
   border:1px solid var(--border);
   border-radius:10px;
   color:var(--text);
@@ -2711,7 +2711,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Best stats */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .stat-cell{
-  background:rgba(247,243,238,0.9);
+  background:var(--cream);
   border:1px solid var(--border2);
   border-radius:10px;padding:8px 8px;text-align:center;
 }
@@ -2809,8 +2809,8 @@ input[type=number]{-moz-appearance:textfield}
   display:flex;flex-direction:column;justify-content:space-between;
 }
 .cc.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
-.cc.pos{border-color:rgba(74,124,89,.3);background:rgba(232,242,235,.5)}
-.cc.neg{border-color:rgba(139,58,58,.3);background:rgba(245,232,232,.4)}
+.cc.pos{border-color:rgba(74,124,89,.3);background:var(--green-light)}
+.cc.neg{border-color:rgba(139,58,58,.3);background:var(--red-light)}
 @keyframes cc-glow{0%,100%{box-shadow:0 0 0 rgba(92,79,67,0)}50%{box-shadow:0 0 12px rgba(92,79,67,.15)}}
 .cc-n{font-size:.6rem;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .cc-eq{font-size:1.05rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1.15;color:var(--bark)}
@@ -2871,7 +2871,7 @@ thead th{
   position:sticky;top:0;white-space:nowrap;
 }
 tbody td{padding:7px 10px;border-bottom:1px solid var(--border2);color:var(--text2);font-family:'DM Mono',monospace;font-size:.7rem}
-tbody tr:hover td{background:rgba(247,243,238,.7)}
+tbody tr:hover td{background:var(--cream)}
 tbody tr:first-child td{color:var(--bark);font-weight:600}
 
 /* Params collapse */
@@ -2883,7 +2883,7 @@ tbody tr:first-child td{color:var(--bark);font-weight:600}
 .params-toggle:hover{color:var(--bark)}
 .params-box{
   display:none;margin-top:5px;padding:9px 11px;
-  background:rgba(247,243,238,.9);border:1px solid var(--border2);
+  background:var(--cream);border:1px solid var(--border2);
   border-radius:10px;font-size:.68rem;font-family:'DM Mono',monospace;
   line-height:1.9;max-height:140px;overflow-y:auto;color:var(--text2);
 }
@@ -3536,7 +3536,7 @@ function renderValid(v, best, windows, minDays, days){
   // Стабильная если: валид хороший ИЛИ большинство окон зелёные (не обязательно оба)
   const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2);
   const color=ok?'var(--green)':'var(--red)';
-  const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
+  const bgColor=ok?'var(--green-light)':'var(--red-light)';
 
   // Заголовок: иконка + статус + ключевые цифры в одну строку
   const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
@@ -3573,7 +3573,7 @@ function renderValid(v, best, windows, minDays, days){
     for(const w of sorted){
       const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
       const c=w.ok?'var(--green)':'var(--red)';
-      const bg=w.ok?'rgba(80,200,100,0.7)':'rgba(220,80,80,0.7)';
+      const bg=w.ok?'var(--green)':'var(--red)';
       html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сделок">
         <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
         <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
@@ -3671,7 +3671,7 @@ function toggleTheme(){
 }
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
-  const t=document.documentElement.getAttribute('data-theme');
+  const t=document.documentElement.getAttribute('data-theme')||'light';
   if(btn) btn.textContent=t==='dark'?'☀':'🌙';
 });
 
