@@ -1877,7 +1877,9 @@ def _script_dir():
     except Exception:
         return os.getcwd()
 
+_WICKFILL_DIR = "/sdcard/Download/WickFill"
 _AUTO_DIRS = [
+    _WICKFILL_DIR,
     "/sdcard/Download",
     _script_dir(),
 ]
@@ -1948,10 +1950,11 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 if len(opt_state["logs"]) > 500:
                     opt_state["logs"] = opt_state["logs"][-300:]
 
-    # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
-    if not os.path.isdir("/sdcard/Download"):
-        try: os.makedirs("/sdcard/Download", exist_ok=True)
-        except Exception: pass
+    # Попытаться создать /sdcard/Download/WickFill (и /sdcard/Download как fallback)
+    for _d in ["/sdcard/Download", _WICKFILL_DIR]:
+        if not os.path.isdir(_d):
+            try: os.makedirs(_d, exist_ok=True)
+            except Exception: pass
 
     # Найти папку для записи (первая существующая и доступная для записи)
     save_dir = None
@@ -3822,9 +3825,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
-            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
-            deleted=[]
-            _pat=_re.compile(r'^screener_pro\s*\(\d+\)\.py$')
+            candidate_dirs = [_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             for d in candidate_dirs:
                 if not os.path.isdir(d): continue
                 for fname in os.listdir(d):
@@ -3837,8 +3838,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
-            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
-            # Паттерн: screener_pro + что-то + .py (длинное имя от браузера)
+            candidate_dirs = [_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             _pat2 = _re.compile(r'^screener_pro.+\.py$')
             renamed = False
             msg = ""
@@ -3867,7 +3867,7 @@ class Handler(BaseHTTPRequestHandler):
             import subprocess, sys, shutil
             script_name=os.path.basename(os.path.abspath(__file__))
             script_path=os.path.abspath(__file__)
-            candidate_dirs=["/sdcard/Download", os.path.dirname(script_path)]
+            candidate_dirs=[_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(script_path)]
             src=next((os.path.join(d,script_name) for d in candidate_dirs if os.path.exists(os.path.join(d,script_name))),None)
             if not src: self._json({"ok":False,"msg":f"'{script_name}' не найден в downloads"}); return
             try:
