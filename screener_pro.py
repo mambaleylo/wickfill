@@ -3268,7 +3268,7 @@ details summary::-webkit-details-marker{display:none}
       <!-- Cycles column -->
       <div class="cycles-col">
         <div class="cycles-col-header">
-          <span class="cycles-label">Циклы</span>
+          <span class="cycles-label" id="ccLabel">Циклы</span>
           <div style="display:flex;align-items:center;gap:6px">
             <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
             <button class="icon-btn" style="font-size:.65rem;padding:3px 7px" onclick="_resetLog()">очистить</button>
@@ -3301,7 +3301,7 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Chart — fills remaining space -->
     <div class="chart-area">
-      <div id="symSwitcher" style="display:none;position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:20;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto"></div>
+      <div id="symSwitcher" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:20;display:none;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto;background:var(--glass);backdrop-filter:var(--blur);border:1px solid var(--border2);border-radius:20px;padding:4px 8px;max-width:90%"></div>
       <div class="chart-placeholder" id="chartPlaceholder">
         <span style="font-size:2rem;opacity:.2">📊</span>
         <span>График появится после первого цикла</span>
@@ -3384,26 +3384,31 @@ let _symList=[], _activeChart='', _symStates={};
 
 function _renderSymCards(){
   const strip=document.getElementById('ccStrip');
-  // Sort by eq descending, running ones keep position
+  // Sort: running first (current), then by eq descending
   const sorted=[..._symList].sort((a,b)=>{
-    const ea=(_symStates[a]||{}).eq||100, eb=(_symStates[b]||{}).eq||100;
+    const sa=_symStates[a]||{}, sb=_symStates[b]||{};
+    if(sa.running&&!sb.running) return -1;
+    if(!sa.running&&sb.running) return 1;
+    const ea=sa.eq??100, eb=sb.eq??100;
     return eb-ea;
   });
-  // Build cards
   let html='';
   for(const sym of sorted){
     const s=_symStates[sym]||{};
     const eq=s.eq??100, wr=s.wr??0, dd=s.dd??0, tr=s.trades??0;
     const running=s.running||false;
-    const done=!running&&s.cycle>0;
+    const hasCycle=s.cycle>0;
     const isPos=eq>100, isNeg=eq<100;
-    const cls='sym-card'+(running?' running':done?(isPos?' pos':isNeg?' neg':''):'')+(sym===_activeChart?' active':'');
-    const eqCls='sym-eq'+(done?(isPos?' pos':isNeg?' neg':''):'');
-    const symShort=sym.replace('_USDT','').replace('_BTC','');
+    const isActive=sym===_activeChart;
+    const cls='sym-card'+(running?' running':hasCycle?(isPos?' pos':isNeg?' neg':''):'')+(isActive?' active':'');
+    const eqCls='sym-eq'+(hasCycle?(isPos?' pos':isNeg?' neg':''):'');
+    const symShort=sym.replace('_USDT','').replace('_BTC','').replace('_ETH','');
+    const cycleStr=hasCycle?`Цикл ${s.cycle}`:(running?'запуск...':'ожидание');
     html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}">
-      <div class="sym-name">${symShort}${running?'<span style="margin-left:3px;color:var(--green)">⟳</span>':''}</div>
+      <div class="sym-name">${symShort}${running?'<span style="margin-left:3px;color:var(--green);animation:spin .9s linear infinite;display:inline-block">⟳</span>':''}</div>
       <div class="${eqCls}">$${eq.toFixed(0)}</div>
       <div class="sym-meta">WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}</div>
+      <div class="sym-meta" style="color:var(--text3);font-size:.55rem">${cycleStr}</div>
       <div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>
     </div>`;
   }
@@ -3415,9 +3420,14 @@ function _renderSymSwitcher(){
   if(!el||_symList.length<=1){if(el)el.style.display='none';return;}
   el.style.display='flex';
   el.innerHTML=_symList.map(s=>{
-    const running=(_symStates[s]||{}).running;
+    const st=_symStates[s]||{};
+    const running=st.running;
+    const eq=st.eq??100;
+    const isPos=eq>100,isNeg=eq<100;
     const cls='sym-btn'+(s===_activeChart?' active':'')+(running?' running':'');
-    return `<button class="${cls}" onclick="switchChart('${s}')">${s.replace('_USDT','')}</button>`;
+    const label=s.replace('_USDT','').replace('_BTC','');
+    const eqStr=st.cycle>0?` $${eq.toFixed(0)}`:'';
+    return `<button class="${cls}" onclick="switchChart('${s}')">${label}${eqStr}</button>`;
   }).join('');
 }
 
@@ -3452,6 +3462,9 @@ function startOpt(){
       _activeChart=_symList[0];
       _symStates={};
       for(const s of _symList) _symStates[s]={eq:100,wr:0,dd:0,trades:0,cycle:0,running:true,chart_updated_at:-1};
+      // Set label based on mode
+      const ccLabel=document.getElementById('ccLabel');
+      if(ccLabel) ccLabel.textContent=_symList.length>1?'Монеты':'Циклы';
       _renderSymCards();
       _renderSymSwitcher();
       lastLogCount=0;chartOpened=false;lastChartTs=-1;
@@ -3529,8 +3542,13 @@ function poll(){
       for(const sym of _symList){
         if(d.states[sym]) _symStates[sym]=Object.assign(_symStates[sym]||{},d.states[sym]);
       }
+      // Auto-follow active (currently running) symbol's chart
       if(d.active&&d.active!==_activeChart){
-        // auto-switch to active symbol if chart not manually pinned
+        // Only auto-switch if no chart has been loaded yet or current sym has no chart
+        const curSt=_symStates[_activeChart]||{};
+        if(curSt.chart_updated_at<=0){
+          _activeChart=d.active;
+        }
       }
       _renderSymCards();
       _renderSymSwitcher();
@@ -3545,6 +3563,16 @@ function poll(){
         frame.style.display='block';
         if(ph) ph.style.display='none';
         document.getElementById('chartBtn').style.display='flex';
+      }
+      // Also check if active changed to a sym with newer chart
+      if(d.active&&d.active!==_activeChart){
+        const newActiveSt=_symStates[d.active]||{};
+        const curSt2=_symStates[_activeChart]||{};
+        if(newActiveSt.chart_updated_at>curSt2.chart_updated_at&&curSt2.chart_updated_at<=0){
+          _activeChart=d.active;
+          _renderSymCards();
+          _renderSymSwitcher();
+        }
       }
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
@@ -3616,6 +3644,8 @@ let _cc={}, _ccPrevEq=null, _startBuf=null;
 function _resetLog(){
   document.getElementById('ccStrip').innerHTML='';
   document.getElementById('wfLog').innerHTML='';
+  const sw=document.getElementById('symSwitcher');
+  if(sw){sw.style.display='none';sw.innerHTML='';}
   lastLogCount=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
 
@@ -3658,11 +3688,13 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
 }
 function logLine(msg,level){
   if(!msg||!msg.trim()) return;
+  // В мультирежиме цикловые карточки не нужны — используем sym-cards
+  const isMulti=_symList.length>1;
   if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool|Сохранено|Авто-сохранение/i.test(msg)){
     addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
   }
   const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
-  if(cycleM){_startBuf=null;_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
+  if(cycleM){_startBuf=null;if(!isMulti)_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
   const startM=msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
   if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}
   const passM=msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
@@ -3671,8 +3703,10 @@ function logLine(msg,level){
   if(foundM){
     const eq=parseFloat(foundM[1]),wr=parseFloat(foundM[3]),dd=parseFloat(foundM[5]);
     if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};
-    const ns=Object.keys(_cc);
-    if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false,0,false);}
+    if(!isMulti){
+      const ns=Object.keys(_cc);
+      if(ns.length){const lastN=parseInt(ns[ns.length-1]);if(!_cc[lastN].classList.contains('pos')&&!_cc[lastN].classList.contains('neg'))_cycleCard(lastN,eq,wr,dd,null,false,0,false);}
+    }
     return;
   }
   const endM=msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
@@ -3680,8 +3714,10 @@ function logLine(msg,level){
   const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*([🆕→]+)\s*\$([\d.]+)\s+WR\s+([\d.]+)%\s+Сд\s+(\d+)\s+DD\s+([\d.]+)%/);
   if(doneM){
     _clearActivity();
-    const isNewRec=doneM[3].includes('🆕');
-    _cycleCard(parseInt(doneM[1]),parseFloat(doneM[4]),parseFloat(doneM[5]),parseFloat(doneM[7]),doneM[2],true,parseInt(doneM[6]),isNewRec);
+    if(!isMulti){
+      const isNewRec=doneM[3].includes('🆕');
+      _cycleCard(parseInt(doneM[1]),parseFloat(doneM[4]),parseFloat(doneM[5]),parseFloat(doneM[7]),doneM[2],true,parseInt(doneM[6]),isNewRec);
+    }
     _startBuf=null;return;
   }
   if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn');return;}
