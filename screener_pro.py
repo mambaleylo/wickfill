@@ -2573,12 +2573,21 @@ def _run_multi_safe(sym_list, base_params):
                         s["windows"]  = windows
                         s["min_stable_days"] = min_stable
                         s["days"]     = days_v
+                        s["chart_tf"] = chart_tf  # всегда обновляем tf
+                        # Обновляем данные графика: берём лучшее что есть
                         if chart_upd > 0:
+                            # Полный снапшот с готовым графиком
                             s["chart_updated_at"] = chart_upd
                             s["chart_candles"]    = chart_candles
                             s["chart_signals"]    = chart_signals
-                            s["chart_tf"]         = chart_tf
                             s["chart_path"]       = chart_path
+                        elif chart_candles:
+                            # Свечи есть но chart_updated_at не выставлен (прерван цикл)
+                            # Сохраняем свечи — /chart построит график на лету
+                            s["chart_candles"] = chart_candles
+                            s["chart_signals"] = chart_signals
+                            if "chart_updated_at" not in s:
+                                s["chart_updated_at"] = -1
                         elif "chart_updated_at" not in s:
                             s["chart_updated_at"] = -1
                         if best:
@@ -4175,38 +4184,48 @@ class Handler(BaseHTTPRequestHandler):
 
             chart_candles = []; chart_signals = []; chart_symbol = ""; chart_tf = ""; chart_best = None; chart_path = ""
 
-            # Для мультирежима: сначала ищем в opt_states по символу
             if req_sym:
-                # Если это активный символ — берём актуальные данные из opt_state
                 with opt_states_lock:
                     is_active = (req_sym == _active_chart_symbol)
-                    _dbg_active = _active_chart_symbol
-                print(f"[chart] req={req_sym} active={_dbg_active} is_active={is_active}", flush=True)
-                if not is_active:
-                    with opt_states_lock:
-                        sym_state = opt_states.get(req_sym, {})
-                    _dbg_upd = sym_state.get("chart_updated_at", -1)
-                    _dbg_best = bool(sym_state.get("best"))
-                    _dbg_cc = len(sym_state.get("chart_candles") or [])
-                    print(f"[chart] opt_states[{req_sym}]: chart_updated_at={_dbg_upd} best={_dbg_best} chart_candles={_dbg_cc}", flush=True)
-                    # Проверяем chart_updated_at > 0 — признак что данные реально есть
-                    if sym_state.get("chart_updated_at", -1) > 0 and sym_state.get("best"):
-                        chart_candles = list(sym_state.get("chart_candles") or [])
+                    sym_state = dict(opt_states.get(req_sym, {}))
+                print(f"[chart] req={req_sym} active={_active_chart_symbol} is_active={is_active} "
+                      f"chart_upd={sym_state.get('chart_updated_at',-1)} "
+                      f"candles={len(sym_state.get('chart_candles') or [])} "
+                      f"best={bool(sym_state.get('best'))}", flush=True)
+
+                if not is_active and sym_state:
+                    # Неактивный символ — берём из снапшота opt_states
+                    if sym_state.get("chart_candles"):
+                        # Есть готовые свечи из снапшота
+                        chart_candles = list(sym_state["chart_candles"])
                         chart_signals = list(sym_state.get("chart_signals") or [])
                         chart_symbol  = sym_state.get("symbol", req_sym)
                         chart_tf      = sym_state.get("chart_tf", "")
-                        chart_best    = sym_state.get("best", None)
-                        chart_path    = sym_state.get("chart_path","")
+                        chart_best    = sym_state.get("best")
+                        chart_path    = sym_state.get("chart_path", "")
+                    elif sym_state.get("best"):
+                        # Свечей нет в снапшоте, но есть best — строим график на лету
+                        print(f"[chart] {req_sym}: строим график на лету из best+пустых свечей", flush=True)
+                        chart_best   = sym_state["best"]
+                        chart_symbol = req_sym
+                        chart_tf     = sym_state.get("chart_tf", "")
+                        # chart_candles остаётся [] — покажем "не готов"
 
-            # Fallback: берём из opt_state (текущий активный символ)
+            # Для активного символа или если sym_state пустой — берём из opt_state
             if not chart_candles:
                 with opt_lock:
-                    chart_candles = list(opt_state.get("chart_candles", []))
-                    chart_signals = list(opt_state.get("chart_signals", []))
-                    chart_symbol  = opt_state.get("chart_symbol", "")
-                    chart_tf      = opt_state.get("chart_tf", "")
-                    chart_best    = opt_state.get("best", None)
-                    chart_path    = opt_state.get("chart_path", "")
+                    active_sym = opt_state.get("chart_symbol", "")
+                    # Если запрошен конкретный символ и он не совпадает с активным — не отдаём чужие данные
+                    if req_sym and req_sym != active_sym:
+                        print(f"[chart] {req_sym} не совпадает с opt_state chart_symbol={active_sym}, нет данных", flush=True)
+                        chart_candles = []; chart_best = None
+                    else:
+                        chart_candles = list(opt_state.get("chart_candles", []))
+                        chart_signals = list(opt_state.get("chart_signals", []))
+                        chart_symbol  = opt_state.get("chart_symbol", "")
+                        chart_tf      = opt_state.get("chart_tf", "")
+                        chart_best    = opt_state.get("best", None)
+                        chart_path    = opt_state.get("chart_path", "")
             if not chart_best or not chart_candles:
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
