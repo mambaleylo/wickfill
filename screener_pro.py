@@ -2421,34 +2421,34 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#fffdf9;
-  --cream2:#fff8f0;
-  --cream3:#f5ede0;
-  --sand:#e0d0bc;
-  --sand2:#c8b89a;
-  --warm:#8c7b6b;
-  --bark:#2e2218;
-  --text:#1a1208;
-  --text2:#3d2e20;
-  --text3:#7a6550;
-  --glass:rgba(255,253,249,0.90);
-  --glass2:rgba(255,248,240,0.80);
+  --cream:#f8f9fb;
+  --cream2:#f1f3f7;
+  --cream3:#e8ecf2;
+  --sand:#d4dae6;
+  --sand2:#b0bacb;
+  --warm:#7a8699;
+  --bark:#1e2a3a;
+  --text:#1a2332;
+  --text2:#3a4a5c;
+  --text3:#6a7a8e;
+  --glass:rgba(248,249,251,0.92);
+  --glass2:rgba(241,243,247,0.82);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 16px rgba(60,40,20,0.07);
-  --shadow2:0 8px 32px rgba(60,40,20,0.11);
+  --shadow:0 2px 16px rgba(30,42,58,0.06);
+  --shadow2:0 8px 32px rgba(30,42,58,0.10);
   --radius:18px;
   --radius-sm:12px;
-  --accent:#7c6a58;
-  --green:#2e6e42;
-  --green-light:#dcf0e4;
+  --accent:#5a7290;
+  --green:#2a6e48;
+  --green-light:#ddf0e8;
   --red:#8b2828;
   --red-light:#f5e0e0;
-  --blue:#2e5070;
-  --blue-light:#dceaf5;
+  --blue:#2a4e78;
+  --blue-light:#dce8f5;
   --yellow:#7a5a20;
   --yellow-light:#f5eedc;
-  --border:rgba(60,40,20,0.10);
-  --border2:rgba(60,40,20,0.06);
+  --border:rgba(30,42,58,0.09);
+  --border2:rgba(30,42,58,0.05);
 }
 
 [data-theme="dark"]{
@@ -2664,18 +2664,18 @@ input[type=number]{-moz-appearance:textfield}
 /* ── Primary button ── */
 .btn-primary{
   width:100%;padding:11px 16px;
-  background:linear-gradient(135deg,#5c4f43 0%,#7c6a58 100%);
+  background:linear-gradient(135deg,#2a4e78 0%,#3a6496 100%);
   border:none;border-radius:var(--radius-sm);
-  color:#f7f3ee;font-size:.9rem;font-weight:600;
+  color:#f0f5ff;font-size:.9rem;font-weight:600;
   font-family:'DM Sans',sans-serif;
   cursor:pointer;letter-spacing:-.01em;
-  box-shadow:0 2px 12px rgba(92,79,67,.25),inset 0 1px 0 rgba(255,255,255,.12);
+  box-shadow:0 2px 12px rgba(42,78,120,.22),inset 0 1px 0 rgba(255,255,255,.12);
   transition:all .18s ease;
   display:flex;align-items:center;justify-content:center;gap:7px;
 }
 .btn-primary:hover:not(:disabled){
-  background:linear-gradient(135deg,#6b5c4e 0%,#8c7a68 100%);
-  box-shadow:0 4px 20px rgba(92,79,67,.3);transform:translateY(-1px);
+  background:linear-gradient(135deg,#345e8a 0%,#4474a8 100%);
+  box-shadow:0 4px 20px rgba(42,78,120,.28);transform:translateY(-1px);
 }
 .btn-primary:disabled{opacity:.45;cursor:not-allowed;transform:none}
 
@@ -4023,3 +4023,4 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
