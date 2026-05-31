@@ -143,6 +143,13 @@ opt_state = {
 }
 opt_lock = threading.Lock()
 
+# ── Multi-symbol state ──────────────────────────────────────────
+# opt_states[symbol] — per-symbol snapshot updated after each cycle
+opt_states   = {}   # {symbol_key: {eq, wr, dd, trades, cycle, running, chart_updated_at, ...}}
+opt_states_lock = threading.Lock()
+_multi_symbols  = []   # ordered list of symbols in current session
+_active_chart_symbol = ""  # which symbol's chart is shown in iframe
+
 alert_state = {
     "running": False, "error": "", "last_scan": "",
     "signals": [], "sent": 0,
@@ -2434,7 +2441,6 @@ def run_optimizer_safe(params):
         with opt_lock:
             opt_state["running"] = False
             opt_state["error"] = str(e)
-        # Сохраняем perf-лог даже при краше
         try:
             _plog("crash", error=str(e))
             sym = params.get("wf_symbol","unknown")
@@ -2442,6 +2448,67 @@ def run_optimizer_safe(params):
             _perf_save(sym, tf2)
         except Exception:
             pass
+
+def _run_multi_safe(sym_list, base_params):
+    """Round-robin: one cycle per symbol, repeating until stopped."""
+    import traceback, copy
+    global _active_chart_symbol
+    print(f"[multi] Старт round-robin: {sym_list}", flush=True)
+    while not _opt_stop_flag.is_set():
+        for sym in sym_list:
+            if _opt_stop_flag.is_set():
+                break
+            params = copy.deepcopy(base_params)
+            params["wf_symbol"] = sym
+            params["infinite"] = False   # one cycle per call; we loop here
+            with opt_states_lock:
+                _active_chart_symbol = sym
+                if sym not in opt_states:
+                    opt_states[sym] = {}
+                opt_states[sym]["running"] = True
+            print(f"[multi] Цикл → {sym}", flush=True)
+            try:
+                run_optimizer(params)
+            except Exception as e:
+                print(f"[multi] ИСКЛЮЧЕНИЕ {sym}: {e}\n{traceback.format_exc()}", flush=True)
+            # snapshot result into opt_states
+            with opt_lock:
+                best = opt_state.get("all_time_best") or opt_state.get("best")
+                valid = opt_state.get("valid")
+                windows = opt_state.get("windows", [])
+                min_stable = opt_state.get("min_stable_days")
+                days = opt_state.get("days", 30)
+                cycle = opt_state.get("cycle", 0)
+                chart_upd = opt_state.get("chart_updated_at", -1)
+                chart_candles = list(opt_state.get("chart_candles", []))
+                chart_signals = list(opt_state.get("chart_signals", []))
+                chart_tf = opt_state.get("chart_tf","")
+                chart_path = opt_state.get("chart_path","")
+            with opt_states_lock:
+                s = opt_states.setdefault(sym, {})
+                s["symbol"]   = sym
+                s["cycle"]    = cycle
+                s["running"]  = False
+                s["chart_updated_at"] = chart_upd
+                s["chart_candles"]    = chart_candles
+                s["chart_signals"]    = chart_signals
+                s["chart_tf"]         = chart_tf
+                s["chart_path"]       = chart_path
+                s["valid"]            = valid
+                s["windows"]          = windows
+                s["min_stable_days"]  = min_stable
+                s["days"]             = days
+                if best:
+                    s["best"]   = best
+                    s["eq"]     = round(best.get("equity", 100), 2)
+                    s["wr"]     = round(best.get("winrate", 0), 1)
+                    s["dd"]     = round(best.get("max_dd", 0), 1)
+                    s["trades"] = best.get("trades", 0)
+    with opt_states_lock:
+        for sym in sym_list:
+            if sym in opt_states:
+                opt_states[sym]["running"] = False
+    print("[multi] Round-robin завершён", flush=True)
 
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
@@ -2832,6 +2899,19 @@ input[type=number]{-moz-appearance:textfield}
 .cycles-bar{display:none} /* legacy — replaced by cycles-col */
 .cycles-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
 .cc-strip{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;flex:1;align-items:flex-start;}
+.sym-btn{font-size:.65rem;font-weight:600;padding:3px 9px;border-radius:20px;border:1.5px solid var(--border2);background:var(--cream2);color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
+.sym-btn.active{background:var(--bark);color:#fff;border-color:var(--bark)}
+.sym-btn.running{animation:cc-glow 1.6s ease-in-out infinite}
+.sym-card{min-width:100px;max-width:130px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border2);background:var(--glass);position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.sym-card:hover{border-color:var(--sand2)}
+.sym-card.active{border-color:var(--bark)}
+.sym-card.pos{border-color:rgba(74,124,89,.4);background:var(--green-light)}
+.sym-card.neg{border-color:rgba(139,58,58,.3);background:var(--red-light)}
+.sym-card.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
+.sym-name{font-size:.58rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+.sym-eq{font-size:1rem;font-weight:700;font-family:"DM Mono",monospace;color:var(--bark)}
+.sym-eq.pos{color:var(--green)}.sym-eq.neg{color:var(--red)}
+.sym-meta{font-size:.58rem;color:var(--text3);margin-top:2px;line-height:1.4}
 .cc-strip::-webkit-scrollbar{height:3px}
 .cc-strip::-webkit-scrollbar-thumb{background:var(--cream3);border-radius:2px}
 
@@ -3072,11 +3152,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
+      <div class="field-inset" style="margin-bottom:6px">
+        <label>Символы (через запятую)</label>
+        <input type="text" id="wf_symbol" value="BTC_USDT" placeholder="BTC_USDT, ETH_USDT, SOL_USDT" style="width:100%">
+      </div>
       <div class="field-row" style="margin-bottom:6px">
-        <div class="field-inset">
-          <label>Символ</label>
-          <input type="text" id="wf_symbol" value="BTC_USDT">
-        </div>
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
@@ -3221,6 +3301,7 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Chart — fills remaining space -->
     <div class="chart-area">
+      <div id="symSwitcher" style="display:none;position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:20;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto"></div>
       <div class="chart-placeholder" id="chartPlaceholder">
         <span style="font-size:2rem;opacity:.2">📊</span>
         <span>График появится после первого цикла</span>
@@ -3298,6 +3379,63 @@ function sendTestEmail(){
 
 /* ── Start / Stop ── */
 function _slStatus(msg,ok){ /* статус убран из UI, авто-загрузка продолжает работать */ }
+// ── Multi-symbol state ──
+let _symList=[], _activeChart='', _symStates={};
+
+function _renderSymCards(){
+  const strip=document.getElementById('ccStrip');
+  // Sort by eq descending, running ones keep position
+  const sorted=[..._symList].sort((a,b)=>{
+    const ea=(_symStates[a]||{}).eq||100, eb=(_symStates[b]||{}).eq||100;
+    return eb-ea;
+  });
+  // Build cards
+  let html='';
+  for(const sym of sorted){
+    const s=_symStates[sym]||{};
+    const eq=s.eq??100, wr=s.wr??0, dd=s.dd??0, tr=s.trades??0;
+    const running=s.running||false;
+    const done=!running&&s.cycle>0;
+    const isPos=eq>100, isNeg=eq<100;
+    const cls='sym-card'+(running?' running':done?(isPos?' pos':isNeg?' neg':''):'')+(sym===_activeChart?' active':'');
+    const eqCls='sym-eq'+(done?(isPos?' pos':isNeg?' neg':''):'');
+    const symShort=sym.replace('_USDT','').replace('_BTC','');
+    html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}">
+      <div class="sym-name">${symShort}${running?'<span style="margin-left:3px;color:var(--green)">⟳</span>':''}</div>
+      <div class="${eqCls}">$${eq.toFixed(0)}</div>
+      <div class="sym-meta">WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}</div>
+      <div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>
+    </div>`;
+  }
+  strip.innerHTML=html;
+}
+
+function _renderSymSwitcher(){
+  const el=document.getElementById('symSwitcher');
+  if(!el||_symList.length<=1){if(el)el.style.display='none';return;}
+  el.style.display='flex';
+  el.innerHTML=_symList.map(s=>{
+    const running=(_symStates[s]||{}).running;
+    const cls='sym-btn'+(s===_activeChart?' active':'')+(running?' running':'');
+    return `<button class="${cls}" onclick="switchChart('${s}')">${s.replace('_USDT','')}</button>`;
+  }).join('');
+}
+
+function switchChart(sym){
+  _activeChart=sym;
+  _renderSymSwitcher();
+  _renderSymCards();
+  const frame=document.getElementById('chartFrame');
+  const ph=document.getElementById('chartPlaceholder');
+  const s=_symStates[sym]||{};
+  if(s.chart_updated_at>0){
+    const theme=document.documentElement.getAttribute('data-theme')||'light';
+    frame.src='/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now()+'&theme='+theme;
+    frame.style.display='block';
+    if(ph) ph.style.display='none';
+  }
+}
+
 function startOpt(){
   const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
   const tf=document.getElementById('wf_tf_sel').value;
@@ -3309,6 +3447,13 @@ function startOpt(){
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
       if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
+      // Init multi-symbol state
+      _symList=d.symbols||[sym.split(',')[0].trim()];
+      _activeChart=_symList[0];
+      _symStates={};
+      for(const s of _symList) _symStates[s]={eq:100,wr:0,dd:0,trades:0,cycle:0,running:true,chart_updated_at:-1};
+      _renderSymCards();
+      _renderSymSwitcher();
       lastLogCount=0;chartOpened=false;lastChartTs=-1;
       _resetLog();
       document.getElementById('bestSection').style.display='none';
@@ -3320,7 +3465,6 @@ function startOpt(){
       document.getElementById('wfBtn').disabled=true;
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
-      // Скрываем старый график до появления нового
       const _cf=document.getElementById('chartFrame');
       const _cp=document.getElementById('chartPlaceholder');
       if(_cf){_cf.style.display='none';_cf.src='about:blank';}
@@ -3377,7 +3521,32 @@ function listConfigs(){
 
 /* ── Poll ── */
 function poll(){
-  fetch('/opt_status').then(r=>r.json()).then(d=>{
+  const useMulti=_symList.length>1;
+  const endpoint=useMulti?'/opt_status_all':'/opt_status';
+  fetch(endpoint).then(r=>r.json()).then(d=>{
+    // Merge multi-symbol states
+    if(useMulti&&d.states){
+      for(const sym of _symList){
+        if(d.states[sym]) _symStates[sym]=Object.assign(_symStates[sym]||{},d.states[sym]);
+      }
+      if(d.active&&d.active!==_activeChart){
+        // auto-switch to active symbol if chart not manually pinned
+      }
+      _renderSymCards();
+      _renderSymSwitcher();
+      // auto-load chart for active sym when updated
+      const activeSt=_symStates[_activeChart]||{};
+      if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==lastChartTs){
+        lastChartTs=activeSt.chart_updated_at;
+        const frame=document.getElementById('chartFrame');
+        const ph=document.getElementById('chartPlaceholder');
+        const theme=document.documentElement.getAttribute('data-theme')||'light';
+        frame.src='/chart?symbol='+encodeURIComponent(_activeChart)+'&t='+Date.now()+'&theme='+theme;
+        frame.style.display='block';
+        if(ph) ph.style.display='none';
+        document.getElementById('chartBtn').style.display='flex';
+      }
+    }
     const elapsed=Math.round((Date.now()-startTs)/1000);
     document.getElementById('progTime').textContent=elapsed+'с';
     const pct=d.total>0?Math.round(d.progress/d.total*100):0;
@@ -3425,7 +3594,7 @@ function poll(){
     if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
     if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
     if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null, d.days||30);
-    if(d.chart_updated_at>0){
+    if(!useMulti&&d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at!==lastChartTs){
         lastChartTs=d.chart_updated_at;
@@ -3773,14 +3942,63 @@ class Handler(BaseHTTPRequestHandler):
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
             self._json(st)
-        elif parsed.path in ("/chart", "/chart_download"):
+        elif parsed.path == "/opt_status_all":
+            with opt_states_lock:
+                syms = list(_multi_symbols)
+                states_snap = {s: dict(opt_states.get(s,{})) for s in syms}
+                active = _active_chart_symbol
+            # also include main opt_state for single-symbol compat
             with opt_lock:
-                chart_candles = list(opt_state.get("chart_candles", []))
-                chart_signals = list(opt_state.get("chart_signals", []))
-                chart_symbol  = opt_state.get("chart_symbol", "")
-                chart_tf      = opt_state.get("chart_tf", "")
-                chart_best    = opt_state.get("best", None)
-                chart_path    = opt_state.get("chart_path", "")
+                main_logs = list(opt_state.get("logs",[]))
+                main_running = opt_state.get("running", False)
+                main_cycle = opt_state.get("cycle", 0)
+                main_progress = opt_state.get("progress", 0)
+                main_total = opt_state.get("total", 0)
+                main_pass = opt_state.get("pass_num", 0)
+                main_param = opt_state.get("current_param","")
+                main_elapsed = opt_state.get("elapsed", 0)
+                main_avg = opt_state.get("avg_cycle_s")
+                main_done = opt_state.get("done", False)
+                main_inf = opt_state.get("infinite", False)
+            self._json({
+                "symbols": syms,
+                "active": active,
+                "states": states_snap,
+                "running": main_running,
+                "done": main_done,
+                "infinite": main_inf,
+                "cycle": main_cycle,
+                "progress": main_progress,
+                "total": main_total,
+                "pass_num": main_pass,
+                "current_param": main_param,
+                "elapsed": main_elapsed,
+                "avg_cycle_s": main_avg,
+                "logs": main_logs,
+            })
+
+        elif parsed.path in ("/chart", "/chart_download"):
+            # support ?symbol=X for multi-symbol mode
+            qs = parse_qs(parsed.query)
+            req_sym = qs.get("symbol",[""])[0].upper()
+            with opt_lock:
+                if req_sym and req_sym != opt_state.get("chart_symbol",""):
+                    # requested symbol not current — use cached state
+                    with opt_states_lock:
+                        sym_state = opt_states.get(req_sym, {})
+                    chart_candles = list(sym_state.get("chart_candles", []))
+                    chart_signals = list(sym_state.get("chart_signals", []))
+                    chart_symbol  = sym_state.get("symbol", req_sym)
+                    chart_tf      = sym_state.get("chart_tf", "")
+                    chart_best    = sym_state.get("best", None)
+                    chart_path    = sym_state.get("chart_path","")
+                else:
+                    chart_candles = list(opt_state.get("chart_candles", []))
+                    chart_signals = list(opt_state.get("chart_signals", []))
+                    chart_symbol  = opt_state.get("chart_symbol", "")
+                    chart_tf      = opt_state.get("chart_tf", "")
+                    chart_best    = opt_state.get("best", None)
+                    chart_path    = opt_state.get("chart_path", "")
             if not chart_best or not chart_candles:
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
@@ -4011,14 +4229,28 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/scan":
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
-            global _opt_thread
+            global _opt_thread, _multi_symbols, _active_chart_symbol
             print(f"[SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
-            # Если тред жив — не перезапускаем, чтобы не сбрасывать циклы
             if _opt_thread and _opt_thread.is_alive():
                 self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
-            _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
-            _opt_thread.start()
-            self._json({"ok":True})
+            # Parse comma-separated symbols
+            raw_syms = params.get("wf_symbol","BTC_USDT")
+            sym_list = [s.strip().upper() for s in raw_syms.replace(","," ").split() if s.strip()]
+            if not sym_list: sym_list = ["BTC_USDT"]
+            with opt_states_lock:
+                _multi_symbols = sym_list
+                _active_chart_symbol = sym_list[0]
+                for s in sym_list:
+                    opt_states[s] = {"symbol": s, "eq": 100, "wr": 0, "dd": 0, "trades": 0,
+                                     "cycle": 0, "running": True, "chart_updated_at": -1,
+                                     "valid": None, "windows": [], "min_stable_days": None, "days": 30}
+            if len(sym_list) == 1:
+                _opt_thread = threading.Thread(target=run_optimizer_safe, args=(params,), daemon=True)
+                _opt_thread.start()
+            else:
+                _opt_thread = threading.Thread(target=_run_multi_safe, args=(sym_list, params), daemon=True)
+                _opt_thread.start()
+            self._json({"ok":True, "symbols": sym_list})
         else:
             self.send_response(404); self.end_headers()
 
