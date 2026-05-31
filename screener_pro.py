@@ -2996,16 +2996,17 @@ input[type=number]{-moz-appearance:textfield}
 /* Chart area — fills all remaining space */
 .chart-area{
   flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
-  background:var(--bg);
+  background:var(--cream);
 }
 .chart-placeholder{
   flex:1;display:flex;align-items:center;justify-content:center;
   flex-direction:column;gap:8px;
   color:var(--text3);font-size:.78rem;
+  background:var(--cream);
 }
 #chartFrame{
   width:100%;height:100%;flex:1;border:none;display:none;min-height:0;
-  background:var(--bg);
+  background:var(--cream);
 }
 
 /* Best combination table — inside log-col below log */
@@ -3021,8 +3022,8 @@ input[type=number]{-moz-appearance:textfield}
 .cycles-bar{display:none} /* legacy — replaced by cycles-col */
 .cycles-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)}
 .cc-strip{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;flex:1;align-items:flex-start;}
-.sym-btn{font-size:.65rem;font-weight:600;padding:3px 9px;border-radius:20px;border:1.5px solid var(--border2);background:var(--cream2);color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
-.sym-btn.active{background:var(--bark);color:#fff;border-color:var(--bark)}
+.sym-btn{font-size:.65rem;font-weight:600;padding:3px 9px;border-radius:20px;border:1.5px solid var(--border2);background:var(--cream3);color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
+.sym-btn.active{background:var(--bark);color:var(--cream);border-color:var(--bark)}
 .sym-btn.running{animation:cc-glow 1.6s ease-in-out infinite}
 .sym-card{min-width:120px;max-width:160px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border2);background:var(--glass);position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
 .sym-card:hover{border-color:var(--sand2)}
@@ -3423,7 +3424,7 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Chart — fills remaining space -->
     <div class="chart-area">
-      <div id="symSwitcher" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:20;display:none;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto;background:var(--glass);backdrop-filter:var(--blur);border:1px solid var(--border2);border-radius:20px;padding:4px 8px;max-width:90%"></div>
+      <div id="symSwitcher" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:20;display:none;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto;background:var(--cream2);border:1px solid var(--border2);border-radius:20px;padding:4px 8px;max-width:90%"></div>
       <div class="chart-placeholder" id="chartPlaceholder">
         <span style="font-size:2rem;opacity:.2">📊</span>
         <span>График появится после первого цикла</span>
