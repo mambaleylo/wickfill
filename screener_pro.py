@@ -1151,6 +1151,8 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
 html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
+[data-theme="light"] body{{background:#fafafa;color:#252b35}}
+[data-theme="light"] #tooltip{{background:rgba(248,249,251,.97);border:1px solid rgba(30,40,60,.12);color:#252b35;box-shadow:0 4px 16px rgba(30,40,60,.10)}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
@@ -1180,6 +1182,14 @@ canvas{{display:block;width:100%;height:100%}}
     </div>
   </div>
 </div>
+<script>
+// Read theme from URL param and apply before render
+(function(){{
+  const p=new URLSearchParams(location.search);
+  const t=p.get('theme')||'light';
+  document.documentElement.setAttribute('data-theme',t);
+}})();
+</script>
 <script>
 const CANDLES={candles_json};
 const SIGNALS={signals_json};
@@ -3325,7 +3335,8 @@ function _loadChartFrame(){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
   if(!frame) return;
-  frame.src='/chart?t='+Date.now();
+  const theme=document.documentElement.getAttribute('data-theme')||'light';
+  frame.src='/chart?t='+Date.now()+'&theme='+theme;
   frame.style.display='block';
   if(ph) ph.style.display='none';
 }
@@ -3675,6 +3686,11 @@ function toggleTheme(){
   document.documentElement.setAttribute('data-theme',next);
   document.getElementById('themeBtn').textContent=next==='dark'?'☀':'🌙';
   localStorage.setItem('wf_theme',next);
+  // Reload chart iframe with new theme
+  const frame=document.getElementById('chartFrame');
+  if(frame&&frame.style.display!=='none'&&frame.src&&frame.src!=='about:blank'){
+    frame.src='/chart?t='+Date.now()+'&theme='+next;
+  }
 }
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
