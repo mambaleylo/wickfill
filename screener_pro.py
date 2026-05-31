@@ -2530,99 +2530,107 @@ def _run_multi_safe(sym_list, base_params):
             if s not in _sw_state:
                 _sw_state[s] = {"candles": [], "params": {}, "risk": risk_pct, "running": False}
 
-    while not _opt_stop_flag.is_set():
-        for sym in sym_list:
-            if _opt_stop_flag.is_set():
-                break
-            params = copy.deepcopy(base_params)
-            params["wf_symbol"] = sym
-            params["infinite"] = False
-            sym_cycles[sym] = sym_cycles.get(sym, 0) + 1
-            with opt_states_lock:
-                _active_chart_symbol = sym
-                if sym not in opt_states:
-                    opt_states[sym] = {}
-                opt_states[sym]["running"] = True
-                opt_states[sym]["cycle"]   = sym_cycles[sym]
-            print(f"[multi] Цикл #{sym_cycles[sym]} → {sym}", flush=True)
-            try:
-                run_optimizer(params)
-            except Exception as e:
-                print(f"[multi] ИСКЛЮЧЕНИЕ {sym}: {e}\n{traceback.format_exc()}", flush=True)
-            # snapshot result into opt_states
-            with opt_lock:
-                best = opt_state.get("all_time_best") or opt_state.get("best")
-                valid = opt_state.get("valid")
-                windows = opt_state.get("windows", [])
-                min_stable = opt_state.get("min_stable_days")
-                days_v = opt_state.get("days", 30)
-                chart_upd = opt_state.get("chart_updated_at", -1)
-                chart_candles = list(opt_state.get("chart_candles", []))
-                chart_signals = list(opt_state.get("chart_signals", []))
-                chart_tf = opt_state.get("chart_tf","")
-                chart_path = opt_state.get("chart_path","")
-                best_params = dict(opt_state.get("best",{}).get("params",{})) if opt_state.get("best") else {}
-            with opt_states_lock:
-                s = opt_states.setdefault(sym, {})
-                s["symbol"]   = sym
-                s["cycle"]    = sym_cycles[sym]
-                s["running"]  = False
-                s["valid"]    = valid
-                s["windows"]  = windows
-                s["min_stable_days"] = min_stable
-                s["days"]     = days_v
-                if chart_upd > 0:
-                    s["chart_updated_at"] = chart_upd
-                    s["chart_candles"]    = chart_candles
-                    s["chart_signals"]    = chart_signals
-                    s["chart_tf"]         = chart_tf
-                    s["chart_path"]       = chart_path
-                elif "chart_updated_at" not in s:
-                    s["chart_updated_at"] = -1
-                if best:
-                    prev_eq = s.get("eq", 0)
-                    new_eq  = round(best.get("equity", 100), 2)
-                    if new_eq >= prev_eq:
-                        s["best"]   = best
-                        s["eq"]     = new_eq
-                        s["wr"]     = round(best.get("winrate", 0), 1)
-                        s["dd"]     = round(best.get("max_dd", 0), 1)
-                        s["trades"] = best.get("trades", 0)
-                        s["pf"]     = round(min(best.get("profit_factor", 0), 999), 2)
-                        s["sl"]     = best.get("params", {}).get("sl_pct", None)
-                        s["tp"]     = best.get("params", {}).get("tp_pct", None)
-            # Запускаем per-symbol SW-тред после первого цикла (один раз на символ)
-            if sym_cycles[sym] == 1 and best_params:
-                with _sw_state_lock:
-                    _sw_state[sym]["params"] = best_params
-                    _sw_state[sym]["risk"]   = risk_pct
-                already = _sw_threads.get(sym)
-                if not already or not already.is_alive():
-                    n_sw = days * int(86400 / TF_SECONDS.get(tf, 3600))
-                    t = threading.Thread(
-                        target=_sliding_window_thread,
-                        args=(sym, tf, n_sw, alert_cfg, risk_pct),
-                        daemon=True
-                    )
-                    _sw_threads[sym] = t
-                    t.start()
-                    print(f"[multi] SW-тред запущен для {sym}", flush=True)
-            elif sym_cycles[sym] > 1 and best_params:
-                # Обновляем параметры SW-треда при каждом новом лучшем результате
-                with _sw_state_lock:
-                    if sym in _sw_state:
-                        _sw_state[sym]["params"] = best_params
-
-    # Останавливаем все per-symbol SW-треды
-    with _sw_state_lock:
-        for sym in sym_list:
-            if sym in _sw_state:
-                _sw_state[sym]["running"] = False
-    with opt_states_lock:
-        for sym in sym_list:
-            if sym in opt_states:
-                opt_states[sym]["running"] = False
-    print("[multi] Round-robin завершён", flush=True)
+    try:
+        while not _opt_stop_flag.is_set():
+            for sym in sym_list:
+                if _opt_stop_flag.is_set():
+                    break
+                params = copy.deepcopy(base_params)
+                params["wf_symbol"] = sym
+                params["infinite"] = False
+                sym_cycles[sym] = sym_cycles.get(sym, 0) + 1
+                with opt_states_lock:
+                    _active_chart_symbol = sym
+                    if sym not in opt_states:
+                        opt_states[sym] = {}
+                    opt_states[sym]["running"] = True
+                    opt_states[sym]["cycle"]   = sym_cycles[sym]
+                print(f"[multi] Цикл #{sym_cycles[sym]} → {sym}", flush=True)
+                try:
+                    run_optimizer(params)
+                except Exception as e:
+                    print(f"[multi] ИСКЛЮЧЕНИЕ run_optimizer {sym}: {e}\n{traceback.format_exc()}", flush=True)
+                # snapshot result into opt_states
+                try:
+                    with opt_lock:
+                        best = opt_state.get("all_time_best") or opt_state.get("best")
+                        valid = opt_state.get("valid")
+                        windows = opt_state.get("windows", [])
+                        min_stable = opt_state.get("min_stable_days")
+                        days_v = opt_state.get("days", 30)
+                        chart_upd = opt_state.get("chart_updated_at", -1)
+                        chart_candles = list(opt_state.get("chart_candles", []))
+                        chart_signals = list(opt_state.get("chart_signals", []))
+                        chart_tf = opt_state.get("chart_tf","")
+                        chart_path = opt_state.get("chart_path","")
+                        best_params = dict(opt_state.get("best",{}).get("params",{})) if opt_state.get("best") else {}
+                    with opt_states_lock:
+                        s = opt_states.setdefault(sym, {})
+                        s["symbol"]   = sym
+                        s["cycle"]    = sym_cycles[sym]
+                        s["running"]  = False
+                        s["valid"]    = valid
+                        s["windows"]  = windows
+                        s["min_stable_days"] = min_stable
+                        s["days"]     = days_v
+                        if chart_upd > 0:
+                            s["chart_updated_at"] = chart_upd
+                            s["chart_candles"]    = chart_candles
+                            s["chart_signals"]    = chart_signals
+                            s["chart_tf"]         = chart_tf
+                            s["chart_path"]       = chart_path
+                        elif "chart_updated_at" not in s:
+                            s["chart_updated_at"] = -1
+                        if best:
+                            prev_eq = s.get("eq", 0)
+                            new_eq  = round(best.get("equity", 100), 2)
+                            if new_eq >= prev_eq:
+                                s["best"]   = best
+                                s["eq"]     = new_eq
+                                s["wr"]     = round(best.get("winrate", 0), 1)
+                                s["dd"]     = round(best.get("max_dd", 0), 1)
+                                s["trades"] = best.get("trades", 0)
+                                s["pf"]     = round(min(best.get("profit_factor", 0), 999), 2)
+                                s["sl"]     = best.get("params", {}).get("sl_pct", None)
+                                s["tp"]     = best.get("params", {}).get("tp_pct", None)
+                except Exception as e:
+                    print(f"[multi] ИСКЛЮЧЕНИЕ snapshot {sym}: {e}\n{traceback.format_exc()}", flush=True)
+                # Запускаем per-symbol SW-тред после первого цикла (один раз на символ)
+                try:
+                    if sym_cycles[sym] == 1 and best_params:
+                        with _sw_state_lock:
+                            _sw_state[sym]["params"] = best_params
+                            _sw_state[sym]["risk"]   = risk_pct
+                        already = _sw_threads.get(sym)
+                        if not already or not already.is_alive():
+                            n_sw = days * int(86400 / TF_SECONDS.get(tf, 3600))
+                            t = threading.Thread(
+                                target=_sliding_window_thread,
+                                args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                                daemon=True
+                            )
+                            _sw_threads[sym] = t
+                            t.start()
+                            print(f"[multi] SW-тред запущен для {sym}", flush=True)
+                    elif sym_cycles[sym] > 1 and best_params:
+                        with _sw_state_lock:
+                            if sym in _sw_state:
+                                _sw_state[sym]["params"] = best_params
+                except Exception as e:
+                    print(f"[multi] ИСКЛЮЧЕНИЕ SW-тред {sym}: {e}\n{traceback.format_exc()}", flush=True)
+    except Exception as e:
+        print(f"[multi] КРИТИЧЕСКОЕ ИСКЛЮЧЕНИЕ: {e}\n{traceback.format_exc()}", flush=True)
+    finally:
+        # Останавливаем все per-symbol SW-треды
+        with _sw_state_lock:
+            for sym in sym_list:
+                if sym in _sw_state:
+                    _sw_state[sym]["running"] = False
+        with opt_states_lock:
+            for sym in sym_list:
+                if sym in opt_states:
+                    opt_states[sym]["running"] = False
+        print("[multi] Round-robin завершён", flush=True)
 
 # ═══════════════════════════════════════════════════════════════
 # HTML UI
