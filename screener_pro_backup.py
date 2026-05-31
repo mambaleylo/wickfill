@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.106
+WickFill Optimizer v3.107-perf
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -293,61 +293,83 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     atr_series = _atr(candles_list, max(q_atr,2))
 
     def _calc_return_rate(i, is_up_wick):
+        # OPT: плоские массивы вместо candles_list[ki]["high"] и т.д.
         total=0.0; returns=0.0
         if i<=ret_n+1: return None
         max_look=min(ret_lb, i-ret_n-1)
         for k in range(ret_n+1, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_up=(c["high"]-max(c["open"],c["close"]))/k_rng*100
-            k_dn=(min(c["open"],c["close"])-c["low"])/k_rng*100
-            if is_up_wick and k_up>=ret_sim:
-                target=max(c["open"],c["close"]); total+=1
-                for j in range(1,ret_n+1):
-                    fi=ki+j
-                    if fi<n and candles_list[fi]["low"]<=target: returns+=1; break
-            elif not is_up_wick and k_dn>=ret_sim:
-                target=min(c["open"],c["close"]); total+=1
-                for j in range(1,ret_n+1):
-                    fi=ki+j
-                    if fi<n and candles_list[fi]["high"]>=target: returns+=1; break
+            if is_up_wick:
+                if _all_upw[ki]/k_rng*100>=ret_sim:
+                    target=_all_hi[ki]-_all_upw[ki]  # max(open,close)
+                    total+=1
+                    for j in range(1,ret_n+1):
+                        fi=ki+j
+                        if fi<n and _all_lo[fi]<=target: returns+=1; break
+            else:
+                if _all_dnw[ki]/k_rng*100>=ret_sim:
+                    target=_all_lo[ki]+_all_dnw[ki]  # min(open,close)
+                    total+=1
+                    for j in range(1,ret_n+1):
+                        fi=ki+j
+                        if fi<n and _all_hi[fi]>=target: returns+=1; break
         return (returns/total*100) if total>0 else None
 
+    # OPT: предвычисляем вспомогательные массивы для _count_tested_level / _count_wick_cluster
+    # Вместо доступа к candles_list[ki]["high"] и т.д. в горячем цикле — используем плоские массивы
+    # Они будут определены ниже (после _all_hi/_all_lo/_all_upw/_all_dnw/_all_rng),
+    # но функции замкнуты на нелокальный массив через nonlocal-ссылку (заполнится до вызова).
+    # Здесь определяем функции с захватом через closure.
+
     def _count_tested_level(i, level_price, is_up_search):
+        # OPT: использует _all_hi, _all_lo, _all_upw, _all_dnw, _all_rng вместо candles_list[ki]
         wins=0
         if i<3: return wins
         zone_tol=level_price*rep_zone/100.0; max_look=min(rep_lb,i-2)
+        closes = _worker_closes  # предвычисленный массив close в воркере (или None)
         for k in range(2, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_upw=c["high"]-max(c["open"],c["close"]); k_dnw=min(c["open"],c["close"])-c["low"]
-            k_up_pct=k_upw/k_rng*100; k_dn_pct=k_dnw/k_rng*100
-            if is_up_search and k_up_pct>=mwp:
-                if abs(c["high"]-level_price)<=zone_tol:
-                    fi=ki+1
-                    if fi<n and candles_list[fi]["close"]<max(c["open"],c["close"]): wins+=1
-            elif not is_up_search and k_dn_pct>=mwp:
-                if abs(c["low"]-level_price)<=zone_tol:
-                    fi=ki+1
-                    if fi<n and candles_list[fi]["close"]>min(c["open"],c["close"]): wins+=1
+            if is_up_search:
+                k_upw=_all_upw[ki]
+                if k_upw/k_rng*100>=mwp:
+                    if abs(_all_hi[ki]-level_price)<=zone_tol:
+                        fi=ki+1
+                        fi_close = (closes[fi] if closes is not None else candles_list[fi]["close"]) if fi<n else 0
+                        fi_open  = candles_list[fi]["open"] if fi<n else 0
+                        fi_hi    = _all_hi[fi] if fi<n else 0
+                        # close[fi] < max(open[fi], close_prev_wick_top) — используем open свечи fi
+                        body_top = _all_hi[ki] - _all_upw[ki]  # = max(open,close) свечи ki
+                        if fi<n and fi_close < body_top: wins+=1
+            else:
+                k_dnw=_all_dnw[ki]
+                if k_dnw/k_rng*100>=mwp:
+                    if abs(_all_lo[ki]-level_price)<=zone_tol:
+                        fi=ki+1
+                        body_bot = _all_lo[ki] + _all_dnw[ki]  # = min(open,close) свечи ki
+                        fi_close = (closes[fi] if closes is not None else candles_list[fi]["close"]) if fi<n else 0
+                        if fi<n and fi_close > body_bot: wins+=1
         return wins
 
     def _count_wick_cluster(i, level_price, is_up_search):
+        # OPT: использует предвычисленные плоские массивы
         cnt=0; zone_tol=level_price*clu_pct/100.0; max_look=min(clu_lb,i-1)
         for k in range(1, max_look+1):
             ki=i-k
             if ki<0: continue
-            c=candles_list[ki]; k_rng=c["high"]-c["low"]
+            k_rng=_all_rng[ki]
             if k_rng<=0: continue
-            k_upw=c["high"]-max(c["open"],c["close"]); k_dnw=min(c["open"],c["close"])-c["low"]
-            if is_up_search and k_upw/k_rng*100>=mwp:
-                if abs(c["high"]-level_price)<=zone_tol: cnt+=1
-            elif not is_up_search and k_dnw/k_rng*100>=mwp:
-                if abs(c["low"]-level_price)<=zone_tol: cnt+=1
+            if is_up_search:
+                if _all_upw[ki]/k_rng*100>=mwp:
+                    if abs(_all_hi[ki]-level_price)<=zone_tol: cnt+=1
+            else:
+                if _all_dnw[ki]/k_rng*100>=mwp:
+                    if abs(_all_lo[ki]-level_price)<=zone_tol: cnt+=1
         return cnt
 
     # Предвычисляем массивы high/low/upwick/dnwick для быстрых скользящих окон
@@ -355,6 +377,47 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     _all_lo  = [c["low"]  for c in candles_list]
     _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
     _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
+    _all_rng = [c["high"]-c["low"] for c in candles_list]  # OPT: для _css без доступа к candles_list[j]
+
+    # OPT: скользящие deque для max(_all_hi[s:i]) и min(_all_lo[s:i]) — O(1) вместо O(window)
+    from collections import deque as _deque
+    def _build_sliding_max(arr, window):
+        """Возвращает массив, где result[i] = max(arr[max(0,i-window):i])."""
+        dq = _deque()  # хранит индексы, убывающие по значению
+        out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] <= v:
+                dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window:
+                dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+
+    def _build_sliding_min(arr, window):
+        dq = _deque()
+        out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] >= v:
+                dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window:
+                dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+
+    # Предвычисляем скользящие max/min для каждого фильтра с окном
+    _slide_hi_ll  = _build_sliding_max(_all_hi, ll)   if ulf  else None
+    _slide_lo_ll  = _build_sliding_min(_all_lo, ll)   if ulf  else None
+    _slide_upw_gl = _build_sliding_max(_all_upw, gl)  if ugf  else None  # не нужен, geo считает percentile
+    _slide_hi_sw  = _build_sliding_max(_all_hi, sw_len) if uswf else None
+    _slide_lo_sw  = _build_sliding_min(_all_lo, sw_len) if uswf else None
+    # Для geo filter: percentile — нужен полный слайс, оставляем как есть (окно gl <= 30, дёшево)
+    # Для ms filter: sliding max/min с окном ms_lb
+    _slide_hi_ms1 = _build_sliding_max(_all_hi, ms_lb)   if umsf else None
+    _slide_lo_ms1 = _build_sliding_min(_all_lo, ms_lb)   if umsf else None
+    _slide_hi_ms2 = _build_sliding_max(_all_hi, ms_lb*2) if umsf else None
+    _slide_lo_ms2 = _build_sliding_min(_all_lo, ms_lb*2) if umsf else None
 
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
@@ -409,10 +472,10 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         rsi_ok_l=(not urf) or rsi_now<=rlmax
         rsi_ok_s=(not urf) or rsi_now>=rsmin
 
+        # OPT: level filter — sliding deque O(1) вместо max/min по slice
         if ulf:
-            _s=max(0,i-ll)
-            prev_hi=max(_all_hi[_s:i]) if i>_s else hi
-            prev_lo=min(_all_lo[_s:i]) if i>_s else lo
+            prev_hi=_slide_hi_ll[i-1] if i>0 else hi
+            prev_lo=_slide_lo_ll[i-1] if i>0 else lo
         else:
             prev_hi=hi; prev_lo=lo
         near_hi=(not ulf) or (abs(hi-prev_hi)/prev_hi*100<=ltol if prev_hi>0 else False)
@@ -427,13 +490,14 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         else:
             geo_ok_l=geo_ok_s=True
 
+        # OPT: _css использует _all_rng вместо candles_list[j]["high"]-candles_list[j]["low"]
         def _css(is_long):
             wick=dn_w if is_long else up_w; w_pct=dn_w_pct if is_long else up_w_pct
             s1=min(w_pct/mwp*100,100) if mwp>0 else 100
             cp=(cl-lo)/rng*100 if rng>0 else 50
             s2=cp if is_long else 100-cp; s2=max(min(s2,100),0)
             s3=max(min((1-body/wick)*100,100),0) if wick>0 else 0
-            hist_rng=[candles_list[j]["high"]-candles_list[j]["low"] for j in range(max(0,i-20),i)]
+            _cs=max(0,i-20); hist_rng=_all_rng[_cs:i]
             s4=sum(1 for r2 in hist_rng if rng>r2)/len(hist_rng)*100 if hist_rng else 50
             wp_v=dn_w_pp if is_long else up_w_pp
             s5=min(wp_v/mwpp*100,100) if mwpp>0 else 100
@@ -447,28 +511,29 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             css_ok_l=css_ok_s=True
 
         if uqf and atr_now>0:
-            hist_atr=[atr_series[j] for j in range(max(0,i-q_atr),i) if atr_series[j]>0]
-            avg_atr=sum(hist_atr)/len(hist_atr) if hist_atr else atr_now
+            _qs=max(0,i-q_atr); hist_atr=atr_series[_qs:i]
+            valid_atr=[v for v in hist_atr if v>0]
+            avg_atr=sum(valid_atr)/len(valid_atr) if valid_atr else atr_now
             ratio=atr_now/avg_atr if avg_atr>0 else 1
             quiet_ok=q_min<=ratio<=q_max
         else:
             quiet_ok=True
 
+        # OPT: sweep filter — sliding deque O(1)
         if uswf:
-            _s=max(0,i-sw_len)
-            sw_hi=max(_all_hi[_s:i]) if i>_s else hi
-            sw_lo=min(_all_lo[_s:i]) if i>_s else lo
+            sw_hi=_slide_hi_sw[i-1] if i>0 else hi
+            sw_lo=_slide_lo_sw[i-1] if i>0 else lo
             sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
             sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
         else:
             sweep_ok_l=sweep_ok_s=True
 
+        # OPT: ms filter — sliding deque O(1) вместо max/min по двум slices
         if umsf and i>=ms_lb*2:
-            _s1=i-ms_lb; _s2=i-ms_lb*2
-            swing_hi=max(_all_hi[_s1:i])
-            swing_lo=min(_all_lo[_s1:i])
-            prev_s_hi=max(_all_hi[_s2:_s1])
-            prev_s_lo=min(_all_lo[_s2:_s1])
+            swing_hi  = _slide_hi_ms1[i-1]
+            swing_lo  = _slide_lo_ms1[i-1]
+            prev_s_hi = _slide_hi_ms2[i-ms_lb-1] if i-ms_lb-1>=0 else swing_hi
+            prev_s_lo = _slide_lo_ms2[i-ms_lb-1] if i-ms_lb-1>=0 else swing_lo
             ms_up=swing_hi>prev_s_hi and swing_lo>prev_s_lo
             ms_down=swing_hi<prev_s_hi and swing_lo<prev_s_lo
             ms_ok_l=ms_down; ms_ok_s=ms_up
@@ -868,6 +933,11 @@ def _fetch_current_candle(symbol, tf):
 # ═══════════════════════════════════════════════════════════════
 # COORDINATE DESCENT
 # ═══════════════════════════════════════════════════════════════
+# OPT: обратный маппинг use_X -> [dep_param1, dep_param2, ...] для батчинга
+_USE_TO_DEPS = {}
+for _dep_k, _use_k in FILTER_GROUPS.items():
+    _USE_TO_DEPS.setdefault(_use_k, []).append(_dep_k)
+
 def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                               top20_global, start_label, max_passes=8,
                               stop_flag=None, grids=None):
@@ -882,27 +952,100 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
     while True:
         if stop_flag and stop_flag(): break
         pass_num += 1
-        keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
-        # Круг/Депозит — отображается через pass_num в progLabel, лог не нужен
         _grids = grids if grids is not None else _GRIDS
 
-        steps_in_pass = sum(len(_grids[k]) for k in keys_shuffled)
+        # OPT: use_* параметры пропускаем отдельно — они обрабатываются вместе
+        # с зависимыми параметрами в одном батче (см. ниже)
+        keys_shuffled = list(_KEYS); random.shuffle(keys_shuffled)
+        # Разбиваем на use_* и остальные
+        use_keys_set = set(_USE_TO_DEPS.keys())
+        # use_* будут обработаны внутри блока зависимых параметров
+        # Строим порядок: сначала use_* параметр (если ещё не обработан), потом его зависимые
+        processed_use = set()
+        ordered_keys = []
+        for k in keys_shuffled:
+            uk = FILTER_GROUPS.get(k)  # родительский use_* для зависимого параметра
+            if uk and uk not in processed_use:
+                # Первый зависимый параметр этой группы — вставляем use_* перед ним
+                ordered_keys.append(uk)
+                processed_use.add(uk)
+            if k not in use_keys_set:  # не добавляем use_* дважды
+                ordered_keys.append(k)
+            elif k not in processed_use:
+                ordered_keys.append(k)
+                processed_use.add(k)
+
+        steps_in_pass = sum(len(_grids[k]) for k in ordered_keys if k in _grids)
         with opt_lock:
             opt_state["pass_num"]=pass_num; opt_state["total"]=steps_in_pass; opt_state["progress"]=0
 
         step_in_pass=0; improved_in_pass=False
         _pass_t0 = time.time()
+        _visited_use = set()  # OPT: не обрабатываем use_* дважды
 
-        for param_idx, key in enumerate(keys_shuffled):
+        for param_idx, key in enumerate(ordered_keys):
             if stop_flag and stop_flag(): break
-            label=PARAM_SPACE[key]["label"]; grid=_grids[key]
+            if key not in PARAM_SPACE: continue  # защита
+            label=PARAM_SPACE[key]["label"]; grid=_grids.get(key, _GRIDS.get(key, []))
+            if not grid: continue
             with opt_lock:
                 opt_state["current_param"]=label; opt_state["generation"]=param_idx+1
 
             _param_t0 = time.time()
+
+            # OPT: если это use_* параметр — объединяем с зависимыми в один батч
+            # Смысл: вместо отдельного pmap([use=True, use=False]) + отдельного pmap([dep1_val1,...])
+            # делаем один pmap для use=False + все значения dep1 при use=True
+            # Это сокращает число pmap-вызовов для групп с 2+ зависимыми параметрами
+            if key in use_keys_set and key not in _visited_use:
+                _visited_use.add(key)
+                deps = _USE_TO_DEPS.get(key, [])
+                # Кандидат с use=False (все зависимые неважны)
+                candidates = [{**current, key: False}]
+                # Кандидаты с use=True + все значения первого зависимого параметра
+                # (остальные зависимые будут оптимизированы в своих итерациях)
+                if deps and current.get(key, True):
+                    first_dep = deps[0]
+                    dep_grid = _grids.get(first_dep, _GRIDS.get(first_dep, []))
+                    for val in dep_grid:
+                        candidates.append({**current, key: True, first_dep: val})
+                else:
+                    candidates.append({**current, key: True})
+
+                results = pmap_fn(candidates); results.sort(key=lambda x: -x["fitness"])
+                _param_dt = round(time.time() - _param_t0, 3)
+                param_best = results[0]
+                best_use_val = param_best["params"][key]
+
+                if param_best["fitness"] > best_result["fitness"]:
+                    delta = param_best["equity"] - best_result["equity"]
+                    # Применяем весь найденный набор параметров (use + первый dep если улучшился)
+                    for upd_k, upd_v in param_best["params"].items():
+                        if upd_k == key or upd_k in deps:
+                            current[upd_k] = upd_v
+                    best_result = param_best; improved_in_pass = True
+                    val_str = "да" if best_use_val else "нет"
+                    olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
+
+                _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
+                step_in_pass += len(grid)
+                with opt_lock:
+                    opt_state["progress"] = step_in_pass
+                    opt_state["elapsed"] = round(time.time()-t0, 1)
+                continue
+
+            # OPT: зависимый параметр — пропускаем если use_* = False (симуляция всё равно игнорирует)
+            use_key = FILTER_GROUPS.get(key)
+            if use_key and not current.get(use_key, True):
+                step_in_pass += len(grid)
+                with opt_lock:
+                    opt_state["progress"] = step_in_pass
+                    opt_state["elapsed"] = round(time.time()-t0, 1)
+                continue
+
             candidates=[{**current, key:val} for val in grid]
-            use_key=FILTER_GROUPS.get(key)
-            if use_key and current.get(use_key,True):
+            # Добавляем кандидата с отключённым родительским use_* (если ещё не оптимизировали его)
+            if use_key and use_key not in _visited_use and current.get(use_key, True):
                 candidates.append({**current, use_key:False})
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
@@ -911,13 +1054,18 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 
             if param_best["fitness"]>best_result["fitness"]:
                 delta=param_best["equity"]-best_result["equity"]
-                current[key]=best_val; best_result=param_best; improved_in_pass=True
+                current[key]=best_val
+                # Если лучший кандидат отключил use_*, обновляем его тоже
+                if use_key and param_best["params"].get(use_key) == False:
+                    current[use_key] = False
+                    _visited_use.add(use_key)
+                best_result=param_best; improved_in_pass=True
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
 
             _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
 
-            step_in_pass+=len(grid)+(1 if FILTER_GROUPS.get(key) and current.get(FILTER_GROUPS.get(key),True) else 0)
+            step_in_pass+=len(grid)
             with opt_lock:
                 opt_state["progress"]=step_in_pass
                 opt_state["elapsed"]=round(time.time()-t0,1)
@@ -987,6 +1135,7 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
         params_rows+=f"<tr><td>{label}</td><td><b>{vs}</b></td></tr>"
     candles_json=_j.dumps(candles,ensure_ascii=False)
     signals_json=_j.dumps(signals,ensure_ascii=False)
+    tf_sec=TF_SECONDS.get(tf,3600)
     updated=time.strftime("%Y-%m-%d %H:%M:%S")
 
     return f"""<!DOCTYPE html>
@@ -1003,6 +1152,8 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
 html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
+[data-theme="light"] body{{background:#fafafa;color:#252b35}}
+[data-theme="light"] #tooltip{{background:rgba(248,249,251,.97);border:1px solid rgba(30,40,60,.12);color:#252b35;box-shadow:0 4px 16px rgba(30,40,60,.10)}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
@@ -1033,8 +1184,17 @@ canvas{{display:block;width:100%;height:100%}}
   </div>
 </div>
 <script>
+// Read theme from URL param and apply before render
+(function(){{
+  const p=new URLSearchParams(location.search);
+  const t=p.get('theme')||'light';
+  document.documentElement.setAttribute('data-theme',t);
+}})();
+</script>
+<script>
 const CANDLES={candles_json};
 const SIGNALS={signals_json};
+const TF_SEC={tf_sec};
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
@@ -1056,21 +1216,28 @@ function render(){{
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
+  // Theme-aware colors
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const clrBg        = isDark ? '#1e1a17' : '#fafafa';
+  const clrAxis      = isDark ? 'rgba(255,255,255,.12)' : 'rgba(30,40,60,.12)';
+  const clrGrid      = isDark ? 'rgba(255,255,255,.05)' : 'rgba(30,40,60,.05)';
+  const clrPriceText = isDark ? '#9a8e83' : '#6a7a8e';
+  const clrTimeText  = isDark ? '#7a6e63' : '#848d9e';
   // Background fill chart area
-  ctx.fillStyle='#1e1a17';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=clrBg;ctx.fillRect(0,0,W,H);
   // Time axis separator
-  ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=1;
+  ctx.strokeStyle=clrAxis;ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(PAD_L,H-PAD_B);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   // Price axis separator
   ctx.beginPath();ctx.moveTo(W-PAD_R,PAD_T);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#9a8e83';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
+    ctx.strokeStyle=clrGrid;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle=clrPriceText;ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
-  // Only draw TP/SL labels for the active (open) trade
-  const activeSig=SIGNALS.find(s=>s.open_end===true&&s.bar_i<end&&s.bar_i>=viewStart-(viewLen*2));
+  // Active open trade — find regardless of viewport (labels always visible)
+  const activeSig=SIGNALS.find(s=>s.open_end===true);
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
@@ -1085,22 +1252,25 @@ function render(){{
     ctx.strokeStyle=isLong?'rgba(160,48,48,0.45)':'rgba(58,125,82,0.45)';
     ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
     ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
-    // TP/SL dashed lines and labels ONLY for active open trade
-    if(activeSig===s){{
-      ctx.setLineDash([4,3]);
-      ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
-      ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
-      ctx.setLineDash([]);
-      const tpY=py(s.tp),slY=py(s.sl);
-      ctx.font='bold 9px system-ui';ctx.textAlign='left';
-      ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
-      ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
-      ctx.fillStyle='rgba(140,120,100,0.75)';
-      ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
-      ctx.font='10px system-ui';
-    }}
+  }}
+  // TP/SL dashed lines and labels for active open trade — always drawn regardless of viewport
+  if(activeSig){{
+    const isLong=activeSig.dir===1;
+    const tpY=py(activeSig.tp),slY=py(activeSig.sl);
+    ctx.setLineDash([4,3]);
+    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(PAD_L,tpY);ctx.lineTo(W-PAD_R,tpY);ctx.stroke();
+    ctx.strokeStyle='#b0a090';
+    ctx.beginPath();ctx.moveTo(PAD_L,slY);ctx.lineTo(W-PAD_R,slY);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font='bold 9px system-ui';ctx.textAlign='left';
+    ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY+3);
+    ctx.fillStyle='rgba(140,120,100,0.75)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY+3);
+    ctx.font='10px system-ui';
   }}
   // Current price label — always visible
   const lastC=vis[vis.length-1];
@@ -1153,23 +1323,25 @@ function render(){{
       ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
-  ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
+  ctx.fillStyle=clrTimeText;ctx.font='10px system-ui';ctx.textAlign='center';
   const step=Math.max(1,Math.floor(vis.length/8));
   const isMobile=W<500;
   const mskOffset=3*3600*1000;
   for(let i=0;i<vis.length;i+=step){{
-    const t=new Date(vis[i].t*1000+mskOffset);
+    const t=new Date((vis[i].t+TF_SEC)*1000+mskOffset);
     let lbl;
     if(isMobile){{
-      // On mobile: just HH:MM to avoid overlap
       lbl=t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
     }}else{{
       lbl=(t.getUTCMonth()+1)+'/'+t.getUTCDate()+' '+t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
     }}
-    ctx.fillText(lbl,cx(i),H-PAD_B+16);
+    const lx=cx(i);
+    const hw=ctx.measureText(lbl).width/2;
+    if(lx+hw>W-PAD_R) continue; // skip labels that would overflow into price scale
+    ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const delta=e.deltaY>0?1.18:0.84,ratio=(e.offsetX-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
 window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));render();}});
 window.addEventListener('mouseup',()=>isDragging=false);
@@ -1197,15 +1369,22 @@ wrap.addEventListener('touchmove',e=>{{
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
 const tip=document.getElementById('tooltip');
+const PAD_L_C=6,PAD_R_C=72;
 wrap.addEventListener('mousemove',e=>{{
-  const W=wrap.clientWidth,vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=W/vis.length,i=Math.floor(e.offsetX/cw2);
+  const rect=wrap.getBoundingClientRect(),offsetX=e.clientX-rect.left;
+  const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
+  // Hide tooltip when hovering over price scale area
+  if(offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
+  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart)),cw2=drawW/vis.length;
+  const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
-  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi),d=new Date(c.t*1000);
-  const dt=d.toLocaleDateString('ru')+' '+d.toLocaleTimeString('ru',{{hour:'2-digit',minute:'2-digit'}});
+  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
+  const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
+  const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
   let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
   if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
   tip.innerHTML=html;tip.style.display='block';
-  const tx=e.offsetX+14;tip.style.left=(tx+tip.offsetWidth>W?tx-tip.offsetWidth-20:tx)+'px';tip.style.top=Math.max(0,e.offsetY-10)+'px';
+  const tx=offsetX+14;tip.style.left=(tx+tip.offsetWidth>W?tx-tip.offsetWidth-20:tx)+'px';tip.style.top=Math.max(0,e.offsetY-10)+'px';
 }});
 wrap.addEventListener('mouseleave',()=>tip.style.display='none');
 window.addEventListener('resize',render);
@@ -1600,51 +1779,61 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         olog(f"  {label} → ${result['equity']:.2f} WR {result['winrate']:.1f}% DD {result['max_dd']:.1f}%",
              "found" if result["equity"]>100 else "info")
         with opt_lock:
-            # Показываем лучшее из top20, но не хуже seed-флора
-            best_so_far = top20_global[0] if top20_global else result
-            best_so_far_fit = best_so_far.get("validated_fitness") or best_so_far["fitness"]
-            if _seed_floor and best_so_far_fit < _seed_floor_fit:
-                best_so_far = _seed_floor
-            opt_state["best"] = best_so_far
             opt_state["top20"] = top20_global
             opt_state["elapsed"] = round(time.time()-t0, 1)
-            _sw_params = dict(best_so_far["params"])
+            # best и all_time_best НЕ трогаем здесь — они обновляются только в конце цикла
 
     if stop_flag(): return None, None, top20_global
 
     local_bests.sort(key=lambda x: -x[0])
     best_f, best_r1, best_p1 = local_bests[0]
 
-    # Фаза 2: Basin Hopping от лучшей точки — 20 возмущений
-    olog(f"━━ ФАЗА 2: Basin Hopping (12 итераций) ━━━━━━━━━━━━━━━━━━━━━━", "ok")
+    # Фаза 2: Basin Hopping от лучшей точки
+    # OPT: early-stop после 4 итераций подряд без улучшения (экономит ~60% времени BH)
+    BH_MAX = 12; BH_PATIENCE = 4
+    olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}) ━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
+    bh_no_improve = 0  # OPT: счётчик подряд идущих неудач
     try:
-      for bh_i in range(12):
+      for bh_i in range(BH_MAX):
         if stop_flag(): break
+        # OPT: early-stop по patience
+        if bh_no_improve >= BH_PATIENCE:
+            olog(f"  ⏭ BH early-stop: {BH_PATIENCE} итераций без улучшения", "info")
+            break
+        # OPT: при perturbation учитываем FILTER_GROUPS — не меняем зависимые параметры
+        # если их родительский use_* = False (симуляция всё равно их игнорирует,
+        # но coordinate_descent потом не найдёт улучшения и тратит время впустую)
         perturbed=dict(bh_current)
-        for k in random.sample(_KEYS, max(1, int(len(_KEYS)*0.35))):
+        keys_to_perturb = random.sample(_KEYS, max(1, int(len(_KEYS)*0.35)))
+        for k in keys_to_perturb:
+            # Пропускаем зависимый параметр если его родитель отключён
+            parent = FILTER_GROUPS.get(k)
+            if parent and not perturbed.get(parent, True):
+                continue
             spec=PARAM_SPACE[k]; grid=_grids_local[k]
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,len(grid)//4))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
-        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/20"
+        with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/{BH_MAX}"
         _plog("bh_start", bh=bh_i+1)
         _bht0 = time.time()
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
+        improved = bh_r["fitness"] > bh_best["fitness"]
         _plog("bh_done", bh=bh_i+1, sec=round(time.time()-_bht0,1),
-              equity=round(bh_r["equity"],2), improved=bh_r["fitness"]>bh_best["fitness"])
-        if bh_r["fitness"] > bh_best["fitness"]:
+              equity=round(bh_r["equity"],2), improved=improved)
+        if improved:
             bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
+            bh_no_improve = 0  # OPT: сбрасываем счётчик при успехе
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock:
-                show_best = final_result
-                show_fit = show_best.get("validated_fitness") or show_best["fitness"]
-                if _seed_floor and show_fit < _seed_floor_fit:
-                    show_best = _seed_floor
-                opt_state["best"]=show_best; opt_state["top20"]=top20_global; _sw_params=dict(final_params)
+                opt_state["top20"] = top20_global
+                # best и all_time_best НЕ трогаем здесь — только в конце цикла
+        else:
+            bh_no_improve += 1  # OPT: увеличиваем счётчик неудач
 
     finally:
         pass  # пул управляется снаружи (run_optimizer), не закрываем здесь
@@ -1702,7 +1891,9 @@ def _script_dir():
     except Exception:
         return os.getcwd()
 
+_WICKFILL_DIR = "/sdcard/Download/WickFill"
 _AUTO_DIRS = [
+    _WICKFILL_DIR,
     "/sdcard/Download",
     _script_dir(),
 ]
@@ -1773,10 +1964,11 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 if len(opt_state["logs"]) > 500:
                     opt_state["logs"] = opt_state["logs"][-300:]
 
-    # Попытаться создать /sdcard/Download если его нет (нужен termux-setup-storage)
-    if not os.path.isdir("/sdcard/Download"):
-        try: os.makedirs("/sdcard/Download", exist_ok=True)
-        except Exception: pass
+    # Попытаться создать /sdcard/Download/WickFill (и /sdcard/Download как fallback)
+    for _d in ["/sdcard/Download", _WICKFILL_DIR]:
+        if not os.path.isdir(_d):
+            try: os.makedirs(_d, exist_ok=True)
+            except Exception: pass
 
     # Найти папку для записи (первая существующая и доступная для записи)
     save_dir = None
@@ -1874,7 +2066,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+            "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None, "days": days,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
@@ -1889,8 +2081,6 @@ def run_optimizer(params):
     def olog(msg, level="info"):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
-            if len(opt_state["logs"]) > 500:
-                opt_state["logs"] = opt_state["logs"][-300:]
 
     t0 = time.time()
 
@@ -1939,6 +2129,13 @@ def run_optimizer(params):
     prev_best_params = None   # лучшие параметры предыдущего цикла
     prev_top20       = []     # накопленный top20 всех циклов
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
+    _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
+    # Сразу заполняем из seed если он есть
+    if seed and seed.get("best") and seed["best"].get("params"):
+        _s = dict(seed["best"])
+        if "validated_fitness" not in _s:
+            _s["validated_fitness"] = _s.get("fitness", 0)
+        _global_best_ever = _s
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
@@ -2050,19 +2247,26 @@ def run_optimizer(params):
             else:
                 prev_top20 = top20
 
-            # all_time_best берём из top20 по validated_fitness (учитывает стабильность)
+            # all_time_best — лучший за все циклы, никогда не откатывается назад
+            # Кандидат этого цикла: лучший в prev_top20 по validated_fitness
             if prev_top20:
-                all_time_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
+                cycle_best = _clamp_tp_result(max(prev_top20, key=lambda r: r.get("validated_fitness", r["fitness"])), tf)
             else:
-                all_time_best = _clamp_tp_result(final_result, tf)
-            prev_best_params = dict(all_time_best["params"])
+                cycle_best = _clamp_tp_result(final_result, tf)
+            # Обновляем глобальный рекорд только если equity стало лучше — никогда не откатывается
+            # Сравниваем по validated_fitness (учитывает стабильность × результат)
+            _cb_vfit = cycle_best.get("validated_fitness") or cycle_best.get("fitness", 0)
+            _gb_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0) if _global_best_ever else -1e18
+            if _global_best_ever is None or _cb_vfit > _gb_vfit:
+                _global_best_ever = cycle_best
+            all_time_best = _global_best_ever
+            prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
-            if infinite and all_time_best.get("validated_fitness", all_time_best["fitness"]) > final_result.get("validated_fitness", final_result["fitness"]):
-                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | → ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found")
-            else:
-                is_new_rec = (cycle==1) or (all_time_best.get("validated_fitness", all_time_best["fitness"]) >= final_result.get("validated_fitness", final_result["fitness"]))
-                rec_flag = "🆕" if is_new_rec else "→"
-                olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "ok" if cycle==1 else "found")
+            _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
+            is_new_rec = all_time_best.get("equity", 0) > _prev_best_eq
+            run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
+            rec_flag = "🆕" if is_new_rec else "→"
+            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found" if is_new_rec else "ok")
 
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
@@ -2111,27 +2315,28 @@ def run_optimizer(params):
                 d_from = days - wi * window_size
                 d_to   = days - (wi + 1) * window_size
                 ws = _wf_sim(d_from, d_to)
-                if ws:
+                if ws and ws["trades"] >= 3:
                     windows.append({
-                        "i":      wi + 1,
+                        "i":       wi + 1,
                         "winrate": round(ws["winrate"], 1),
                         "equity":  round(ws["equity"], 2),
                         "trades":  ws["trades"],
                         "ok":      ws["winrate"] >= train_wr * 0.75,
+                        "ts_from": round(now_ts - d_from * 86400),
+                        "ts_to":   round(now_ts - d_to   * 86400),
                     })
             if windows:
                 ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
                 olog(f"📊 Окна: {ww_str}", "ok")
 
-            # 3) Минимальный стабильный период
+            # 3) Минимальный стабильный период — ищем самый короткий рабочий отрезок
             min_stable_days = None
-            for pct in [0.70, 0.50, 0.33, 0.20, 0.10]:
+            for pct in [0.10, 0.20, 0.33, 0.50, 0.70]:
                 test_days = days * pct
                 ts = _wf_sim(test_days, 0)
                 if ts and ts["winrate"] >= train_wr * 0.75 and ts["trades"] >= 3:
                     min_stable_days = round(test_days, 1)
-                else:
-                    break
+                    break  # нашли минимальный — дальше не ищем
             if min_stable_days is not None:
                 olog(f"📐 Мин. стабильный период: {min_stable_days}д", "ok")
 
@@ -2171,6 +2376,7 @@ def run_optimizer(params):
                 opt_state["chart_path"]     = chart_path or ""
                 opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
+                opt_state["all_time_best"]  = all_time_best  # всегда = глобальный рекорд
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
@@ -2244,40 +2450,69 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<script>document.documentElement.setAttribute("data-theme",localStorage.getItem("wf_theme")||"light");</script>
 <title>WickFill · Optimizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#f7f3ee;
-  --cream2:#ede8e0;
-  --cream3:#e2dbd0;
-  --sand:#c9bfb0;
-  --sand2:#b5a896;
-  --warm:#8c7b6b;
-  --bark:#4a3f34;
-  --text:#1a1310;
-  --text2:#504438;
-  --text3:#7a6e63;
-  --glass:rgba(247,243,238,0.72);
-  --glass2:rgba(237,232,224,0.55);
+  --cream:#fafafa;
+  --cream2:#f4f5f7;
+  --cream3:#eceef2;
+  --sand:#dde0e8;
+  --sand2:#b8bdc9;
+  --warm:#7a8090;
+  --bark:#232830;
+  --text:#252b35;
+  --text2:#4a5262;
+  --text3:#848d9e;
+  --glass:rgba(250,250,250,0.93);
+  --glass2:rgba(244,245,247,0.84);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 20px rgba(92,79,67,0.10);
-  --shadow2:0 8px 40px rgba(92,79,67,0.14);
+  --shadow:0 2px 16px rgba(30,40,60,0.06);
+  --shadow2:0 8px 32px rgba(30,40,60,0.10);
   --radius:18px;
   --radius-sm:12px;
-  --accent:#7c6a58;
-  --green:#4a7c59;
-  --green-light:#e8f2eb;
-  --red:#8b3a3a;
-  --red-light:#f5e8e8;
-  --blue:#4a6580;
-  --blue-light:#e8eef5;
-  --yellow:#8a7040;
-  --yellow-light:#f5f0e4;
-  --border:rgba(92,79,67,0.12);
-  --border2:rgba(92,79,67,0.08);
+  --accent:#5a6880;
+  --green:#2a6e48;
+  --green-light:#dff0e8;
+  --red:#8b2828;
+  --red-light:#f5e0e0;
+  --blue:#2a4e78;
+  --blue-light:#dce8f5;
+  --yellow:#7a5a20;
+  --yellow-light:#f5eedc;
+  --border:rgba(30,40,60,0.09);
+  --border2:rgba(30,40,60,0.05);
+}
+
+[data-theme="dark"]{
+  --cream:#1a1612;
+  --cream2:#221e19;
+  --cream3:#2a2520;
+  --sand:#3d3630;
+  --sand2:#504840;
+  --warm:#8c7b6b;
+  --bark:#c9bfb0;
+  --text:#f0ebe4;
+  --text2:#c9bfb0;
+  --text3:#8c7b6b;
+  --glass:rgba(26,22,18,0.82);
+  --glass2:rgba(34,30,25,0.65);
+  --shadow:0 2px 20px rgba(0,0,0,0.35);
+  --shadow2:0 8px 40px rgba(0,0,0,0.45);
+  --accent:#a09080;
+  --green:#5a9e6f;
+  --green-light:rgba(90,158,111,0.12);
+  --red:#c05050;
+  --red-light:rgba(192,80,80,0.12);
+  --blue:#5a7fa0;
+  --blue-light:rgba(90,127,160,0.12);
+  --yellow:#b09050;
+  --yellow-light:rgba(176,144,80,0.12);
+  --border:rgba(255,255,255,0.08);
+  --border2:rgba(255,255,255,0.05);
 }
 
 html,body{
@@ -2400,7 +2635,7 @@ body>*{position:relative;z-index:1}
 
 input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
-  background:rgba(247,243,238,0.9);
+  background:var(--cream);
   border:1px solid var(--border);
   border-radius:10px;
   color:var(--text);
@@ -2410,7 +2645,7 @@ input[type=text],input[type=password],input[type=number],select{
   transition:border-color .18s;
   -webkit-appearance:none;appearance:none;
 }
-input:focus,select:focus{outline:none;border-color:var(--sand2);background:#fff}
+input:focus,select:focus{outline:none;border-color:var(--sand2);background:var(--cream)}
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
@@ -2425,7 +2660,7 @@ input[type=number]{-moz-appearance:textfield}
 }
 .slider-wrap input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:16px;height:16px;
-  border-radius:50%;background:#fff;
+  border-radius:50%;background:var(--cream);
   border:2px solid var(--bark);
   box-shadow:0 1px 4px rgba(92,79,67,.2);
   transition:transform .15s;
@@ -2452,7 +2687,7 @@ input[type=number]{-moz-appearance:textfield}
 .toggle-sw::after{
   content:'';position:absolute;
   width:14px;height:14px;border-radius:50%;
-  background:#fff;top:2px;left:2px;
+  background:var(--cream);top:2px;left:2px;
   box-shadow:0 1px 3px rgba(0,0,0,.15);
   transition:left .22s;
 }
@@ -2465,18 +2700,18 @@ input[type=number]{-moz-appearance:textfield}
 /* ── Primary button ── */
 .btn-primary{
   width:100%;padding:11px 16px;
-  background:linear-gradient(135deg,#5c4f43 0%,#7c6a58 100%);
+  background:linear-gradient(135deg,#2a4e78 0%,#3a6496 100%);
   border:none;border-radius:var(--radius-sm);
-  color:#f7f3ee;font-size:.9rem;font-weight:600;
+  color:#f0f5ff;font-size:.9rem;font-weight:600;
   font-family:'DM Sans',sans-serif;
   cursor:pointer;letter-spacing:-.01em;
-  box-shadow:0 2px 12px rgba(92,79,67,.25),inset 0 1px 0 rgba(255,255,255,.12);
+  box-shadow:0 2px 12px rgba(42,78,120,.22),inset 0 1px 0 rgba(255,255,255,.12);
   transition:all .18s ease;
   display:flex;align-items:center;justify-content:center;gap:7px;
 }
 .btn-primary:hover:not(:disabled){
-  background:linear-gradient(135deg,#6b5c4e 0%,#8c7a68 100%);
-  box-shadow:0 4px 20px rgba(92,79,67,.3);transform:translateY(-1px);
+  background:linear-gradient(135deg,#345e8a 0%,#4474a8 100%);
+  box-shadow:0 4px 20px rgba(42,78,120,.28);transform:translateY(-1px);
 }
 .btn-primary:disabled{opacity:.45;cursor:not-allowed;transform:none}
 
@@ -2512,7 +2747,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Best stats */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .stat-cell{
-  background:rgba(247,243,238,0.9);
+  background:var(--cream);
   border:1px solid var(--border2);
   border-radius:10px;padding:8px 8px;text-align:center;
 }
@@ -2610,8 +2845,8 @@ input[type=number]{-moz-appearance:textfield}
   display:flex;flex-direction:column;justify-content:space-between;
 }
 .cc.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
-.cc.pos{border-color:rgba(74,124,89,.3);background:rgba(232,242,235,.5)}
-.cc.neg{border-color:rgba(139,58,58,.3);background:rgba(245,232,232,.4)}
+.cc.pos{border-color:rgba(74,124,89,.3);background:var(--green-light)}
+.cc.neg{border-color:rgba(139,58,58,.3);background:var(--red-light)}
 @keyframes cc-glow{0%,100%{box-shadow:0 0 0 rgba(92,79,67,0)}50%{box-shadow:0 0 12px rgba(92,79,67,.15)}}
 .cc-n{font-size:.6rem;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .cc-eq{font-size:1.05rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1.15;color:var(--bark)}
@@ -2672,7 +2907,7 @@ thead th{
   position:sticky;top:0;white-space:nowrap;
 }
 tbody td{padding:7px 10px;border-bottom:1px solid var(--border2);color:var(--text2);font-family:'DM Mono',monospace;font-size:.7rem}
-tbody tr:hover td{background:rgba(247,243,238,.7)}
+tbody tr:hover td{background:var(--cream)}
 tbody tr:first-child td{color:var(--bark);font-weight:600}
 
 /* Params collapse */
@@ -2684,7 +2919,7 @@ tbody tr:first-child td{color:var(--bark);font-weight:600}
 .params-toggle:hover{color:var(--bark)}
 .params-box{
   display:none;margin-top:5px;padding:9px 11px;
-  background:rgba(247,243,238,.9);border:1px solid var(--border2);
+  background:var(--cream);border:1px solid var(--border2);
   border-radius:10px;font-size:.68rem;font-family:'DM Mono',monospace;
   line-height:1.9;max-height:140px;overflow-y:auto;color:var(--text2);
 }
@@ -2823,6 +3058,7 @@ details summary::-webkit-details-marker{display:none}
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
   </div>
@@ -3118,7 +3354,8 @@ function _loadChartFrame(){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
   if(!frame) return;
-  frame.src='/chart?t='+Date.now();
+  const theme=document.documentElement.getAttribute('data-theme')||'light';
+  frame.src='/chart?t='+Date.now()+'&theme='+theme;
   frame.style.display='block';
   if(ph) ph.style.display='none';
 }
@@ -3184,9 +3421,10 @@ function poll(){
       for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
       lastLogCount=logs.length;
     }
-    if(d.best&&d.best.equity!==undefined){window._lastBest=d.best;window._lastTop20=d.top20||[];renderBest(d.best);}
-    if(d.best) renderTop20([d.best]);  // таблица всегда показывает текущий best (тот же что на графике)
-    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
+    const _atb=d.all_time_best||d.best;
+    if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
+    if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
+    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at!==lastChartTs){
@@ -3230,10 +3468,13 @@ function _clearActivity(){const el=document.getElementById('ccActivity');if(el)e
 
 function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
   const isPos=eq>100;
-  let card=_cc[n];
+  const strip=document.getElementById('ccStrip');
+  let card=strip.querySelector(`[data-n="${n}"]`);
   if(!card){
-    card=document.createElement('div');card.dataset.n=n;
-    _cc[n]=card;const strip=document.getElementById('ccStrip');strip.insertBefore(card,strip.firstChild);
+    card=document.createElement('div');
+    card.dataset.n=n;
+    strip.insertBefore(card, strip.firstChild);
+    _cc[n]=card;
   }
   card.dataset.eq=eq;
   card.className='cc '+(done?(isPos?'pos':'neg'):'running');
@@ -3246,7 +3487,6 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
     (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
     `<div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>`;
 }
-
 function logLine(msg,level){
   if(!msg||!msg.trim()) return;
   if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool|Сохранено|Авто-сохранение/i.test(msg)){
@@ -3319,16 +3559,21 @@ function toggleParams(){
   el.style.display=vis?'none':'block';
 }
 
-function renderValid(v, best, windows, minDays){
+function renderValid(v, best, windows, minDays, days){
   const wrap=document.getElementById('validSection');
   if(!wrap) return;
   if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
-  const ratio=v&&trainWr>0?(v.winrate/trainWr):1;
-  const ok=ratio>=0.75;
+  const ratio=v&&trainWr>0?(v.winrate/trainWr):null;
+  // ok = стабильная только если И валид хорош И хотя бы часть окон работает
+  const okWindows=windows?windows.filter(w=>w.ok).length:0;
+  const totalWindows=windows?windows.length:0;
+  const windowsOk=totalWindows===0||okWindows/totalWindows>=0.4;  // хотя бы 2 из 5
+  // Стабильная если: валид хороший ИЛИ большинство окон зелёные (не обязательно оба)
+  const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2);
   const color=ok?'var(--green)':'var(--red)';
-  const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
+  const bgColor=ok?'var(--green-light)':'var(--red-light)';
 
   // Заголовок: иконка + статус + ключевые цифры в одну строку
   const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
@@ -3341,7 +3586,7 @@ function renderValid(v, best, windows, minDays){
 
   // Строка 1: статус + валид WR vs трейн WR
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <span style="color:${color};font-weight:700;font-size:.88rem">${ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
+    <span style="color:${color};font-weight:700;font-size:.88rem">${ratio===null?'— Нет данных':ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
     <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
   </div>`;
 
@@ -3355,32 +3600,42 @@ function renderValid(v, best, windows, minDays){
   }
 
   // Строка 3: гистограмма окон — слева старое, справа свежее
-  if(windows&&windows.length){
+  if(windows&&windows.length>0&&windows.some(w=>w.trades>0)){
     const maxWr=Math.max(...windows.map(w=>w.winrate),1);
+    const fmtD=ts=>{const d=new Date(ts*1000);return (d.getMonth()+1)+'/'+(d.getDate());};
     html+=`<div style="margin-bottom:${minDays!=null?'8px':'0'}">
       <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
-      <div style="display:flex;align-items:flex-end;gap:3px;height:36px">`;
+      <div style="display:flex;align-items:flex-end;gap:4px;height:28px">`;
     // окна идут от старого (#5) к свежему (#1) — разворачиваем
     const sorted=[...windows].reverse();
     for(const w of sorted){
-      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*32));
+      const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*24));
       const c=w.ok?'var(--green)':'var(--red)';
-      const bg=w.ok?'rgba(80,200,100,0.7)':'rgba(220,80,80,0.7)';
-      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сделок">
-        <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
+      const bg=w.ok?'var(--green)':'var(--red)';
+      const fromLbl=w.ts_from?fmtD(w.ts_from):'';
+      const toLbl=w.ts_to?fmtD(w.ts_to):'';
+      html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center" title="WR ${w.winrate}% · ${w.trades} сд · ${fromLbl}–${toLbl}">
         <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
       </div>`;
     }
     html+=`</div>
-      <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:.55rem;color:var(--text3)">
-        <span>−${Math.round(best?.params?._days||14)}д</span><span>сейчас</span>
-      </div>
+      <div style="display:flex;gap:4px;margin-top:3px">`;
+    for(const w of sorted){
+      const c=w.ok?'var(--green)':'var(--red)';
+      const fromLbl=w.ts_from?fmtD(w.ts_from):'';
+      const toLbl=w.ts_to?fmtD(w.ts_to):'';
+      html+=`<div style="flex:1;text-align:center">
+        <div style="font-size:.52rem;font-weight:700;color:${c}">${w.winrate}%</div>
+        <div style="font-size:.46rem;color:var(--text3);white-space:nowrap">${fromLbl}–${toLbl}</div>
+      </div>`;
+    }
+    html+=`</div>
     </div>`;
   }
 
   // Строка 4: мин. стабильный период
   if(minDays!=null){
-    const stableColor=minDays>=(best?.params?._days||14)*0.5?'var(--green)':'var(--yellow)';
+    const stableColor=minDays>=(days||30)*0.5?'var(--green)':'var(--yellow)';
     html+=`<div style="font-size:.7rem;color:var(--text3)">Стабильна с последних <b style="color:${stableColor}">${minDays}д</b></div>`;
   }
 
@@ -3397,14 +3652,15 @@ function renderTop20(list){
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
     const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
     const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
-    const lev=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
-      ? (risk/parseFloat(sl)).toFixed(1)+'×' : '—';
-    const levColor=parseFloat(lev)>20?'var(--red)':parseFloat(lev)>10?'var(--yellow)':'inherit';
+    const levRaw=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
+      ? Math.round(risk/parseFloat(sl)) : null;
+    const lev=levRaw!==null ? levRaw+'×' : '—';
+    const levColor=levRaw>50?'var(--red)':levRaw>25?'var(--yellow)':'inherit';
     return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td>
-      <td style="font-weight:600;color:${levColor}">${lev}</td></tr>`;
+      <td style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
 
@@ -3454,6 +3710,24 @@ function toggleMobLog(){
   const btn=document.getElementById('mob-log-btn');
   if(btn) btn.textContent=_mobLogVisible?'📋 Скрыть':'📋 Логи';
 }
+function toggleTheme(){
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const next=isDark?'light':'dark';
+  document.documentElement.setAttribute('data-theme',next);
+  document.getElementById('themeBtn').textContent=next==='dark'?'🌙':'☀';
+  localStorage.setItem('wf_theme',next);
+  // Reload chart iframe with new theme
+  const frame=document.getElementById('chartFrame');
+  if(frame&&frame.style.display!=='none'&&frame.src&&frame.src!=='about:blank'){
+    frame.src='/chart?t='+Date.now()+'&theme='+next;
+  }
+}
+document.addEventListener('DOMContentLoaded',function(){
+  const btn=document.getElementById('themeBtn');
+  const t=document.documentElement.getAttribute('data-theme')||'light';
+  if(btn) btn.textContent=t==='dark'?'🌙':'☀';
+});
+
 </script></body></html>"""
 
 # ═══════════════════════════════════════════════════════════════
@@ -3479,11 +3753,13 @@ class Handler(BaseHTTPRequestHandler):
                     "generation":     opt_state["generation"],
                     "pass_num":       opt_state.get("pass_num",0),
                     "current_param":  opt_state.get("current_param",""),
-                    "best":           opt_state["best"],
+                    "best":           opt_state.get("all_time_best") or opt_state["best"],
+                    "all_time_best":   opt_state.get("all_time_best"),
                     "top20":          opt_state["top20"],
                     "valid":          opt_state.get("valid", None),
                     "windows":        opt_state.get("windows", []),
                     "min_stable_days":opt_state.get("min_stable_days", None),
+                    "days":           opt_state.get("days", 30),
                     "elapsed":        opt_state["elapsed"],
                     "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
@@ -3508,7 +3784,7 @@ class Handler(BaseHTTPRequestHandler):
             if not chart_best or not chart_candles:
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
-                self.wfile.write("<html><body style='background:#0d1117;color:#e6edf3;font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:#8b949e;margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
+                self.wfile.write("<html><body style='background:#fafafa;color:#252b35;font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:#848d9e;margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
                 return
             try:
                 data = _build_chart_html(chart_candles, chart_signals, chart_best, chart_symbol, chart_tf).encode("utf-8")
@@ -3576,9 +3852,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
-            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
-            deleted=[]
             _pat=_re.compile(r'^screener_pro\s*\(\d+\)\.py$')
+            deleted=[]
+            candidate_dirs = [_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             for d in candidate_dirs:
                 if not os.path.isdir(d): continue
                 for fname in os.listdir(d):
@@ -3591,9 +3867,8 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
-            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
-            # Паттерн: screener_pro + что-то + .py (длинное имя от браузера)
             _pat2 = _re.compile(r'^screener_pro.+\.py$')
+            candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             renamed = False
             msg = ""
             for d in candidate_dirs:
@@ -3795,8 +4070,10 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.0")
+    print(f"WickFill Optimizer v3.107-perf")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
+
