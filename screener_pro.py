@@ -3832,6 +3832,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
         elif parsed.path == "/delete_download":
             import re as _re
+            _pat=_re.compile(r'^screener_pro\s*\(\d+\)\.py$')
+            deleted=[]
             candidate_dirs = [_WICKFILL_DIR, "/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             for d in candidate_dirs:
                 if not os.path.isdir(d): continue
@@ -3845,6 +3847,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/rename_download":
             import re as _re
             script_name = "screener_pro.py"
+            _pat2 = _re.compile(r'^screener_pro.+\.py$')
             candidate_dirs = ["/sdcard/Download", os.path.dirname(os.path.abspath(__file__))]
             renamed = False
             msg = ""
