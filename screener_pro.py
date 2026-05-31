@@ -2450,6 +2450,34 @@ HTML = r"""<!DOCTYPE html>
   --border2:rgba(92,79,67,0.08);
 }
 
+[data-theme="dark"]{
+  --cream:#1a1612;
+  --cream2:#221e19;
+  --cream3:#2a2520;
+  --sand:#3d3630;
+  --sand2:#504840;
+  --warm:#8c7b6b;
+  --bark:#c9bfb0;
+  --text:#f0ebe4;
+  --text2:#c9bfb0;
+  --text3:#8c7b6b;
+  --glass:rgba(26,22,18,0.82);
+  --glass2:rgba(34,30,25,0.65);
+  --shadow:0 2px 20px rgba(0,0,0,0.35);
+  --shadow2:0 8px 40px rgba(0,0,0,0.45);
+  --accent:#a09080;
+  --green:#5a9e6f;
+  --green-light:rgba(90,158,111,0.12);
+  --red:#c05050;
+  --red-light:rgba(192,80,80,0.12);
+  --blue:#5a7fa0;
+  --blue-light:rgba(90,127,160,0.12);
+  --yellow:#b09050;
+  --yellow-light:rgba(176,144,80,0.12);
+  --border:rgba(255,255,255,0.08);
+  --border2:rgba(255,255,255,0.05);
+}
+
 html,body{
   height:100%;
   background:var(--cream);
@@ -2993,6 +3021,7 @@ details summary::-webkit-details-marker{display:none}
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
   </div>
@@ -3503,7 +3532,8 @@ function renderValid(v, best, windows, minDays, days){
   const okWindows=windows?windows.filter(w=>w.ok).length:0;
   const totalWindows=windows?windows.length:0;
   const windowsOk=totalWindows===0||okWindows/totalWindows>=0.4;  // хотя бы 2 из 5
-  const ok=ratio!==null&&ratio>=0.75&&windowsOk;
+  // Стабильная если: валид хороший ИЛИ большинство окон зелёные (не обязательно оба)
+  const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2);
   const color=ok?'var(--green)':'var(--red)';
   const bgColor=ok?'rgba(80,200,100,0.07)':'rgba(220,80,80,0.07)';
 
@@ -3631,6 +3661,22 @@ function toggleMobLog(){
   const btn=document.getElementById('mob-log-btn');
   if(btn) btn.textContent=_mobLogVisible?'📋 Скрыть':'📋 Логи';
 }
+function toggleTheme(){
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const next=isDark?'light':'dark';
+  document.documentElement.setAttribute('data-theme',next);
+  document.getElementById('themeBtn').textContent=next==='dark'?'☀':'🌙';
+  localStorage.setItem('wf_theme',next);
+}
+(function(){
+  const saved=localStorage.getItem('wf_theme')||'dark';
+  document.documentElement.setAttribute('data-theme',saved);
+  document.addEventListener('DOMContentLoaded',function(){
+    const btn=document.getElementById('themeBtn');
+    if(btn) btn.textContent=saved==='dark'?'☀':'🌙';
+  });
+})();
+
 </script></body></html>"""
 
 # ═══════════════════════════════════════════════════════════════
