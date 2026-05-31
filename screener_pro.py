@@ -1204,18 +1204,25 @@ function render(){{
   const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
+  // Theme-aware colors
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const clrBg        = isDark ? '#1e1a17' : '#fafafa';
+  const clrAxis      = isDark ? 'rgba(255,255,255,.12)' : 'rgba(30,40,60,.12)';
+  const clrGrid      = isDark ? 'rgba(255,255,255,.05)' : 'rgba(30,40,60,.05)';
+  const clrPriceText = isDark ? '#9a8e83' : '#6a7a8e';
+  const clrTimeText  = isDark ? '#7a6e63' : '#848d9e';
   // Background fill chart area
-  ctx.fillStyle='#1e1a17';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=clrBg;ctx.fillRect(0,0,W,H);
   // Time axis separator
-  ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=1;
+  ctx.strokeStyle=clrAxis;ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(PAD_L,H-PAD_B);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   // Price axis separator
   ctx.beginPath();ctx.moveTo(W-PAD_R,PAD_T);ctx.lineTo(W-PAD_R,H-PAD_B);ctx.stroke();
   ctx.font='10px system-ui';ctx.textAlign='left';
   for(let g=0;g<=7;g++){{
     const price=mn+(mx-mn)*g/7,y=py(price);
-    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
-    ctx.fillStyle='#9a8e83';ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
+    ctx.strokeStyle=clrGrid;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle=clrPriceText;ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
   // Only draw TP/SL labels for the active (open) trade
   const activeSig=SIGNALS.find(s=>s.open_end===true&&s.bar_i<end&&s.bar_i>=viewStart-(viewLen*2));
@@ -1301,7 +1308,7 @@ function render(){{
       ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
-  ctx.fillStyle='#7a6e63';ctx.font='10px system-ui';ctx.textAlign='center';
+  ctx.fillStyle=clrTimeText;ctx.font='10px system-ui';ctx.textAlign='center';
   const step=Math.max(1,Math.floor(vis.length/8));
   const isMobile=W<500;
   const mskOffset=3*3600*1000;
