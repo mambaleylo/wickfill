@@ -1264,11 +1264,14 @@ function render(){{
   if(activeSig){{
     const isLong=activeSig.dir===1;
     const tpY=py(activeSig.tp),slY=py(activeSig.sl);
+    // x-range: from signal bar to right edge of visible area
+    const aViC=Math.max(0,activeSig.bar_i-viewStart);
+    const ax1=PAD_L+aViC*cw, ax2=W-PAD_R;
     ctx.setLineDash([4,3]);
     ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(PAD_L,tpY);ctx.lineTo(W-PAD_R,tpY);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(ax1,tpY);ctx.lineTo(ax2,tpY);ctx.stroke();
     ctx.strokeStyle='#b0a090';
-    ctx.beginPath();ctx.moveTo(PAD_L,slY);ctx.lineTo(W-PAD_R,slY);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(ax1,slY);ctx.lineTo(ax2,slY);ctx.stroke();
     ctx.setLineDash([]);
     ctx.font='bold 9px system-ui';ctx.textAlign='left';
     ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
@@ -4401,13 +4404,15 @@ class Handler(BaseHTTPRequestHandler):
                 main_running = any_running or multi_thread_alive
                 main_done    = not multi_thread_alive
                 main_inf     = multi_thread_alive
-                main_cycle   = 0
-                main_progress = 0
-                main_total   = 0
-                main_pass    = 0
-                main_param   = ""
-                main_elapsed = 0
-                main_avg     = None
+                # Берём прогресс из opt_state — туда пишет _coordinate_descent_from
+                with opt_lock:
+                    main_cycle    = opt_state.get("cycle", 0)
+                    main_progress = opt_state.get("progress", 0)
+                    main_total    = opt_state.get("total", 0)
+                    main_pass     = opt_state.get("pass_num", 0)
+                    main_param    = opt_state.get("current_param", "")
+                    main_elapsed  = opt_state.get("elapsed", 0)
+                    main_avg      = opt_state.get("avg_cycle_s")
             else:
                 with opt_lock:
                     main_logs = list(opt_state.get("logs",[]))
