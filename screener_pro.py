@@ -3617,7 +3617,7 @@ function renderValid(v, best, windows, minDays, days){
       html+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="Период ${w.i}: WR ${w.winrate}%, ${w.trades} сд | ${fromLbl}–${toLbl}">
         <span style="font-size:.55rem;color:${c};font-weight:700">${w.winrate}%</span>
         <div style="width:100%;height:${h}px;background:${bg};border-radius:3px 3px 0 0;transition:height .3s"></div>
-        <span style="font-size:.48rem;color:var(--text3);white-space:nowrap;margin-top:1px">${fromLbl}</span>
+        <span style="font-size:.48rem;color:var(--text3);white-space:nowrap;margin-top:1px">${fromLbl}–${toLbl}</span>
       </div>`;
     }
     html+=`</div>
@@ -3646,12 +3646,12 @@ function renderTop20(list){
     const levRaw=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
       ? Math.round(risk/parseFloat(sl)) : null;
     const lev=levRaw!==null ? levRaw+'×' : '—';
-    const levColor=levRaw>20?'var(--red)':levRaw>10?'var(--yellow)':'inherit';
+    const levColor=levRaw>50?'var(--red)':levRaw>25?'var(--yellow)':'inherit';
     return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td>
-      <td style="font-size:1.05rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
+      <td style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
 
