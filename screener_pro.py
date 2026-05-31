@@ -1341,7 +1341,7 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const delta=e.deltaY>0?1.18:0.84,ratio=(e.offsetX-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
 window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));render();}});
 window.addEventListener('mouseup',()=>isDragging=false);
@@ -1371,11 +1371,12 @@ wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
 const tip=document.getElementById('tooltip');
 const PAD_L_C=6,PAD_R_C=72;
 wrap.addEventListener('mousemove',e=>{{
+  const rect=wrap.getBoundingClientRect(),offsetX=e.clientX-rect.left;
   const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
   // Hide tooltip when hovering over price scale area
-  if(e.offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
-  const vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=drawW/vis.length;
-  const i=Math.floor((e.offsetX-PAD_L_C)/cw2);
+  if(offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
+  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart)),cw2=drawW/vis.length;
+  const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
   const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
   const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
@@ -1383,7 +1384,7 @@ wrap.addEventListener('mousemove',e=>{{
   let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
   if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
   tip.innerHTML=html;tip.style.display='block';
-  const tx=e.offsetX+14;tip.style.left=(tx+tip.offsetWidth>W?tx-tip.offsetWidth-20:tx)+'px';tip.style.top=Math.max(0,e.offsetY-10)+'px';
+  const tx=offsetX+14;tip.style.left=(tx+tip.offsetWidth>W?tx-tip.offsetWidth-20:tx)+'px';tip.style.top=Math.max(0,e.offsetY-10)+'px';
 }});
 wrap.addEventListener('mouseleave',()=>tip.style.display='none');
 window.addEventListener('resize',render);
@@ -4062,4 +4063,5 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
 
