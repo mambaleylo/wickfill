@@ -2421,34 +2421,34 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#faf8f5;
-  --cream2:#f2ede6;
-  --cream3:#e8e0d5;
-  --sand:#d4c9b8;
-  --sand2:#bfb09c;
+  --cream:#fffdf9;
+  --cream2:#fff8f0;
+  --cream3:#f5ede0;
+  --sand:#e0d0bc;
+  --sand2:#c8b89a;
   --warm:#8c7b6b;
-  --bark:#3a2e24;
-  --text:#1e1610;
-  --text2:#4a3e32;
-  --text3:#7a6a58;
-  --glass:rgba(250,248,245,0.85);
-  --glass2:rgba(242,237,230,0.70);
+  --bark:#2e2218;
+  --text:#1a1208;
+  --text2:#3d2e20;
+  --text3:#7a6550;
+  --glass:rgba(255,253,249,0.90);
+  --glass2:rgba(255,248,240,0.80);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 16px rgba(80,60,40,0.08);
-  --shadow2:0 8px 32px rgba(80,60,40,0.12);
+  --shadow:0 2px 16px rgba(60,40,20,0.07);
+  --shadow2:0 8px 32px rgba(60,40,20,0.11);
   --radius:18px;
   --radius-sm:12px;
   --accent:#7c6a58;
-  --green:#3a7048;
-  --green-light:#e4f0e8;
-  --red:#8b3030;
-  --red-light:#f5e6e6;
-  --blue:#3a5878;
-  --blue-light:#e4ecf5;
-  --yellow:#7a6030;
-  --yellow-light:#f5f0e0;
-  --border:rgba(80,60,40,0.10);
-  --border2:rgba(80,60,40,0.06);
+  --green:#2e6e42;
+  --green-light:#dcf0e4;
+  --red:#8b2828;
+  --red-light:#f5e0e0;
+  --blue:#2e5070;
+  --blue-light:#dceaf5;
+  --yellow:#7a5a20;
+  --yellow-light:#f5eedc;
+  --border:rgba(60,40,20,0.10);
+  --border2:rgba(60,40,20,0.06);
 }
 
 [data-theme="dark"]{
