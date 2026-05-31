@@ -1236,8 +1236,8 @@ function render(){{
     ctx.strokeStyle=clrGrid;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
     ctx.fillStyle=clrPriceText;ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
-  // Only draw TP/SL labels for the active (open) trade
-  const activeSig=SIGNALS.find(s=>s.open_end===true&&s.bar_i<end&&s.bar_i>=viewStart-(viewLen*2));
+  // Active open trade — find regardless of viewport (labels always visible)
+  const activeSig=SIGNALS.find(s=>s.open_end===true);
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
@@ -1252,22 +1252,25 @@ function render(){{
     ctx.strokeStyle=isLong?'rgba(160,48,48,0.45)':'rgba(58,125,82,0.45)';
     ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
     ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
-    // TP/SL dashed lines and labels ONLY for active open trade
-    if(activeSig===s){{
-      ctx.setLineDash([4,3]);
-      ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(W-PAD_R,py(s.tp));ctx.stroke();
-      ctx.strokeStyle='#b0a090';ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(W-PAD_R,py(s.sl));ctx.stroke();
-      ctx.setLineDash([]);
-      const tpY=py(s.tp),slY=py(s.sl);
-      ctx.font='bold 9px system-ui';ctx.textAlign='left';
-      ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
-      ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('TP '+s.tp.toPrecision(5),W-PAD_R+4,tpY+3);
-      ctx.fillStyle='rgba(140,120,100,0.75)';
-      ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('SL '+s.sl.toPrecision(5),W-PAD_R+4,slY+3);
-      ctx.font='10px system-ui';
-    }}
+  }}
+  // TP/SL dashed lines and labels for active open trade — always drawn regardless of viewport
+  if(activeSig){{
+    const isLong=activeSig.dir===1;
+    const tpY=py(activeSig.tp),slY=py(activeSig.sl);
+    ctx.setLineDash([4,3]);
+    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(PAD_L,tpY);ctx.lineTo(W-PAD_R,tpY);ctx.stroke();
+    ctx.strokeStyle='#b0a090';
+    ctx.beginPath();ctx.moveTo(PAD_L,slY);ctx.lineTo(W-PAD_R,slY);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font='bold 9px system-ui';ctx.textAlign='left';
+    ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY+3);
+    ctx.fillStyle='rgba(140,120,100,0.75)';
+    ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
+    ctx.fillStyle='#fff';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY+3);
+    ctx.font='10px system-ui';
   }}
   // Current price label — always visible
   const lastC=vis[vis.length-1];
