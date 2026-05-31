@@ -4001,7 +4001,27 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/opt_status_all":
             with opt_states_lock:
                 syms = list(_multi_symbols)
-                states_snap = {s: dict(opt_states.get(s,{})) for s in syms}
+                # Лёгкий снапшот — без chart_candles/chart_signals (они тяжёлые, не нужны в поллинге)
+                states_snap = {}
+                for s in syms:
+                    src = opt_states.get(s, {})
+                    states_snap[s] = {
+                        "symbol":          src.get("symbol", s),
+                        "eq":              src.get("eq", 100),
+                        "wr":              src.get("wr", 0),
+                        "dd":              src.get("dd", 0),
+                        "trades":          src.get("trades", 0),
+                        "pf":              src.get("pf", 0),
+                        "sl":              src.get("sl"),
+                        "tp":              src.get("tp"),
+                        "cycle":           src.get("cycle", 0),
+                        "running":         src.get("running", False),
+                        "chart_updated_at":src.get("chart_updated_at", -1),
+                        "valid":           src.get("valid"),
+                        "windows":         src.get("windows", []),
+                        "min_stable_days": src.get("min_stable_days"),
+                        "days":            src.get("days", 30),
+                    }
                 active = _active_chart_symbol
             # also include main opt_state for single-symbol compat
             with opt_lock:
@@ -4034,21 +4054,30 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         elif parsed.path in ("/chart", "/chart_download"):
-            # support ?symbol=X for multi-symbol mode
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
-            with opt_lock:
-                if req_sym and req_sym != opt_state.get("chart_symbol",""):
-                    # requested symbol not current — use cached state
+
+            chart_candles = []; chart_signals = []; chart_symbol = ""; chart_tf = ""; chart_best = None; chart_path = ""
+
+            # Для мультирежима: сначала ищем в opt_states по символу
+            if req_sym:
+                # Если это активный символ — берём актуальные данные из opt_state
+                with opt_states_lock:
+                    is_active = (req_sym == _active_chart_symbol)
+                if not is_active:
                     with opt_states_lock:
                         sym_state = opt_states.get(req_sym, {})
-                    chart_candles = list(sym_state.get("chart_candles", []))
-                    chart_signals = list(sym_state.get("chart_signals", []))
-                    chart_symbol  = sym_state.get("symbol", req_sym)
-                    chart_tf      = sym_state.get("chart_tf", "")
-                    chart_best    = sym_state.get("best", None)
-                    chart_path    = sym_state.get("chart_path","")
-                else:
+                    if sym_state.get("chart_candles"):
+                        chart_candles = list(sym_state.get("chart_candles", []))
+                        chart_signals = list(sym_state.get("chart_signals", []))
+                        chart_symbol  = sym_state.get("symbol", req_sym)
+                        chart_tf      = sym_state.get("chart_tf", "")
+                        chart_best    = sym_state.get("best", None)
+                        chart_path    = sym_state.get("chart_path","")
+
+            # Fallback: берём из opt_state (текущий активный символ)
+            if not chart_candles:
+                with opt_lock:
                     chart_candles = list(opt_state.get("chart_candles", []))
                     chart_signals = list(opt_state.get("chart_signals", []))
                     chart_symbol  = opt_state.get("chart_symbol", "")
