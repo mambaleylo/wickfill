@@ -4067,9 +4067,15 @@ class Handler(BaseHTTPRequestHandler):
                 # Если это активный символ — берём актуальные данные из opt_state
                 with opt_states_lock:
                     is_active = (req_sym == _active_chart_symbol)
+                    _dbg_active = _active_chart_symbol
+                print(f"[chart] req={req_sym} active={_dbg_active} is_active={is_active}", flush=True)
                 if not is_active:
                     with opt_states_lock:
                         sym_state = opt_states.get(req_sym, {})
+                    _dbg_upd = sym_state.get("chart_updated_at", -1)
+                    _dbg_best = bool(sym_state.get("best"))
+                    _dbg_cc = len(sym_state.get("chart_candles") or [])
+                    print(f"[chart] opt_states[{req_sym}]: chart_updated_at={_dbg_upd} best={_dbg_best} chart_candles={_dbg_cc}", flush=True)
                     # Проверяем chart_updated_at > 0 — признак что данные реально есть
                     if sym_state.get("chart_updated_at", -1) > 0 and sym_state.get("best"):
                         chart_candles = list(sym_state.get("chart_candles") or [])
