@@ -2414,6 +2414,7 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<script>document.documentElement.setAttribute("data-theme",localStorage.getItem("wf_theme")||"light");</script>
 <title>WickFill · Optimizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -3668,14 +3669,11 @@ function toggleTheme(){
   document.getElementById('themeBtn').textContent=next==='dark'?'☀':'🌙';
   localStorage.setItem('wf_theme',next);
 }
-(function(){
-  const saved=localStorage.getItem('wf_theme')||'light';
-  document.documentElement.setAttribute('data-theme',saved);
-  document.addEventListener('DOMContentLoaded',function(){
-    const btn=document.getElementById('themeBtn');
-    if(btn) btn.textContent=saved==='dark'?'☀':'🌙';
-  });
-})();
+document.addEventListener('DOMContentLoaded',function(){
+  const btn=document.getElementById('themeBtn');
+  const t=document.documentElement.getAttribute('data-theme');
+  if(btn) btn.textContent=t==='dark'?'☀':'🌙';
+});
 
 </script></body></html>"""
 
