@@ -3650,7 +3650,7 @@ function poll(){
       }
     }
     if(d.done&&!d.running&&!d.infinite){
-      clearTimeout(polling);polling=null;
+      if(polling){clearTimeout(polling);polling=null;}
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
       document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
@@ -4036,6 +4036,13 @@ class Handler(BaseHTTPRequestHandler):
                 main_avg = opt_state.get("avg_cycle_s")
                 main_done = opt_state.get("done", False)
                 main_inf = opt_state.get("infinite", False)
+            # В мультирежиме round-robin бесконечен пока жив _opt_thread
+            # done/running/infinite должны отражать весь цикл, а не один прогон
+            multi_thread_alive = bool(_opt_thread and _opt_thread.is_alive())
+            if len(syms) > 1:
+                main_running = main_running or multi_thread_alive
+                main_done    = not multi_thread_alive
+                main_inf     = multi_thread_alive  # чтобы JS не останавливал поллинг
             self._json({
                 "symbols": syms,
                 "active": active,
