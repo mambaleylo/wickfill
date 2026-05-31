@@ -1331,12 +1331,14 @@ function render(){{
     const t=new Date((vis[i].t+TF_SEC)*1000+mskOffset);
     let lbl;
     if(isMobile){{
-      // On mobile: just HH:MM to avoid overlap
       lbl=t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
     }}else{{
       lbl=(t.getUTCMonth()+1)+'/'+t.getUTCDate()+' '+t.getUTCHours().toString().padStart(2,'0')+':'+t.getUTCMinutes().toString().padStart(2,'0');
     }}
-    ctx.fillText(lbl,cx(i),H-PAD_B+16);
+    const lx=cx(i);
+    const hw=ctx.measureText(lbl).width/2;
+    if(lx+hw>W-PAD_R) continue; // skip labels that would overflow into price scale
+    ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
 wrap.addEventListener('wheel',e=>{{e.preventDefault();const delta=e.deltaY>0?1.18:0.84,ratio=(e.offsetX-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
@@ -1367,8 +1369,13 @@ wrap.addEventListener('touchmove',e=>{{
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
 const tip=document.getElementById('tooltip');
+const PAD_L_C=6,PAD_R_C=72;
 wrap.addEventListener('mousemove',e=>{{
-  const W=wrap.clientWidth,vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=W/vis.length,i=Math.floor(e.offsetX/cw2);
+  const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
+  // Hide tooltip when hovering over price scale area
+  if(e.offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
+  const vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=drawW/vis.length;
+  const i=Math.floor((e.offsetX-PAD_L_C)/cw2);
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
   const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
   const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
