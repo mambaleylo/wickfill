@@ -2032,7 +2032,7 @@ def run_optimizer(params):
             "running": True, "done": False, "infinite": infinite,
             "cycle": 0, "progress": 0, "total": 0,
             "generation": 0, "pass_num": 0, "current_param": "",
-            "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+            "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None, "days": days,
             "started_at": time.strftime("%H:%M:%S"),
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
@@ -2293,15 +2293,14 @@ def run_optimizer(params):
                 ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
                 olog(f"📊 Окна: {ww_str}", "ok")
 
-            # 3) Минимальный стабильный период
+            # 3) Минимальный стабильный период — ищем самый короткий рабочий отрезок
             min_stable_days = None
-            for pct in [0.70, 0.50, 0.33, 0.20, 0.10]:
+            for pct in [0.10, 0.20, 0.33, 0.50, 0.70]:
                 test_days = days * pct
                 ts = _wf_sim(test_days, 0)
                 if ts and ts["winrate"] >= train_wr * 0.75 and ts["trades"] >= 3:
                     min_stable_days = round(test_days, 1)
-                else:
-                    break
+                    break  # нашли минимальный — дальше не ищем
             if min_stable_days is not None:
                 olog(f"📐 Мин. стабильный период: {min_stable_days}д", "ok")
 
@@ -3358,7 +3357,7 @@ function poll(){
     const _atb=d.all_time_best||d.best;
     if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
     if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
-    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null);
+    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
       if(d.chart_updated_at!==lastChartTs){
@@ -3493,7 +3492,7 @@ function toggleParams(){
   el.style.display=vis?'none':'block';
 }
 
-function renderValid(v, best, windows, minDays){
+function renderValid(v, best, windows, minDays, days){
   const wrap=document.getElementById('validSection');
   if(!wrap) return;
   if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
@@ -3551,14 +3550,14 @@ function renderValid(v, best, windows, minDays){
     }
     html+=`</div>
       <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:.55rem;color:var(--text3)">
-        <span>−${Math.round(best?.params?._days||14)}д</span><span>сейчас</span>
+        <span>−${Math.round(days||30)}д</span><span>сейчас</span>
       </div>
     </div>`;
   }
 
   // Строка 4: мин. стабильный период
   if(minDays!=null){
-    const stableColor=minDays>=(best?.params?._days||14)*0.5?'var(--green)':'var(--yellow)';
+    const stableColor=minDays>=(days||30)*0.5?'var(--green)':'var(--yellow)';
     html+=`<div style="font-size:.7rem;color:var(--text3)">Стабильна с последних <b style="color:${stableColor}">${minDays}д</b></div>`;
   }
 
@@ -3663,6 +3662,7 @@ class Handler(BaseHTTPRequestHandler):
                     "valid":          opt_state.get("valid", None),
                     "windows":        opt_state.get("windows", []),
                     "min_stable_days":opt_state.get("min_stable_days", None),
+                    "days":           opt_state.get("days", 30),
                     "elapsed":        opt_state["elapsed"],
                     "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
