@@ -3462,17 +3462,13 @@ function switchChart(sym){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
   const s=_symStates[sym]||{};
-  if(s.chart_updated_at>0){
-    const theme=document.documentElement.getAttribute('data-theme')||'light';
-    frame.src='/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now()+'&theme='+theme;
-    frame.style.display='block';
-    if(ph) ph.style.display='none';
-    _lastChartTs[sym]=s.chart_updated_at;  // синхронизируем чтобы poll не перезагружал сразу
-  } else {
-    frame.style.display='none';
-    frame.src='about:blank';
-    if(ph){ph.style.display='flex';}
-  }
+  // Всегда пробуем загрузить — сервер сам вернёт "не готов" если нет данных
+  // Не проверяем chart_updated_at на клиенте — он может быть устаревшим
+  const theme=document.documentElement.getAttribute('data-theme')||'light';
+  frame.src='/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now()+'&theme='+theme;
+  frame.style.display='block';
+  if(ph) ph.style.display='none';
+  _lastChartTs[sym]=s.chart_updated_at||0;
 }
 
 function startOpt(){
@@ -4074,9 +4070,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not is_active:
                     with opt_states_lock:
                         sym_state = opt_states.get(req_sym, {})
-                    if sym_state.get("chart_candles"):
-                        chart_candles = list(sym_state.get("chart_candles", []))
-                        chart_signals = list(sym_state.get("chart_signals", []))
+                    # Проверяем chart_updated_at > 0 — признак что данные реально есть
+                    if sym_state.get("chart_updated_at", -1) > 0 and sym_state.get("best"):
+                        chart_candles = list(sym_state.get("chart_candles") or [])
+                        chart_signals = list(sym_state.get("chart_signals") or [])
                         chart_symbol  = sym_state.get("symbol", req_sym)
                         chart_tf      = sym_state.get("chart_tf", "")
                         chart_best    = sym_state.get("best", None)
