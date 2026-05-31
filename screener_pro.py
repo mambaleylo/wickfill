@@ -4219,6 +4219,17 @@ class Handler(BaseHTTPRequestHandler):
                     if req_sym and req_sym != active_sym:
                         print(f"[chart] {req_sym} не совпадает с opt_state chart_symbol={active_sym}, нет данных", flush=True)
                         chart_candles = []; chart_best = None
+                        # Последний шанс: снапшот из opt_states (мог обновиться пока мы тут)
+                        with opt_states_lock:
+                            fallback = dict(opt_states.get(req_sym, {}))
+                        if fallback.get("chart_candles"):
+                            chart_candles = list(fallback["chart_candles"])
+                            chart_signals = list(fallback.get("chart_signals") or [])
+                            chart_symbol  = fallback.get("symbol", req_sym)
+                            chart_tf      = fallback.get("chart_tf", "")
+                            chart_best    = fallback.get("best")
+                            chart_path    = fallback.get("chart_path", "")
+                            print(f"[chart] {req_sym}: использован fallback из opt_states snapshot", flush=True)
                     else:
                         chart_candles = list(opt_state.get("chart_candles", []))
                         chart_signals = list(opt_state.get("chart_signals", []))
@@ -4229,7 +4240,11 @@ class Handler(BaseHTTPRequestHandler):
             if not chart_best or not chart_candles:
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
-                self.wfile.write("<html><body style='background:#fafafa;color:#252b35;font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:#848d9e;margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
+                req_theme = qs.get("theme", ["light"])[0]
+                _bg   = "#1e1a17" if req_theme == "dark" else "#fafafa"
+                _fg   = "#d4c8bc" if req_theme == "dark" else "#252b35"
+                _sub  = "#7a7069" if req_theme == "dark" else "#848d9e"
+                self.wfile.write(f"<html><body style='background:{_bg};color:{_fg};font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:{_sub};margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
                 return
             try:
                 data = _build_chart_html(chart_candles, chart_signals, chart_best, chart_symbol, chart_tf).encode("utf-8")
