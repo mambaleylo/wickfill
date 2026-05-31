@@ -2421,34 +2421,34 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#f8f9fb;
-  --cream2:#f1f3f7;
-  --cream3:#e8ecf2;
-  --sand:#d4dae6;
-  --sand2:#b0bacb;
-  --warm:#7a8699;
-  --bark:#1e2a3a;
-  --text:#1a2332;
-  --text2:#3a4a5c;
-  --text3:#6a7a8e;
-  --glass:rgba(248,249,251,0.92);
-  --glass2:rgba(241,243,247,0.82);
+  --cream:#fafafa;
+  --cream2:#f4f5f7;
+  --cream3:#eceef2;
+  --sand:#dde0e8;
+  --sand2:#b8bdc9;
+  --warm:#7a8090;
+  --bark:#232830;
+  --text:#252b35;
+  --text2:#4a5262;
+  --text3:#848d9e;
+  --glass:rgba(250,250,250,0.93);
+  --glass2:rgba(244,245,247,0.84);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 16px rgba(30,42,58,0.06);
-  --shadow2:0 8px 32px rgba(30,42,58,0.10);
+  --shadow:0 2px 16px rgba(30,40,60,0.06);
+  --shadow2:0 8px 32px rgba(30,40,60,0.10);
   --radius:18px;
   --radius-sm:12px;
-  --accent:#5a7290;
+  --accent:#5a6880;
   --green:#2a6e48;
-  --green-light:#ddf0e8;
+  --green-light:#dff0e8;
   --red:#8b2828;
   --red-light:#f5e0e0;
   --blue:#2a4e78;
   --blue-light:#dce8f5;
   --yellow:#7a5a20;
   --yellow-light:#f5eedc;
-  --border:rgba(30,42,58,0.09);
-  --border2:rgba(30,42,58,0.05);
+  --border:rgba(30,40,60,0.09);
+  --border2:rgba(30,40,60,0.05);
 }
 
 [data-theme="dark"]{
@@ -3022,7 +3022,7 @@ details summary::-webkit-details-marker{display:none}
     <span id="swBadge"></span>
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
-    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">🌙</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
   </div>
