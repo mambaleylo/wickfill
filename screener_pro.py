@@ -2078,6 +2078,7 @@ def run_optimizer(params):
             "elapsed": 0.0, "error": "",
             "chart_symbol": symbol, "chart_tf": tf,
             "chart_path": "", "chart_updated_at": -1,
+            "chart_candles": [], "chart_signals": [],
             "sw_last_update": 0, "sw_candle_count": 0,
             "last_signal_t": 0,
         })
@@ -2490,17 +2491,21 @@ def _run_multi_safe(sym_list, base_params):
             with opt_states_lock:
                 s = opt_states.setdefault(sym, {})
                 s["symbol"]   = sym
-                s["cycle"]    = sym_cycles[sym]   # собственный счётчик
+                s["cycle"]    = sym_cycles[sym]
                 s["running"]  = False
-                s["chart_updated_at"] = chart_upd
-                s["chart_candles"]    = chart_candles
-                s["chart_signals"]    = chart_signals
-                s["chart_tf"]         = chart_tf
-                s["chart_path"]       = chart_path
-                s["valid"]            = valid
-                s["windows"]          = windows
-                s["min_stable_days"]  = min_stable
-                s["days"]             = days
+                s["valid"]    = valid
+                s["windows"]  = windows
+                s["min_stable_days"] = min_stable
+                s["days"]     = days
+                # Обновляем график только если он реально построился
+                if chart_upd > 0:
+                    s["chart_updated_at"] = chart_upd
+                    s["chart_candles"]    = chart_candles
+                    s["chart_signals"]    = chart_signals
+                    s["chart_tf"]         = chart_tf
+                    s["chart_path"]       = chart_path
+                elif "chart_updated_at" not in s:
+                    s["chart_updated_at"] = -1
                 if best:
                     prev_eq = s.get("eq", 0)
                     new_eq  = round(best.get("equity", 100), 2)
