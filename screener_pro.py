@@ -3669,7 +3669,7 @@ function toggleTheme(){
   localStorage.setItem('wf_theme',next);
 }
 (function(){
-  const saved=localStorage.getItem('wf_theme')||'dark';
+  const saved=localStorage.getItem('wf_theme')||'light';
   document.documentElement.setAttribute('data-theme',saved);
   document.addEventListener('DOMContentLoaded',function(){
     const btn=document.getElementById('themeBtn');
