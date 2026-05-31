@@ -1365,8 +1365,9 @@ const tip=document.getElementById('tooltip');
 wrap.addEventListener('mousemove',e=>{{
   const W=wrap.clientWidth,vis=CANDLES.slice(viewStart,viewStart+viewLen),cw2=W/vis.length,i=Math.floor(e.offsetX/cw2);
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
-  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi),d=new Date(c.t*1000);
-  const dt=d.toLocaleDateString('ru')+' '+d.toLocaleTimeString('ru',{{hour:'2-digit',minute:'2-digit'}});
+  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
+  const mskMs=c.t*1000+3*3600*1000,d=new Date(mskMs);
+  const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
   let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
   if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
   tip.innerHTML=html;tip.style.display='block';
