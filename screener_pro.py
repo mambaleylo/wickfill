@@ -2454,6 +2454,8 @@ def _run_multi_safe(sym_list, base_params):
     import traceback, copy
     global _active_chart_symbol
     print(f"[multi] Старт round-robin: {sym_list}", flush=True)
+    # Собственные счётчики циклов на символ — не зависят от opt_state["cycle"]
+    sym_cycles = {s: 0 for s in sym_list}
     while not _opt_stop_flag.is_set():
         for sym in sym_list:
             if _opt_stop_flag.is_set():
@@ -2461,12 +2463,14 @@ def _run_multi_safe(sym_list, base_params):
             params = copy.deepcopy(base_params)
             params["wf_symbol"] = sym
             params["infinite"] = False   # one cycle per call; we loop here
+            sym_cycles[sym] = sym_cycles.get(sym, 0) + 1
             with opt_states_lock:
                 _active_chart_symbol = sym
                 if sym not in opt_states:
                     opt_states[sym] = {}
                 opt_states[sym]["running"] = True
-            print(f"[multi] Цикл → {sym}", flush=True)
+                opt_states[sym]["cycle"]   = sym_cycles[sym]
+            print(f"[multi] Цикл #{sym_cycles[sym]} → {sym}", flush=True)
             try:
                 run_optimizer(params)
             except Exception as e:
@@ -2478,7 +2482,6 @@ def _run_multi_safe(sym_list, base_params):
                 windows = opt_state.get("windows", [])
                 min_stable = opt_state.get("min_stable_days")
                 days = opt_state.get("days", 30)
-                cycle = opt_state.get("cycle", 0)
                 chart_upd = opt_state.get("chart_updated_at", -1)
                 chart_candles = list(opt_state.get("chart_candles", []))
                 chart_signals = list(opt_state.get("chart_signals", []))
@@ -2487,7 +2490,7 @@ def _run_multi_safe(sym_list, base_params):
             with opt_states_lock:
                 s = opt_states.setdefault(sym, {})
                 s["symbol"]   = sym
-                s["cycle"]    = cycle
+                s["cycle"]    = sym_cycles[sym]   # собственный счётчик
                 s["running"]  = False
                 s["chart_updated_at"] = chart_upd
                 s["chart_candles"]    = chart_candles
@@ -3321,7 +3324,8 @@ details summary::-webkit-details-marker{display:none}
 </div><!-- /app -->
 
 <script>
-let polling=null, startTs=0, lastLogCount=0, chartOpened=false, lastChartTs=-1;
+let polling=null, startTs=0, lastLogCount=0, chartOpened=false;
+let _lastChartTs={};   // per-symbol: {sym: timestamp} — чтобы не мигал при смене символа
 const infiniteMode=true;
 function toggleInfinite(){} // режим всегда бесконечный
 
@@ -3463,6 +3467,11 @@ function switchChart(sym){
     frame.src='/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now()+'&theme='+theme;
     frame.style.display='block';
     if(ph) ph.style.display='none';
+    _lastChartTs[sym]=s.chart_updated_at;  // синхронизируем чтобы poll не перезагружал сразу
+  } else {
+    frame.style.display='none';
+    frame.src='about:blank';
+    if(ph){ph.style.display='flex';}
   }
 }
 
@@ -3487,7 +3496,7 @@ function startOpt(){
       if(ccLabel) ccLabel.textContent=_symList.length>1?'Монеты':'Циклы';
       _renderSymCards();
       _renderSymSwitcher();
-      lastLogCount=0;chartOpened=false;lastChartTs=-1;
+      lastLogCount=0;chartOpened=false;_lastChartTs={};
       _resetLog();
       document.getElementById('bestSection').style.display='none';
       document.getElementById('top20Wrap').style.display='none';
@@ -3562,9 +3571,8 @@ function poll(){
       for(const sym of _symList){
         if(d.states[sym]) _symStates[sym]=Object.assign(_symStates[sym]||{},d.states[sym]);
       }
-      // Auto-follow active (currently running) symbol's chart
+      // Auto-follow active (currently running) symbol if current has no chart yet
       if(d.active&&d.active!==_activeChart){
-        // Only auto-switch if no chart has been loaded yet or current sym has no chart
         const curSt=_symStates[_activeChart]||{};
         if(curSt.chart_updated_at<=0){
           _activeChart=d.active;
@@ -3572,10 +3580,11 @@ function poll(){
       }
       _renderSymCards();
       _renderSymSwitcher();
-      // auto-load chart for active sym when updated
+      // auto-load chart for active sym when timestamp updated
       const activeSt=_symStates[_activeChart]||{};
-      if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==lastChartTs){
-        lastChartTs=activeSt.chart_updated_at;
+      const knownTs=_lastChartTs[_activeChart]||0;
+      if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==knownTs){
+        _lastChartTs[_activeChart]=activeSt.chart_updated_at;
         const frame=document.getElementById('chartFrame');
         const ph=document.getElementById('chartPlaceholder');
         const theme=document.documentElement.getAttribute('data-theme')||'light';
@@ -3583,16 +3592,6 @@ function poll(){
         frame.style.display='block';
         if(ph) ph.style.display='none';
         document.getElementById('chartBtn').style.display='flex';
-      }
-      // Also check if active changed to a sym with newer chart
-      if(d.active&&d.active!==_activeChart){
-        const newActiveSt=_symStates[d.active]||{};
-        const curSt2=_symStates[_activeChart]||{};
-        if(newActiveSt.chart_updated_at>curSt2.chart_updated_at&&curSt2.chart_updated_at<=0){
-          _activeChart=d.active;
-          _renderSymCards();
-          _renderSymSwitcher();
-        }
       }
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
@@ -3644,8 +3643,9 @@ function poll(){
     if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(!useMulti&&d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
-      if(d.chart_updated_at!==lastChartTs){
-        lastChartTs=d.chart_updated_at;
+      const _singleSym=_symList[0]||'__single__';
+      if(d.chart_updated_at!==(_lastChartTs[_singleSym]||0)){
+        _lastChartTs[_singleSym]=d.chart_updated_at;
         _loadChartFrame();
       }
     }
