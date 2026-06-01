@@ -1314,12 +1314,22 @@ function render(){{
     ctx.fillRect(x-bW/2,bTop,bW,bH);
     ctx.globalAlpha=1.0;
   }}
+  // Рисуем сигналы: стрелки всегда, лейблы только если свечи достаточно широкие
+  const _showLabels = cw >= 6;  // показываем лейблы только при cw>=6px
+  // Антиперекрытие лейблов: храним занятые X-зоны
+  const _usedLabelX = [];
+  function _labelFits(lx, tw) {{
+    const half = tw/2 + 5;
+    for (const [u0, u1] of _usedLabelX) {{ if (lx+half > u0 && lx-half < u1) return false; }}
+    _usedLabelX.push([lx-half, lx+half]);
+    return true;
+  }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
     const x=cx(vi),isLong=s.dir===1;
     const c_sig=vis[vi];
-    const arrowSz=Math.max(5,Math.min(7,cw*0.45));
-    const arrowOff=Math.max(18,cw*2.2);
+    const arrowSz=Math.max(4,Math.min(7,cw*0.45));
+    const arrowOff=Math.max(14,Math.min(22,cw*2.2));
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
     ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
     ctx.strokeStyle=isOpenEnd?'#b0a090':s.win===null?'#b0a090':isWin?'#3a7d52':'#a03030';
@@ -1327,18 +1337,20 @@ function render(){{
     if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
-    if(!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
+    if(_showLabels&&!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
       const lbl=(pct>=0?'+':'')+pct.toFixed(2)+'%';
       const vi_exit=s.exit_bar-viewStart,x_exit=(vi_exit>=0&&vi_exit<vis.length)?cx(vi_exit):x;
       const lx=(x+x_exit)/2;
       const ly=isLong?py(c_sig.l)+arrowOff+arrowSz+16:py(c_sig.h)-arrowOff-arrowSz-16;
-      ctx.font=`bold ${{Math.max(9,Math.min(12,cw*1.5))}}px system-ui`;ctx.textAlign='center';
+      ctx.font=`bold ${{Math.max(9,Math.min(11,cw*1.5))}}px system-ui`;ctx.textAlign='center';
       const tw=ctx.measureText(lbl).width;
-      ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
-      ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
+      if(_labelFits(lx, tw)){{
+        ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
+        ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
+        ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
+      }}
     }}
   }}
   ctx.fillStyle=clrTimeText;ctx.font='10px system-ui';ctx.textAlign='center';
@@ -3785,9 +3797,9 @@ function _tryAutoLoad(){
   fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
     .then(r=>r.json()).then(d=>{
       if(!d.ok) return; // нет конфига — тихо игнорируем
-      window._loadedSeed={best:d.best,top20:d.top20||[]};
+      window._loadedSeed={best:d.best,top20:d.top20||[],tf:d.tf||tf};
       // Не перезаписываем поле символа — пользователь пишет кратко (BTC), сервер знает полное имя
-      if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
+      // d.tf намеренно НЕ применяем к UI — пользователь выбирает TF сам
       if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
       if(d.best) renderBest(d.best,d.top20||[]);
       _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
@@ -3799,6 +3811,18 @@ window.addEventListener('DOMContentLoaded', function(){
   const daysEl=document.getElementById('wf_days');
   daysEl.addEventListener('blur', _tryAutoLoad);
   daysEl.addEventListener('keydown', function(e){ if(e.key==='Enter') _tryAutoLoad(); });
+  // При смене TF — сбрасываем старый seed и подгружаем конфиг под новый TF
+  const tfSel=document.getElementById('wf_tf_sel');
+  if(tfSel) tfSel.addEventListener('change', function(){
+    window._loadedSeed=null;
+    _tryAutoLoad();
+  });
+  // При смене символа — тоже сбрасываем seed
+  const symEl=document.getElementById('wf_symbol');
+  if(symEl) symEl.addEventListener('blur', function(){
+    window._loadedSeed=null;
+    _tryAutoLoad();
+  });
 });
 
 function getAlertCfg(){
@@ -3914,7 +3938,10 @@ function startOpt(){
   const days=document.getElementById('wf_days').value;
   const risk=document.getElementById('wf_risk').value;
   const alertCfg=getAlertCfg();
-  const seed=window._loadedSeed||null;
+  // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
+  const _rawSeed=window._loadedSeed||null;
+  const seed=(_rawSeed&&_rawSeed.tf&&_rawSeed.tf!==tf)?null:_rawSeed;
+  if(_rawSeed&&!seed) console.warn('[seed] Сброшен: tf seed='+_rawSeed.tf+' != выбран='+tf);
   const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,infinite:infiniteMode,alert_cfg:alertCfg,seed});
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
