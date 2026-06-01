@@ -1314,8 +1314,8 @@ function render(){{
     ctx.fillRect(x-bW/2,bTop,bW,bH);
     ctx.globalAlpha=1.0;
   }}
-  // Рисуем сигналы: стрелки всегда, лейблы только если свечи достаточно широкие
-  const _showLabels = cw >= 6;  // показываем лейблы только при cw>=6px
+  // Рисуем сигналы: стрелки и лейблы всегда (антиперекрытие через _labelFits)
+  const _showLabels = true;
   // Антиперекрытие лейблов: храним занятые X-зоны
   const _usedLabelX = [];
   function _labelFits(lx, tw) {{
@@ -1439,8 +1439,14 @@ function fetchLiveCandle() {{
       // Был ли пользователь у правого края ДО изменений
       const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
       if (last && last.live) {{
-        // Обновляем существующую живую свечу на месте
-        last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
+        if (d.t === last.t) {{
+          // Та же свеча — просто обновляем OHLC
+          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c;
+        }} else if (d.t > last.t) {{
+          // Новый интервал: «закрываем» старую live (убираем флаг, она остаётся как закрытая свеча)
+          delete last.live;
+          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+        }}
       }} else {{
         // Добавляем live-свечу: если t совпадает с последней закрытой — заменяем её
         if (last && !last.live && d.t === last.t) CANDLES.pop();
@@ -4276,10 +4282,15 @@ function renderValid(v, best, windows, minDays, days){
   const okWindows=windows?windows.filter(w=>w.ok).length:0;
   const totalWindows=windows?windows.length:0;
   const windowsOk=totalWindows===0||okWindows/totalWindows>=0.4;  // хотя бы 2 из 5
-  // Стабильная если: валид хороший ИЛИ большинство окон зелёные (не обязательно оба)
-  const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2);
-  const color=ok?'var(--green)':'var(--red)';
-  const bgColor=ok?'var(--green-light)':'var(--red-light)';
+  // Последнее (свежее) окно — первый элемент массива (wi=0 самое свежее)
+  const lastWindow=windows&&windows.length>0?windows[0]:null;
+  const lastWindowOk=!lastWindow||lastWindow.ok;
+  // Стабильная если: валид хороший ИЛИ большинство окон зелёные — НО только если последний период не красный
+  const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&lastWindowOk;
+  // Деградация: в целом хорошо, но последний период плохой
+  const degrading=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&!lastWindowOk;
+  const color=ok?'var(--green)':degrading?'var(--yellow)':'var(--red)';
+  const bgColor=ok?'var(--green-light)':degrading?'rgba(138,106,26,0.12)':'var(--red-light)';
 
   // Заголовок: иконка + статус + ключевые цифры в одну строку
   const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
@@ -4292,7 +4303,7 @@ function renderValid(v, best, windows, minDays, days){
 
   // Строка 1: статус + валид WR vs трейн WR
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <span style="color:${color};font-weight:700;font-size:.88rem">${ratio===null?'— Нет данных':ok?'✓ Стабильная':'⚠ Нестабильная'}</span>
+    <span style="color:${color};font-weight:700;font-size:.88rem">${ratio===null?'— Нет данных':ok?'✓ Стабильная':degrading?'⚠ Деградация':'⚠ Нестабильная'}</span>
     <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
   </div>`;
 
