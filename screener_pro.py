@@ -3546,7 +3546,7 @@ details summary::-webkit-details-marker{display:none}
     <div class="card">
       <div class="field-inset" style="margin-bottom:6px">
         <label>Символы (через запятую)</label>
-        <input type="text" id="wf_symbol" value="BTC_USDT" placeholder="BTC_USDT, ETH_USDT, SOL_USDT" style="width:100%">
+        <input type="text" id="wf_symbol" value="BTC" placeholder="BTC, ETH, SOL" style="width:100%">
       </div>
       <div class="field-row" style="margin-bottom:6px">
         <div class="field-inset">
@@ -3723,18 +3723,30 @@ function checkApi(){
 }
 checkApi();setInterval(checkApi,60000);
 
+// Нормализует символы: "BTC, ETH" → "BTC_USDT, ETH_USDT" (добавляет _USDT если нет суффикса)
+function _normalizeSymbols(raw){
+  return raw.split(/[,\s]+/).map(s=>{
+    s=s.trim().toUpperCase();
+    if(!s) return null;
+    // Уже содержит пару — оставляем как есть
+    if(s.includes('_')) return s;
+    return s+'_USDT';
+  }).filter(Boolean).join(', ');
+}
+
 // Авто-загрузка конфига при вводе поля "История (дни)"
 function _tryAutoLoad(){
   const days=parseInt(document.getElementById('wf_days').value);
   if(!days||days<1) return;
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const rawSym=document.getElementById('wf_symbol').value.trim()||'BTC';
+  const sym=_normalizeSymbols(rawSym).split(',')[0].trim(); // первый символ для авто-загрузки
   const tf=document.getElementById('wf_tf_sel').value;
   const risk=parseFloat(document.getElementById('wf_risk').value)||10;
   fetch(`/load_result?symbol=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&days=${days}&risk=${risk}`)
     .then(r=>r.json()).then(d=>{
       if(!d.ok) return; // нет конфига — тихо игнорируем
       window._loadedSeed={best:d.best,top20:d.top20||[]};
-      if(d.symbol) document.getElementById('wf_symbol').value=d.symbol;
+      // Не перезаписываем поле символа — пользователь пишет кратко (BTC), сервер знает полное имя
       if(d.tf){const sel=document.getElementById('wf_tf_sel');for(let o of sel.options)if(o.value===d.tf){sel.value=d.tf;break;}}
       if(d.risk_pct) document.getElementById('wf_risk').value=d.risk_pct;
       if(d.best) renderBest(d.best,d.top20||[]);
@@ -3855,7 +3867,9 @@ function switchChart(sym){
 }
 
 function startOpt(){
-  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const rawSym=document.getElementById('wf_symbol').value.trim()||'BTC';
+  const sym=_normalizeSymbols(rawSym);
+  // Обновляем поле ввода нормализованным значением (без _USDT для читаемости оставляем как есть)
   const tf=document.getElementById('wf_tf_sel').value;
   const days=document.getElementById('wf_days').value;
   const risk=document.getElementById('wf_risk').value;
@@ -4776,9 +4790,14 @@ class Handler(BaseHTTPRequestHandler):
                     _sw_state[s]["running"] = False
             _sw_threads = {}
             _sw_state   = {}
-            # Parse comma-separated symbols
+            # Parse comma-separated symbols, добавляем _USDT если нет суффикса пары
             raw_syms = params.get("wf_symbol","BTC_USDT")
-            sym_list = [s.strip().upper() for s in raw_syms.replace(","," ").split() if s.strip()]
+            def _norm_sym(s):
+                s = s.strip().upper()
+                if not s: return None
+                return s if "_" in s else s + "_USDT"
+            sym_list = [_norm_sym(s) for s in raw_syms.replace(","," ").split() if s.strip()]
+            sym_list = [s for s in sym_list if s]
             if not sym_list: sym_list = ["BTC_USDT"]
             with opt_states_lock:
                 _multi_symbols = sym_list
