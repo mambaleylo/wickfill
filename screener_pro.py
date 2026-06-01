@@ -218,14 +218,12 @@ def _live_candle_updater():
                     with _live_candle_lock:
                         _live_candle_cache[key] = c
                     with opt_lock:
-                        cc2 = opt_state.get("chart_candles", [])
+                        cc2 = list(opt_state.get("chart_candles", []))
                         if cc2:
                             if cc2[-1].get("live"):
-                                cc2[-1]["o"] = c["open"]
-                                cc2[-1]["h"] = c["high"]
-                                cc2[-1]["l"] = c["low"]
-                                cc2[-1]["c"] = c["close"]
-                                cc2[-1]["t"] = c["t"]
+                                cc2[-1] = {"t":c["t"],"o":c["open"],"h":c["high"],
+                                           "l":c["low"],"c":c["close"],"live":True}
+                                opt_state["chart_candles"] = cc2  # явно пишем обратно
                             elif c["t"] > cc2[-1]["t"]:
                                 opt_state["chart_candles"] = cc2 + [
                                     {"t":c["t"],"o":c["open"],"h":c["high"],
@@ -2180,6 +2178,23 @@ def run_optimizer(params):
     if len(_multi_symbols) > 1 and symbol in _sw_state:
         with _sw_state_lock:
             _sw_state[symbol]["candles"] = list(candles)
+
+    # Сразу показываем график со свечами (без сигналов) — не ждём завершения первого цикла
+    try:
+        cc_pre = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in candles]
+        cur_pre0 = _fetch_current_candle(symbol, tf)
+        if cur_pre0 and cur_pre0["t"] > candles[-1]["t"]:
+            cc_pre = cc_pre + [{"t":cur_pre0["t"],"o":cur_pre0["open"],"h":cur_pre0["high"],"l":cur_pre0["low"],"c":cur_pre0["close"],"live":True}]
+        _pre_best_stub = {"params": {}, "equity": 100, "winrate": 0, "max_dd": 0, "profit_factor": 0, "trades": 0}
+        with opt_lock:
+            if not opt_state.get("best"):  # не перезаписываем если seed уже дал лучший
+                opt_state["chart_candles"]    = cc_pre
+                opt_state["chart_signals"]    = []
+                opt_state["chart_updated_at"] = int(time.time())
+                opt_state["best"]             = _pre_best_stub
+        olog(f"📊 Предварительный график: {len(cc_pre)} свечей (сигналы появятся после 1-го цикла)", "ok")
+    except Exception as e:
+        olog(f"⚠ Предварительный график не удался: {e}", "warn")
 
     # Запускаем прогрев пула ПАРАЛЛЕЛЬНО с остальной подготовкой (критично для Windows spawn)
     _n_workers = max(1, os.cpu_count() or 1)
