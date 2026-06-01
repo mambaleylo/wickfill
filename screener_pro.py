@@ -220,15 +220,17 @@ def _live_candle_updater():
                     with opt_lock:
                         cc2 = list(opt_state.get("chart_candles", []))
                         if cc2:
+                            live_c = {"t":c["t"],"o":c["open"],"h":c["high"],
+                                      "l":c["low"],"c":c["close"],"live":True}
                             if cc2[-1].get("live"):
-                                cc2[-1] = {"t":c["t"],"o":c["open"],"h":c["high"],
-                                           "l":c["low"],"c":c["close"],"live":True}
-                                opt_state["chart_candles"] = cc2  # явно пишем обратно
-                            elif c["t"] > cc2[-1]["t"]:
-                                opt_state["chart_candles"] = cc2 + [
-                                    {"t":c["t"],"o":c["open"],"h":c["high"],
-                                     "l":c["low"],"c":c["close"],"live":True}
-                                ]
+                                # Обновляем существующую live-свечу
+                                cc2[-1] = live_c
+                                opt_state["chart_candles"] = cc2
+                            elif c["t"] >= cc2[-1]["t"]:
+                                # >= : добавляем live даже если t совпадает с последней закрытой
+                                if c["t"] == cc2[-1]["t"]:
+                                    cc2.pop()  # убираем закрытую версию той же свечи
+                                opt_state["chart_candles"] = cc2 + [live_c]
         except Exception as e:
             print(f"{_ts()} [SW] ⚠ {e}", flush=True)
         time.sleep(3)
@@ -1423,24 +1425,20 @@ function fetchLiveCandle() {{
       if (!d.ok) return;
       const last = CANDLES[CANDLES.length - 1];
       const atEnd = (viewStart + viewLen >= CANDLES.length);
-      let changed = false;
       if (last && last.live) {{
         // Обновляем существующую живую свечу
-        if (last.c !== d.c || last.h !== d.h || last.l !== d.l) {{
-          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
-          changed = true;
-        }}
-      }} else if (!last || d.t > last.t) {{
-        // Новый интервал — добавляем свечу
+        last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
+      }} else if (!last || d.t >= last.t) {{
+        // d.t >= last.t: либо новый интервал, либо та же свеча но live-версия
+        // Убираем последнюю если это уже live (не должно быть, но на всякий случай)
         if (last && last.live) CANDLES.pop();
+        // Если d.t совпадает с последней закрытой свечой — заменяем её live-версией
+        if (last && !last.live && d.t === last.t) {{
+          CANDLES.pop();
+        }}
         CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
-        if (atEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
-        changed = true;
-      }}
-      // Если live-свеча за правым краем viewport — подтягиваем вид
-      if (changed && CANDLES[CANDLES.length-1] && CANDLES[CANDLES.length-1].live) {{
-        const liveIdx = CANDLES.length - 1;
-        if (liveIdx >= viewStart + viewLen) {{
+        // Подтягиваем viewport к правому краю
+        if (atEnd || CANDLES.length - 1 >= viewStart + viewLen) {{
           viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }}
