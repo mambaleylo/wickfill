@@ -2091,7 +2091,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         save_dir = os.path.dirname(os.path.abspath(__file__))
         tried.append(f"{save_dir} (фолбек скрипта)")
 
-    _log(f"💾 Сохраняю в: {save_dir}", "info")
+    _log(f"[save] Сохраняю в: {save_dir}", "info")
 
     fname = _config_filename(symbol, tf, days, risk_pct, eq)
     fpath = os.path.join(save_dir, fname)
@@ -2139,10 +2139,10 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     except Exception:
         pass
 
-    if olog: olog(f"💾 Сохранено: {fpath}", "found")
+    if olog: olog(f"[save] Сохранено: {fpath}", "found")
     else:
         with opt_lock:
-            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "found"})
+            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"[save] Сохранено: {fpath}", "level": "found"})
     print(f"{_ts()} [save] ✅ Сохранён: {fpath}", flush=True)
     return fpath
 
@@ -2790,7 +2790,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             global_best = b
             global_best_vfit = b.get("validated_fitness", b.get("fitness", 0))
             last_autosave_vfit = global_best_vfit
-            _slog(f"💾 Загружен сохранённый конфиг: ${b.get('equity',100):.2f}", "ok")
+            _slog(f"[load] Загружен конфиг: ${b.get('equity',100):.2f}", "ok")
     except Exception:
         pass
 
