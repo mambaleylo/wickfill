@@ -1210,9 +1210,13 @@ const wrap=document.getElementById('canvas-wrap');
 let viewStart=Math.max(0,CANDLES.length-120),viewLen=Math.min(120,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 function toggleSidebar(){{const sb=document.getElementById('sidebar');sidebarOpen=!sidebarOpen;sb.classList.toggle('hidden',!sidebarOpen);requestAnimationFrame(render);}}
+let _lastW=0,_lastH=0;
 function render(){{
-  const dpr=window.devicePixelRatio||1,W=wrap.clientWidth,H=wrap.clientHeight;
-  if(!W||!H) return;
+  const dpr=window.devicePixelRatio||1;
+  let W=wrap.clientWidth,H=wrap.clientHeight;
+  // Fallback: если wrap ещё не отрисован — используем последние известные размеры
+  if(!W||!H){{if(_lastW&&_lastH){{W=_lastW;H=_lastH;}}else return;}}
+  _lastW=W;_lastH=H;
   canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';
   ctx.scale(dpr,dpr);
   const end=Math.min(viewStart+viewLen,CANDLES.length),vis=CANDLES.slice(viewStart,end);
@@ -1419,14 +1423,26 @@ function fetchLiveCandle() {{
       if (!d.ok) return;
       const last = CANDLES[CANDLES.length - 1];
       const atEnd = (viewStart + viewLen >= CANDLES.length);
+      let changed = false;
       if (last && last.live) {{
         // Обновляем существующую живую свечу
-        last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
+        if (last.c !== d.c || last.h !== d.h || last.l !== d.l) {{
+          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
+          changed = true;
+        }}
       }} else if (!last || d.t > last.t) {{
         // Новый интервал — добавляем свечу
         if (last && last.live) CANDLES.pop();
         CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
         if (atEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
+        changed = true;
+      }}
+      // Если live-свеча за правым краем viewport — подтягиваем вид
+      if (changed && CANDLES[CANDLES.length-1] && CANDLES[CANDLES.length-1].live) {{
+        const liveIdx = CANDLES.length - 1;
+        if (liveIdx >= viewStart + viewLen) {{
+          viewStart = Math.max(0, CANDLES.length - viewLen);
+        }}
       }}
       // Badge
       const badge = document.getElementById('liveBadge');
@@ -1435,7 +1451,8 @@ function fetchLiveCandle() {{
         badge.style.color = stale ? '#e09030' : '';
         badge.textContent = (stale ? '⚠ ' : '⬤ ') + 'LIVE  ' + d.c.toPrecision(7);
       }}
-      render();
+      // Всегда перерисовываем через rAF — даже если changed=false (для badge)
+      requestAnimationFrame(render);
     }}).catch(e => {{
       _liveFailCount++;
       console.warn('[live_candle] err #' + _liveFailCount, e);
