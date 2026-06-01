@@ -26,6 +26,10 @@ import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
 
+def _ts():
+    """Возвращает метку времени для логов: [HH:MM:SS]"""
+    return time.strftime("[%H:%M:%S]")
+
 TF_SECONDS = {
     "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "4h": 14400, "8h": 28800, "1d": 86400
@@ -185,7 +189,7 @@ def _live_candle_updater():
 
                 # Если данные устарели и оптимизатор не бежит — перегружаем историю
                 if stale and not running and best and (now - _last_refresh) > 60:
-                    print(f"[live_updater] данные устарели (last={last_t}, now={now}), перегружаю...", flush=True)
+                    print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
                         fresh = _fetch_candles(symbol, tf, 3)
                         if fresh and len(fresh) > 10:
@@ -203,9 +207,9 @@ def _live_candle_updater():
                                 opt_state["chart_signals"]  = sigs
                             cc = new_cc
                             _last_refresh = now
-                            print(f"[live_updater] перезагружено {len(fresh)} свечей", flush=True)
+                            print(f"{_ts()} [SW] ✅ Перезагружено {len(fresh)} свечей", flush=True)
                     except Exception as e:
-                        print(f"[live_updater] ошибка перезагрузки: {e}", flush=True)
+                        print(f"{_ts()} [SW] ❌ Ошибка перезагрузки: {e}", flush=True)
 
                 # Обновляем незакрытую свечу
                 c = _fetch_current_candle(symbol, tf)
@@ -228,7 +232,7 @@ def _live_candle_updater():
                                      "l":c["low"],"c":c["close"],"live":True}
                                 ]
         except Exception as e:
-            print(f"[live_updater] {e}", flush=True)
+            print(f"{_ts()} [SW] ⚠ {e}", flush=True)
         time.sleep(3)
 
 # Запускаем фоновый поток сразу
@@ -833,7 +837,7 @@ def _fetch_candles(symbol, tf, days):
     current_from = since
     last_http_error = None
     last_exception  = None
-    print(f"[fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
+    print(f"{_ts()} [fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
         print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
@@ -843,11 +847,11 @@ def _fetch_candles(symbol, tf, days):
                         "from": current_from, "limit": LIMIT}, timeout=15)
             if r.status_code != 200:
                 last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
-                print(f"\n[fetch] {last_http_error}", flush=True); break
+                print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True); break
             data = r.json()
             if not isinstance(data, list):
                 last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
-                print(f"\n[fetch] {last_http_error}", flush=True); break
+                print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True); break
             if not data: break
             for c in data:
                 t = int(c.get("t", 0))
@@ -862,11 +866,11 @@ def _fetch_candles(symbol, tf, days):
             time.sleep(0.05)
         except Exception as e:
             last_exception = str(e)
-            print(f"\n[fetch] err: {e}", flush=True); break
+            print(f"\n{_ts()} [fetch] ❌ Ошибка: {e}", flush=True); break
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    print(f"\n[fetch] Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
+    print(f"\n{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
     # Возвращаем причину ошибки вместе с результатом через глобал (для лога оптимизатора)
     global _last_fetch_error
     _last_fetch_error = last_http_error or last_exception or None
@@ -2069,7 +2073,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     except Exception as e:
         _log(f"⚠ Сохранение не удалось: {save_dir} → {e}", "warn")
         _log(f"  Проверенные папки: {', '.join(tried)}", "warn")
-        print(f"[auto_save] Ошибка записи: {e}", flush=True)
+        print(f"{_ts()} [save] ❌ Ошибка записи в {save_dir}: {e}", flush=True)
         if tmp_path:
             try: os.remove(tmp_path)
             except Exception: pass
@@ -2083,9 +2087,9 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 continue  # это наш новый файл — не трогаем
             try:
                 os.remove(old_f)
-                print(f"[auto_save] Удалён старый: {old_f}", flush=True)
+                print(f"{_ts()} [save] 🗑 Удалён старый файл: {old_f}", flush=True)
             except Exception as e:
-                print(f"[auto_save] Не удалось удалить {old_f}: {e}", flush=True)
+                print(f"{_ts()} [save] ⚠ Не удалось удалить {old_f}: {e}", flush=True)
 
     # Обновляем MediaStore на Android чтобы файл появился в файловых менеджерах
     try:
@@ -2099,7 +2103,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     else:
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"💾 Сохранено: {fpath}", "level": "found"})
-    print(f"[auto_save] Сохранён: {fpath}", flush=True)
+    print(f"{_ts()} [save] ✅ Сохранён: {fpath}", flush=True)
     return fpath
 
 def run_optimizer(params):
@@ -2149,10 +2153,10 @@ def run_optimizer(params):
 
     t0 = time.time()
 
-    olog(f"   {symbol} | {tf} | {days}д | риск {risk_pct:.0f}%")
+    olog(f"🚀 Старт · {symbol} · {tf} · {days}д · риск {risk_pct:.0f}%")
 
     # Загрузка свечей
-    olog(f"📡 Загрузка свечей...")
+    olog(f"📡 Загрузка свечей {symbol} {tf} за {days}д...")
     candles = _fetch_candles(symbol, tf, days)
     if len(candles) < 30:
         reason = _last_fetch_error or "нет данных от биржи"
@@ -2225,7 +2229,7 @@ def run_optimizer(params):
             olog(f"🔍 Авто-загрузка: {auto_path}", "ok")
             olog(f"   ${auto_data['best'].get('equity',0):.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
         else:
-            olog(f"📭 Конфиг не найден — начинаю с нуля", "info")
+            olog(f"📭 Конфиг не найден для {symbol} {tf} {days}д r{int(round(risk_pct))} — прогон с нуля", "info")
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
@@ -2663,7 +2667,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             if len(logs) > 400:
                 s["logs"] = logs[-200:]
 
-    print(f"[par] {sym}: воркер запущен ({n_workers} воркеров)", flush=True)
+    print(f"{_ts()} [par] {sym}: воркер запущен ({n_workers} воркеров)", flush=True)
     _slog(f"⚙ Параллельный режим · {n_workers} {'процессов' if _POOL_TYPE=='proc' else 'потоков'} · {tf} · {days}д", "info")
 
     # Загружаем свечи
@@ -4030,7 +4034,7 @@ function poll(){
 
     const logs=d.logs||[];
     if(logs.length>lastLogCount){
-      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level);
+      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level,logs[i].ts);
       lastLogCount=logs.length;
     }
     const _atb=d.all_time_best||d.best;
@@ -4065,10 +4069,10 @@ function _resetLog(){
   lastLogCount=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
 
-function addLogLine(msg,level){
+function addLogLine(msg,level,ts){
   const el=document.createElement('div');
   el.className='log-line '+(level||'info');
-  el.textContent=msg;
+  el.textContent=(ts?ts+' ':'')+msg;
   const wfLog=document.getElementById('wfLog');
   wfLog.insertBefore(el,wfLog.firstChild);
 }
@@ -4102,12 +4106,12 @@ function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
     (elapsed?`<div class="cc-m">${elapsed}с</div>`:'')+
     `<div class="cc-bar ${isPos?'':'neg'}" style="width:100%"></div>`;
 }
-function logLine(msg,level){
+function logLine(msg,level,ts){
   if(!msg||!msg.trim()) return;
   // В мультирежиме цикловые карточки не нужны — используем sym-cards
   const isMulti=_symList.length>1;
   if(/WickFill Optimizer|загрузка свечей|загружено \d+|ThreadPool|ProcessPool|Сохранено|Авто-сохранение/i.test(msg)){
-    addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info');return;
+    addLogLine(msg.replace(/^[📡🔄⟳✅⏹\s]+/,''),level||'info',ts);return;
   }
   const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
   if(cycleM){_startBuf=null;if(!isMulti)_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
@@ -4136,8 +4140,8 @@ function logLine(msg,level){
     }
     _startBuf=null;return;
   }
-  if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn');return;}
-  if(level==='error') addLogLine(msg,'error');
+  if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn',ts);return;}
+  if(level==='error') addLogLine(msg,'error',ts);
 }
 
 function renderBest(b){
@@ -4675,37 +4679,8 @@ class Handler(BaseHTTPRequestHandler):
             qs=parse_qs(parsed.query)
             symbol=qs.get("symbol",["BTC_USDT"])[0]; tf=qs.get("tf",["1h"])[0]
             days=int(qs.get("days",["3"])[0]); risk_pct=float(qs.get("risk",["20"])[0])
-            # Сначала ищем по новому формату (с days+risk+equity)
+            # Ищем ТОЛЬКО точное совпадение по (symbol, tf, days, risk) — никакого fallback на похожие конфиги
             fpath, data = _find_auto_config(symbol, tf, days, risk_pct)
-            # Если не нашли — ищем любой файл по паре+tf без учёта days/risk
-            if not data:
-                import glob as _glob
-                sym2 = symbol.replace("_","").replace("/","").lower()
-                pat2 = f"wickfill_{sym2}_{tf}_*.json"
-                search_dirs = _AUTO_DIRS + [os.path.dirname(os.path.abspath(__file__))]
-                best_eq2 = -1
-                for d in search_dirs:
-                    if not os.path.isdir(d): continue
-                    for fp in _glob.glob(os.path.join(d, pat2)):
-                        try:
-                            with open(fp,"r",encoding="utf-8") as f2: d2=json.load(f2)
-                            if not (d2.get("best") and d2["best"].get("params")): continue
-                            if d2.get("days") and d2.get("days") != days: continue
-                            eq2=d2["best"].get("equity",0)
-                            if eq2>best_eq2: best_eq2=eq2; fpath=fp; data=d2
-                        except Exception: pass
-                # Также проверяем старый формат имени
-                if not data:
-                    old_fname=f"wickfill_{symbol.replace('/','_')}_{tf}.json"
-                    for d in search_dirs:
-                        candidate=os.path.join(d,old_fname)
-                        if os.path.exists(candidate):
-                            try:
-                                with open(candidate,"r",encoding="utf-8") as f2: data=json.load(f2)
-                                if data.get("days") and data.get("days") != days:
-                                    data = None; continue
-                                fpath=candidate; break
-                            except Exception: pass
             if not data:
                 self._json({"ok":False,"msg":f"Конфиг не найден для {symbol} {tf}. Проверенные папки: {[d for d in _AUTO_DIRS if os.path.isdir(d)]}"}); return
             try:
@@ -4792,7 +4767,7 @@ class Handler(BaseHTTPRequestHandler):
             try: params=json.loads(body)
             except: self._json({"ok":False,"msg":"bad JSON"}); return
             global _opt_thread, _multi_symbols, _active_chart_symbol, _sw_threads, _sw_state
-            print(f"[SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
+            print(f"{_ts()} [SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
             if _opt_thread and _opt_thread.is_alive():
                 self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
             # Останавливаем старые SW-треды
