@@ -1347,11 +1347,9 @@ function render(){{
       const ly=isLong?py(c_sig.l)+arrowOff+arrowSz+16:py(c_sig.h)-arrowOff-arrowSz-16;
       ctx.font=`bold ${{Math.max(9,Math.min(11,cw*1.5))}}px system-ui`;ctx.textAlign='center';
       const tw=ctx.measureText(lbl).width;
-      if(_labelFits(lx, tw)){{
-        ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
-        ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
-        ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
-      }}
+      ctx.fillStyle=pct>=0?'rgba(58,125,82,0.9)':'rgba(160,48,48,0.9)';
+      ctx.beginPath();ctx.roundRect(lx-tw/2-3,ly-11,tw+6,14,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText(lbl,lx,ly);
     }}
   }}
   ctx.fillStyle=clrTimeText;ctx.font='10px system-ui';ctx.textAlign='center';
