@@ -4205,7 +4205,7 @@ function renderValid(v, best, windows, minDays, days){
       <div style="font-size:.6rem;color:var(--text3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">История по периодам  ← старое · свежее →</div>
       <div style="display:flex;align-items:flex-end;gap:4px;height:28px">`;
     // окна идут от старого (#5) к свежему (#1) — разворачиваем
-    const sorted=[...windows].reverse();
+    const sorted=[...windows];  // wi=0 — свежее, wi=N — старое; показываем старое→свежее слева→направо
     for(const w of sorted){
       const h=Math.max(4,Math.round((w.winrate/Math.max(maxWr,1))*24));
       const c=w.ok?'var(--green)':'var(--red)';
