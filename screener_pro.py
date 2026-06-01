@@ -3526,8 +3526,9 @@ details summary::-webkit-details-marker{display:none}
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
     <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
-    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Обновить</button>
-    <button class="icon-btn" onclick="renameDownload()">✏ Fix</button>
+    <button class="icon-btn" id="updateBtn" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
+    <button class="icon-btn" onclick="renameDownload()">✏ Rename</button>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
   </div>
 </header>
 
@@ -3598,9 +3599,7 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" onclick="listConfigs()">
         🗂 Конфиги
       </button>
-      <button class="btn-ghost" id="updateBtn" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">
-        ⬇️ Обновить
-      </button>
+
     </div>
 
     <!-- Best result (desktop) -->
@@ -3950,11 +3949,11 @@ function updateScript(){
         addLogLine('❌ Ошибка обновления: '+d.msg,'error');
         btn.textContent='❌ Ошибка';
       }
-      setTimeout(()=>{btn.disabled=false;btn.textContent='⬇️ Обновить';},3000);
+      setTimeout(()=>{btn.disabled=false;btn.textContent='⬇ Download';},3000);
     })
     .catch(e=>{
       addLogLine('❌ Ошибка: '+e,'error');
-      btn.disabled=false; btn.textContent='⬇️ Обновить';
+      btn.disabled=false; btn.textContent='⬇ Download';
     });
 }
 
@@ -4492,23 +4491,18 @@ class Handler(BaseHTTPRequestHandler):
                       f"candles={len(sym_state.get('chart_candles') or [])} "
                       f"best={bool(sym_state.get('best'))}", flush=True)
 
-                if not is_active and sym_state:
-                    # Неактивный символ — берём из снапшота opt_states
-                    if sym_state.get("chart_candles"):
-                        # Есть готовые свечи из снапшота
-                        chart_candles = list(sym_state["chart_candles"])
-                        chart_signals = list(sym_state.get("chart_signals") or [])
-                        chart_symbol  = sym_state.get("symbol", req_sym)
-                        chart_tf      = sym_state.get("chart_tf", "")
-                        chart_best    = sym_state.get("best")
-                        chart_path    = sym_state.get("chart_path", "")
-                    elif sym_state.get("best"):
-                        # Свечей нет в снапшоте, но есть best — строим график на лету
-                        print(f"[chart] {req_sym}: строим график на лету из best+пустых свечей", flush=True)
-                        chart_best   = sym_state["best"]
-                        chart_symbol = req_sym
-                        chart_tf     = sym_state.get("chart_tf", "")
-                        # chart_candles остаётся [] — покажем "не готов"
+                # В параллельном режиме данные всегда в opt_states, независимо от активности
+                if sym_state.get("chart_candles"):
+                    chart_candles = list(sym_state["chart_candles"])
+                    chart_signals = list(sym_state.get("chart_signals") or [])
+                    chart_symbol  = sym_state.get("symbol", req_sym)
+                    chart_tf      = sym_state.get("chart_tf", "")
+                    chart_best    = sym_state.get("best")
+                    chart_path    = sym_state.get("chart_path", "")
+                elif sym_state.get("best"):
+                    chart_best   = sym_state["best"]
+                    chart_symbol = req_sym
+                    chart_tf     = sym_state.get("chart_tf", "")
 
             # Для активного символа или если sym_state пустой — берём из opt_state
             if not chart_candles:
