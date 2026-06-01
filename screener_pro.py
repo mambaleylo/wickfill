@@ -1424,23 +1424,20 @@ function fetchLiveCandle() {{
       _liveFailCount = 0;
       if (!d.ok) return;
       const last = CANDLES[CANDLES.length - 1];
-      const atEnd = (viewStart + viewLen >= CANDLES.length);
+      // Был ли пользователь у правого края ДО изменений
+      const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
       if (last && last.live) {{
-        // Обновляем существующую живую свечу
+        // Обновляем существующую живую свечу на месте
         last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
-      }} else if (!last || d.t >= last.t) {{
-        // d.t >= last.t: либо новый интервал, либо та же свеча но live-версия
-        // Убираем последнюю если это уже live (не должно быть, но на всякий случай)
-        if (last && last.live) CANDLES.pop();
-        // Если d.t совпадает с последней закрытой свечой — заменяем её live-версией
-        if (last && !last.live && d.t === last.t) {{
-          CANDLES.pop();
-        }}
+      }} else {{
+        // Добавляем live-свечу: если t совпадает с последней закрытой — заменяем её
+        if (last && !last.live && d.t === last.t) CANDLES.pop();
         CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
-        // Подтягиваем viewport к правому краю
-        if (atEnd || CANDLES.length - 1 >= viewStart + viewLen) {{
-          viewStart = Math.max(0, CANDLES.length - viewLen);
-        }}
+      }}
+      // Подтягиваем viewport только если пользователь был у правого края
+      // или live-свеча вышла за пределы видимой области
+      if (wasAtEnd || CANDLES.length - 1 >= viewStart + viewLen) {{
+        viewStart = Math.max(0, CANDLES.length - viewLen);
       }}
       // Badge
       const badge = document.getElementById('liveBadge');
