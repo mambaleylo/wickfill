@@ -161,7 +161,7 @@ alert_state = {
 alert_lock = threading.Lock()
 
 # Кеш текущей незакрытой свечи — обновляется фоновым потоком
-_live_candle_cache = {}   # {"symbol_tf": {t,o,h,l,c}}
+_live_candle_cache = {}   # {"symbol_tf": {t,o,h,l,c,_fetched_at}}
 _live_candle_lock  = threading.Lock()
 
 def _live_candle_updater():
@@ -216,7 +216,7 @@ def _live_candle_updater():
                 if c:
                     key = f"{symbol}_{tf}"
                     with _live_candle_lock:
-                        _live_candle_cache[key] = c
+                        _live_candle_cache[key] = dict(c, _fetched_at=time.time())
                     with opt_lock:
                         cc2 = list(opt_state.get("chart_candles", []))
                         if cc2:
@@ -1400,37 +1400,50 @@ wrap.addEventListener('mousemove',e=>{{
 }});
 wrap.addEventListener('mouseleave',()=>tip.style.display='none');
 window.addEventListener('resize',render);
-// ── Live candle: обновляем незакрытую свечу каждые 5 секунд ──
+// ── Live candle: обновляем незакрытую свечу каждые 2 секунды ──
 const LIVE_SYMBOL = '{symbol}';
 const LIVE_TF     = '{tf}';
+let _liveFailCount = 0;
+let _liveTimer = null;
 
 function fetchLiveCandle() {{
-  fetch('/live_candle?symbol=' + encodeURIComponent(LIVE_SYMBOL) + '&tf=' + encodeURIComponent(LIVE_TF))
+  // Отменяем предыдущий таймер и ставим новый — защита от накопления
+  if (_liveTimer) clearTimeout(_liveTimer);
+  _liveTimer = setTimeout(fetchLiveCandle, 2000);
+
+  const url = '/live_candle?symbol=' + encodeURIComponent(LIVE_SYMBOL) + '&tf=' + encodeURIComponent(LIVE_TF) + '&_=' + Date.now();
+  fetch(url)
     .then(r => r.json())
     .then(d => {{
+      _liveFailCount = 0;
       if (!d.ok) return;
       const last = CANDLES[CANDLES.length - 1];
-      const atEnd = (viewStart + viewLen >= CANDLES.length); // был ли вид у правого края
+      const atEnd = (viewStart + viewLen >= CANDLES.length);
       if (last && last.live) {{
         // Обновляем существующую живую свечу
         last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c; last.t = d.t;
       }} else if (!last || d.t > last.t) {{
-        // Удаляем старую live-свечу если есть, добавляем новую
+        // Новый интервал — добавляем свечу
         if (last && last.live) CANDLES.pop();
         CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
-        // Если были у правого края — двигаем вид вправо
         if (atEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
       }}
       // Badge
       const badge = document.getElementById('liveBadge');
-      if (badge) badge.textContent = '⬤ LIVE  ' + d.c.toPrecision(7);
+      if (badge) {{
+        const stale = d.age !== undefined && d.age > 10;
+        badge.style.color = stale ? '#e09030' : '';
+        badge.textContent = (stale ? '⚠ ' : '⬤ ') + 'LIVE  ' + d.c.toPrecision(7);
+      }}
       render();
-    }}).catch(e => console.error('[live_candle]', e));
+    }}).catch(e => {{
+      _liveFailCount++;
+      console.warn('[live_candle] err #' + _liveFailCount, e);
+    }});
 }}
 
-// Каждые 3 секунды
+// Старт
 fetchLiveCandle();
-setInterval(fetchLiveCandle, 3000);
 
 // Полный перезапрос страницы раз в 5 минут
 setTimeout(() => location.reload(), 300000);
@@ -4591,11 +4604,20 @@ class Handler(BaseHTTPRequestHandler):
             key = f"{symbol}_{tf}"
             with _live_candle_lock:
                 c = _live_candle_cache.get(key)
-            if c:
+            # Если кеш устарел (>15 сек) — запрашиваем напрямую, не ждём фоновый поток
+            age = time.time() - c.get("_fetched_at", 0) if c else 999
+            if not c or age > 15:
+                fresh_c = _fetch_current_candle(symbol, tf)
+                if fresh_c:
+                    c = dict(fresh_c, _fetched_at=time.time())
+                    with _live_candle_lock:
+                        _live_candle_cache[key] = c
+            if c and "open" in c:
                 self._json({"ok": True, "t": c["t"], "o": c["open"],
-                            "h": c["high"], "l": c["low"], "c": c["close"]})
+                            "h": c["high"], "l": c["low"], "c": c["close"],
+                            "age": round(time.time() - c.get("_fetched_at", time.time()))})
             else:
-                self._json({"ok": False, "msg": "нет данных в кеше"})
+                self._json({"ok": False, "msg": "нет данных"})
         elif parsed.path == "/live_price":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
