@@ -2262,9 +2262,9 @@ def run_optimizer(params):
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
     _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
     # Автоперезагрузка свечей: каждые 4 интервала TF
-    _reload_interval_sec = TF_SECONDS.get(tf, 3600) * 4
+    _reload_interval_sec = TF_SECONDS.get(tf, 3600) * 2
     _last_candle_reload  = time.time()
-    olog(f"🔄 Автообновление свечей каждые {_reload_interval_sec//60} мин ({4} × {tf})", "info")
+    olog(f"🔄 Автообновление свечей каждые {_reload_interval_sec//60} мин ({2} × {tf})", "info")
     # Сразу заполняем из seed если он есть
     if seed and seed.get("best") and seed["best"].get("params"):
         _s = dict(seed["best"])
@@ -2344,7 +2344,7 @@ def run_optimizer(params):
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
                 olog(f"═══ ЦИКЛ #{cycle} — ПРОДОЛЖЕНИЕ (лучшее за всё время: ${prev_eq:.2f}) ═══", "ok")
 
-        # Между циклами — автоперезагрузка свечей каждые 4 интервала TF
+        # Между циклами — автоперезагрузка свечей каждые 2 интервала TF
         if cycle > 1 and infinite and (time.time() - _last_candle_reload) >= _reload_interval_sec:
             olog(f"🔄 Перезагрузка свечей (прошло {int((time.time()-_last_candle_reload)//60)} мин)...", "info")
             try:
