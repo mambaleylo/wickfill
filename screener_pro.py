@@ -3598,6 +3598,9 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" onclick="listConfigs()">
         🗂 Конфиги
       </button>
+      <button class="btn-ghost" id="updateBtn" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">
+        ⬇️ Обновить
+      </button>
     </div>
 
     <!-- Best result (desktop) -->
@@ -3932,6 +3935,27 @@ function listConfigs(){
       });
     })
     .catch(e=>addLogLine('⚠ Ошибка загрузки конфигов: '+e,'warn'));
+}
+
+function updateScript(){
+  const btn=document.getElementById('updateBtn');
+  btn.disabled=true; btn.textContent='⏳ Загрузка...';
+  fetch('/update_script',{method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.ok){
+        addLogLine('✅ Скрипт обновлён: '+d.path+' ('+d.size_kb+' KB)','ok');
+        btn.textContent='✅ Готово';
+      } else {
+        addLogLine('❌ Ошибка обновления: '+d.msg,'error');
+        btn.textContent='❌ Ошибка';
+      }
+      setTimeout(()=>{btn.disabled=false;btn.textContent='⬇️ Обновить';},3000);
+    })
+    .catch(e=>{
+      addLogLine('❌ Ошибка: '+e,'error');
+      btn.disabled=false; btn.textContent='⬇️ Обновить';
+    });
 }
 
 /* ── Poll ── */
@@ -4741,6 +4765,33 @@ class Handler(BaseHTTPRequestHandler):
             ok = _send_telegram(cfg, "✅ WickFill — тест алерта работает!")
             if ok: self._json({"ok":True})
             else: self._json({"ok":False,"msg":opt_state.get("error","Ошибка Telegram")})
+            return
+
+        if parsed.path == "/update_script":
+            try:
+                import urllib.request as _ur
+                _raw_url = "https://raw.githubusercontent.com/mambaleylo/wickfill/main/screener_pro.py"
+                _headers = {"Authorization": "token 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",
+                            "User-Agent": "WickFill-updater"}
+                _req = _ur.Request(_raw_url, headers=_headers)
+                with _ur.urlopen(_req, timeout=30) as _resp:
+                    _data = _resp.read()
+                _save_dirs = ["/sdcard/Download", os.path.expanduser("~/storage/downloads")]
+                _saved_path = None
+                for _d in _save_dirs:
+                    if os.path.isdir(_d):
+                        _out = os.path.join(_d, "screener_pro.py")
+                        with open(_out, "wb") as _f:
+                            _f.write(_data)
+                        _saved_path = _out
+                        break
+                if _saved_path:
+                    _kb = round(len(_data) / 1024, 1)
+                    self._json({"ok": True, "path": _saved_path, "size_kb": _kb})
+                else:
+                    self._json({"ok": False, "msg": "Папка Download не найдена. Выполните termux-setup-storage"})
+            except Exception as _e:
+                self._json({"ok": False, "msg": str(_e)})
             return
 
         if parsed.path == "/scan":
