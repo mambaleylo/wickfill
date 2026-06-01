@@ -1474,8 +1474,26 @@ function fetchLiveCandle() {{
 // Старт
 fetchLiveCandle();
 
-// Полный перезапрос страницы раз в 5 минут
-setTimeout(() => location.reload(), 300000);
+// Полный перезапрос страницы раз в 5 минут — только если пользователь у правого края
+setTimeout(() => {{ if (viewStart + viewLen >= CANDLES.length - 2) location.reload(); }}, 300000);
+
+// postMessage — обновляем CANDLES/SIGNALS без перезагрузки страницы
+window.addEventListener('message', e => {{
+  if (!e.data || e.data.type !== 'chart_update') return;
+  const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
+  const oldLen = CANDLES.length;
+  // Обновляем данные на месте
+  CANDLES.length = 0; e.data.candles.forEach(c => CANDLES.push(c));
+  SIGNALS.length = 0; e.data.signals.forEach(s => SIGNALS.push(s));
+  // Сдвигаем viewStart если были у правого края — иначе не трогаем
+  const added = CANDLES.length - oldLen;
+  if (wasAtEnd) {{
+    viewStart = Math.max(0, CANDLES.length - viewLen);
+  }} else if (added > 0) {{
+    // Пользователь скролил влево — не двигаем позицию
+  }}
+  render();
+}});
 
 render();
 </script></body></html>"""
@@ -4030,9 +4048,25 @@ function _loadChartFrame(){
   const ph=document.getElementById('chartPlaceholder');
   if(!frame) return;
   const theme=document.documentElement.getAttribute('data-theme')||'light';
-  frame.src='/chart?t='+Date.now()+'&theme='+theme;
-  frame.style.display='block';
-  if(ph) ph.style.display='none';
+  // Первая загрузка — грузим src; последующие — шлём данные через postMessage
+  if(frame.src==='about:blank'||frame.src===''){
+    frame.src='/chart?t='+Date.now()+'&theme='+theme;
+    frame.style.display='block';
+    if(ph) ph.style.display='none';
+  } else {
+    // Грузим свежие данные и шлём в iframe без перезагрузки
+    fetch('/chart_data')
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.candles&&d.signals&&frame.contentWindow){
+          frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals},'*');
+        }
+      })
+      .catch(()=>{
+        // Fallback: перезагружаем если postMessage не сработал
+        frame.src='/chart?t='+Date.now()+'&theme='+theme;
+      });
+  }
 }
 function openChart(){window.open('/chart','_blank');}
 function listConfigs(){
@@ -4670,6 +4704,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
             except Exception as e: self.send_response(500);self.end_headers();self.wfile.write(str(e).encode())
+        elif parsed.path == "/chart_data":
+            qs = parse_qs(parsed.query)
+            req_sym = qs.get("symbol",[""])[0].upper()
+            with opt_lock:
+                cc = list(opt_state.get("chart_candles", []))
+                cs = list(opt_state.get("chart_signals", []))
+            self._json({"ok": True, "candles": cc, "signals": cs})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
