@@ -1191,6 +1191,7 @@ canvas{{display:block;width:100%;height:100%}}
       <span class="live-badge" id="liveBadge">⬤ LIVE</span>
       <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
       <span>{len(candles)} св. · {trades} сд.</span>
+      <span style="color:#7a6e68">{__import__('datetime').datetime.utcfromtimestamp(candles[0]['t']).strftime('%d.%m %H:%M')} — {__import__('datetime').datetime.utcfromtimestamp(candles[-1]['t']).strftime('%d.%m %H:%M')}</span>
     </div>
   </div>
 </div>
