@@ -2261,6 +2261,10 @@ def run_optimizer(params):
     prev_top20       = []     # накопленный top20 всех циклов
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
     _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
+    # Автоперезагрузка свечей: каждые 4 интервала TF
+    _reload_interval_sec = TF_SECONDS.get(tf, 3600) * 4
+    _last_candle_reload  = time.time()
+    olog(f"🔄 Автообновление свечей каждые {_reload_interval_sec//60} мин ({4} × {tf})", "info")
     # Сразу заполняем из seed если он есть
     if seed and seed.get("best") and seed["best"].get("params"):
         _s = dict(seed["best"])
@@ -2339,6 +2343,26 @@ def run_optimizer(params):
             else:
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
                 olog(f"═══ ЦИКЛ #{cycle} — ПРОДОЛЖЕНИЕ (лучшее за всё время: ${prev_eq:.2f}) ═══", "ok")
+
+        # Между циклами — автоперезагрузка свечей каждые 4 интервала TF
+        if cycle > 1 and infinite and (time.time() - _last_candle_reload) >= _reload_interval_sec:
+            olog(f"🔄 Перезагрузка свечей (прошло {int((time.time()-_last_candle_reload)//60)} мин)...", "info")
+            try:
+                fresh_reload = _fetch_candles(symbol, tf, days)
+                if n_candles > 0 and n_candles < len(fresh_reload):
+                    fresh_reload = fresh_reload[-n_candles:]
+                if len(fresh_reload) >= 30:
+                    with opt_lock:
+                        _sw_candles = list(fresh_reload)
+                    if len(_multi_symbols) > 1 and symbol in _sw_state:
+                        with _sw_state_lock:
+                            _sw_state[symbol]["candles"] = list(fresh_reload)
+                    olog(f"✅ Свечи обновлены: {len(fresh_reload)} ({fresh_reload[-1]['t'] and __import__('datetime').datetime.utcfromtimestamp(fresh_reload[-1]['t']).strftime('%d.%m %H:%M') or '?'} UTC)", "ok")
+                else:
+                    olog(f"⚠ Перезагрузка не удалась — мало свечей ({len(fresh_reload)}), используем старые", "warn")
+            except Exception as _re:
+                olog(f"⚠ Ошибка перезагрузки свечей: {_re}", "warn")
+            _last_candle_reload = time.time()
 
         # Между циклами — проверяем появление новой свечи и бесшовно сдвигаем окно
         if cycle > 1:
