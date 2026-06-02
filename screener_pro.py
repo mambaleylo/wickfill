@@ -3848,8 +3848,8 @@ details summary::-webkit-details-marker{display:none}
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
-            <option value="5m">5m</option>
-            <option value="15m" selected>15m</option>
+            <option value="5m" selected>5m</option>
+            <option value="15m">15m</option>
             <option value="30m">30m</option>
             <option value="1h">1h</option>
             <option value="4h">4h</option>
@@ -3858,7 +3858,7 @@ details summary::-webkit-details-marker{display:none}
         </div>
         <div class="field-inset">
           <label>История (дни)</label>
-          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" style="width:100%">
+          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" value="3" style="width:100%">
         </div>
       </div>
       <input type="hidden" id="wf_risk" value="10">
@@ -4149,7 +4149,7 @@ function gateTestTrade(dir){
   const dirStr=dir===1?'лонг':'шорт';
   st.className='alert-msg';st.textContent=`⏳ Открываю тест ${dirStr}...`;
   fetch('/gate_test_trade',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({gate_key:gk,gate_secret:gs,symbol:sym,dir:dir})})
+    body:JSON.stringify({gate_key:gk,gate_secret:gs,symbol:sym,dir:dir,margin:5,leverage:5})})
     .then(r=>r.json()).then(d=>{
       if(d.ok){st.className='alert-msg ok';st.textContent='✓ '+d.msg;}
       else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
@@ -5232,7 +5232,7 @@ class Handler(BaseHTTPRequestHandler):
                 price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}",timeout=5).json()
                 price = float(price_r[0]["last"]) if price_r else None
                 if not price: self._json({"ok":False,"msg":"Не удалось получить цену"}); return
-                margin=5.0; leverage=5; notional=margin*leverage
+                margin=float(params.get("margin",5.0)); leverage=int(params.get("leverage",5)); notional=margin*leverage
                 size=max(1,round(notional/price))
                 tp=round(price*(1+(0.5/100)) if direction==1 else price*(1-(0.5/100)),6)
                 sl=round(price*(1-(0.3/100)) if direction==1 else price*(1+(0.3/100)),6)
