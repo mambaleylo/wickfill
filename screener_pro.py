@@ -135,6 +135,7 @@ FILTER_GROUPS = {
 opt_state = {
     "running": False, "done": False, "infinite": False,
     "cycle": 0,       # номер цикла бесконечного режима
+    "cycle_step": 0, "cycle_total": 0,  # прогресс внутри цикла (стартов + BH итераций)
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
     "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
     "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None,
@@ -2076,6 +2077,10 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         olog(f"━━ ФАЗА 1: {n_restarts} стартов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
 
     local_bests = []
+    BH_MAX = 12; BH_PATIENCE = 4
+    with opt_lock:
+        opt_state["cycle_step"] = 0
+        opt_state["cycle_total"] = len(start_points) + BH_MAX
     for i, start_ind in enumerate(start_points):
         if stop_flag(): break
         label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
@@ -2093,6 +2098,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         with opt_lock:
             opt_state["top20"] = top20_global
             opt_state["elapsed"] = round(time.time()-t0, 1)
+            opt_state["cycle_step"] = i + 1
             # best и all_time_best НЕ трогаем здесь — они обновляются только в конце цикла
 
     if stop_flag(): return None, None, top20_global
@@ -2102,7 +2108,6 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
 
     # Фаза 2: Basin Hopping от лучшей точки
     # OPT: early-stop после 4 итераций подряд без улучшения (экономит ~60% времени BH)
-    BH_MAX = 12; BH_PATIENCE = 4
     olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}) ━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
     bh_no_improve = 0  # OPT: счётчик подряд идущих неудач
@@ -2146,6 +2151,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 # best и all_time_best НЕ трогаем здесь — только в конце цикла
         else:
             bh_no_improve += 1  # OPT: увеличиваем счётчик неудач
+        with opt_lock:
+            opt_state["cycle_step"] = len(start_points) + bh_i + 1
 
     finally:
         pass  # пул управляется снаружи (run_optimizer), не закрываем здесь
@@ -4405,10 +4412,24 @@ function poll(){
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
     document.getElementById('progTime').textContent=elapsed+'с';
-    const pct=d.total>0?Math.round(d.progress/d.total*100):0;
+    // Полоска = прогресс цикла (стартов + BH итераций), не отдельного круга
+    const cycStep=d.cycle_step||0, cycTotal=d.cycle_total||0;
+    const pct=cycTotal>0?Math.round(cycStep/cycTotal*100):0;
     document.getElementById('progBar').style.width=pct+'%';
     const cycleStr=d.infinite?` · Цикл #${d.cycle}`:'';
-    document.getElementById('progLabel').textContent=`Круг #${d.pass_num} · ${pct}%${cycleStr}`;
+    // Лейбл: фаза (Старт / BH) + N/total + % + цикл
+    const n_starts=d.generation||0;
+    const bh_total=cycTotal>0?cycTotal-n_starts:0; // BH_MAX = cycle_total - n_restarts
+    let phaseLabel='';
+    if(cycTotal===0||cycStep===0){
+      phaseLabel='Запуск...';
+    } else if(cycStep<=n_starts){
+      phaseLabel=`Старт ${cycStep}/${n_starts}`;
+    } else {
+      const bhDone=cycStep-n_starts;
+      phaseLabel=`Basin Hopping ${bhDone}/${bh_total}`;
+    }
+    document.getElementById('progLabel').textContent=`${phaseLabel} · ${pct}%${cycleStr}`;
     if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
 
     // SW status
@@ -4798,6 +4819,8 @@ class Handler(BaseHTTPRequestHandler):
                     "total":          opt_state["total"],
                     "generation":     opt_state["generation"],
                     "pass_num":       opt_state.get("pass_num",0),
+                    "cycle_step":     opt_state.get("cycle_step",0),
+                    "cycle_total":    opt_state.get("cycle_total",0),
                     "current_param":  opt_state.get("current_param",""),
                     "best":           opt_state.get("all_time_best") or opt_state["best"],
                     "all_time_best":   opt_state.get("all_time_best"),
