@@ -2079,7 +2079,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     for i, start_ind in enumerate(start_points):
         if stop_flag(): break
         label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
-        olog(f"── {label} ──", "ok")
+        olog(f"── {label} ──", "activity")  # только для строки активности, не в лог
         with opt_lock: opt_state["generation"]=i+1
         _plog("phase1_start", start=i+1, label=label)
         _st0 = time.time()
@@ -3833,7 +3833,7 @@ details summary::-webkit-details-marker{display:none}
         <label>Символы (через запятую)</label>
         <input type="text" id="wf_symbol" value="BTC" placeholder="BTC, ETH, SOL" style="width:100%">
       </div>
-      <div class="field-row" style="margin-bottom:6px">
+      <div class="field-row" style="margin-bottom:0">
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
@@ -3845,17 +3845,12 @@ details summary::-webkit-details-marker{display:none}
             <option value="1d">1d</option>
           </select>
         </div>
-      </div>
-      <div class="field-row" style="margin-bottom:0">
         <div class="field-inset">
           <label>История (дни)</label>
           <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" style="width:100%">
         </div>
-        <div class="field-inset">
-          <label>Риск %</label>
-          <input type="number" id="wf_risk" min="1" max="100" value="10" step="1" style="width:100%">
-        </div>
       </div>
+      <input type="hidden" id="wf_risk" value="10">
     </div>
 
     <!-- Бесконечный режим всегда включён -->
@@ -4202,7 +4197,7 @@ function _renderSymCards(){
     // Detail lines — always 3 lines for equal card height
     const line1=hasCycle?`WR ${wr.toFixed(0)}% · ${tr}сд${dd>0?' · DD '+dd.toFixed(0)+'%':''}`:'WR — · —сд';
     const line2=sl&&tp?`SL ${sl}% · TP ${tp}%`:'SL — · TP —';
-    const line3=sl&&tp?`Плечо <b style="color:${levColor}">${levStr}</b> · PF ${pf>=999?'∞':pf.toFixed(1)}`:'Плечо — · PF —';
+    const line3=sl&&tp?`Риск <b>10%</b> · Плечо <b style="color:${levColor}">${levStr}</b> · PF ${pf>=999?'∞':pf.toFixed(1)}`:'Риск 10% · Плечо — · PF —';
     const cycleStr=running?`<span style="color:var(--green);font-size:.55rem">⟳ Цикл ${s.cycle||'?'}</span>`:(hasCycle?`<span style="font-size:.55rem;color:var(--text3)">Цикл ${s.cycle}</span>`:'<span style="font-size:.55rem;color:var(--text3)">ожидание</span>');
     html+=`<div class="${cls}" onclick="switchChart('${sym}')" title="${sym}" style="min-width:120px;max-width:155px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
@@ -4529,7 +4524,8 @@ function logLine(msg,level,ts){
   const cycleM=msg.match(/═+\s*ЦИКЛ\s*#(\d+)/i);
   if(cycleM){_startBuf=null;if(!isMulti)_cycleCard(parseInt(cycleM[1]),100,0,0,null,false,0,false);_setActivity('Цикл '+cycleM[1]+' — оптимизация...');return;}
   const startM=msg.match(/──\s*(Старт\s*#(\d+)[^─]*?)\s*──/);
-  if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}
+  if(startM){_setActivity(startM[1].trim()+' — перебор...');return;}  // не в лог
+  if(level==='activity') return;  // служебные строки активности — не в лог
   const passM=msg.match(/Круг\s*#(\d+)\s*\|\s*Депозит:\s*\$([\d.]+)/);
   if(passM){_setActivity('Круг #'+passM[1]+' · $'+passM[2]);return;}
   const foundM=msg.match(/✅\s*.+?→\s*\$([\d.]+)\s*\(\+?([-\d.]+)\$\)\s*\|\s*WR\s*([\d.]+)%\s*\|\s*Сд\s*(\d+)\s*\|\s*DD\s*([\d.]+)%/);
