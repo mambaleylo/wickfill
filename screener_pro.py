@@ -1594,22 +1594,26 @@ function fetchLiveCandle() {{
       const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
       if (last && last.live) {{
         if (d.t === last.t) {{
-          // Та же свеча — просто обновляем OHLC
+          // Та же свеча — просто обновляем OHLC, viewport не трогаем
           last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c;
         }} else if (d.t > last.t) {{
-          // Новый интервал: «закрываем» старую live (убираем флаг, она остаётся как закрытая свеча)
+          // Новый интервал: закрываем старую live, добавляем новую.
+          // viewStart сдвигаем ровно на 1 — чтобы viewLen остался постоянным и не было разрыва.
           delete last.live;
           CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+          if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }} else {{
-        // Добавляем live-свечу: если t совпадает с последней закрытой — заменяем её
-        if (last && !last.live && d.t === last.t) CANDLES.pop();
-        CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
-      }}
-      // Подтягиваем viewport только если пользователь был у правого края
-      // или live-свеча вышла за пределы видимой области
-      if (wasAtEnd || CANDLES.length - 1 >= viewStart + viewLen) {{
-        viewStart = Math.max(0, CANDLES.length - viewLen);
+        // Первое появление live-свечи: если t совпадает с последней закрытой — заменяем (без роста длины)
+        if (last && !last.live && d.t === last.t) {{
+          CANDLES.pop();
+          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+          // длина не изменилась — viewport не трогаем
+        }} else {{
+          // t больше — новая live-свеча сверх закрытых
+          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+          if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
+        }}
       }}
       // Badge
       const badge = document.getElementById('liveBadge');
@@ -1637,15 +1641,22 @@ window.addEventListener('message', e => {{
   if (!e.data || e.data.type !== 'chart_update') return;
   const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
   const oldLen = CANDLES.length;
-  // Обновляем данные на месте
+  // Сохраняем текущую live-свечу чтобы не было моргания при замене массива
+  const prevLive = CANDLES.length > 0 && CANDLES[CANDLES.length-1].live
+    ? {{...CANDLES[CANDLES.length-1]}} : null;
   CANDLES.length = 0; e.data.candles.forEach(c => CANDLES.push(c));
   SIGNALS.length = 0; e.data.signals.forEach(s => SIGNALS.push(s));
-  // Сдвигаем viewStart если были у правого края — иначе не трогаем
-  const added = CANDLES.length - oldLen;
+  // Если последняя свеча в новых данных — закрытая, а у нас была live актуальная — добавляем обратно
+  if (prevLive && CANDLES.length > 0 && !CANDLES[CANDLES.length-1].live) {{
+    const lastT = CANDLES[CANDLES.length-1].t;
+    if (prevLive.t >= lastT) {{
+      if (prevLive.t === lastT) CANDLES.pop();
+      CANDLES.push(prevLive);
+    }}
+  }}
+  // Сдвигаем viewStart только если были у правого края; viewLen не трогаем
   if (wasAtEnd) {{
     viewStart = Math.max(0, CANDLES.length - viewLen);
-  }} else if (added > 0) {{
-    // Пользователь скролил влево — не двигаем позицию
   }}
   render();
 }});
