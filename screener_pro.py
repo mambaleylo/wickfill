@@ -4268,7 +4268,7 @@ function startOpt(){
       document.getElementById('progWrap').style.display='flex';
       const _cf=document.getElementById('chartFrame');
       const _cp=document.getElementById('chartPlaceholder');
-      if(_cf){_cf.style.display='none';_cf.src='about:blank';}
+      if(_cf){_cf.style.display='none';_cf.src='about:blank';_chartFrameLoaded=false;}
       if(_cp){_cp.style.display='flex';}
       startTs=Date.now();
       function scheduleNext(){
