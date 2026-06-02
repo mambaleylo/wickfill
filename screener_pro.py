@@ -4484,13 +4484,15 @@ function addLogLine(msg,level,ts){
   el.textContent=(ts?ts+' ':'')+msg;
   const wfLog=document.getElementById('wfLog');
   wfLog.insertBefore(el,wfLog.firstChild);
+  // Keep activity line pinned at the very top
+  const act=document.getElementById('ccActivity');
+  if(act&&act!==wfLog.firstChild) wfLog.insertBefore(act,wfLog.firstChild);
 }
 
 function _setActivity(text){
   let el=document.getElementById('ccActivity');
   if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';const wl=document.getElementById('wfLog');wl.insertBefore(el,wl.firstChild);}
   el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
-  el.scrollIntoView({block:'nearest'});
 }
 function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
