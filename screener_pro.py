@@ -4074,6 +4074,19 @@ window.addEventListener('DOMContentLoaded', function(){
     window._loadedSeed=null;
     _tryAutoLoad();
   });
+
+  // Восстанавливаем сохранённые ключи
+  const _fields = ['gate_key','gate_secret','gate_pct'];
+  _fields.forEach(id => {
+    const saved = localStorage.getItem('wf_'+id);
+    if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
+  });
+
+  // Авто-сохранение при изменении
+  _fields.forEach(id => {
+    const el=document.getElementById(id);
+    if(el) el.addEventListener('input', () => localStorage.setItem('wf_'+id, el.value));
+  });
 });
 
 function getAlertCfg(){
