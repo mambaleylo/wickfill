@@ -3945,6 +3945,10 @@ details summary::-webkit-details-marker{display:none}
           Плечо берётся из расчётного. TP/SL из сигнала.<br>
           При новом сигнале старая позиция закрывается.
         </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Тест лонг $10×10</button>
+          <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Тест шорт $10×10</button>
+        </div>
       </div>
     </details>
 
@@ -4097,6 +4101,22 @@ function testGateConnection(){
       if(d.ok){st.className='alert-msg ok';st.textContent='✓ Баланс: '+d.balance+' USDT';}
       else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
     }).catch(e=>{btn.disabled=false;btn.textContent='Тест';st.className='alert-msg err';st.textContent='✕ '+e;});
+}
+
+function gateTestTrade(dir){
+  const gk=document.getElementById('gate_key').value.trim();
+  const gs=document.getElementById('gate_secret').value.trim();
+  const sym=document.getElementById('wf_symbol').value.trim()||'BTC_USDT';
+  const st=document.getElementById('gateStatusMsg');
+  if(!gk||!gs){st.className='alert-msg err';st.textContent='Заполните Key и Secret';return;}
+  const dirStr=dir===1?'лонг':'шорт';
+  st.className='alert-msg';st.textContent=`⏳ Открываю тест ${dirStr}...`;
+  fetch('/gate_test_trade',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({gate_key:gk,gate_secret:gs,symbol:sym,dir:dir})})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok){st.className='alert-msg ok';st.textContent='✓ '+d.msg;}
+      else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
+    }).catch(e=>{st.className='alert-msg err';st.textContent='✕ '+e;});
 }
 
 function sendTestEmail(){
@@ -4919,6 +4939,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
             except Exception as e: self.send_response(500);self.end_headers();self.wfile.write(str(e).encode())
+        elif parsed.path == "/gate_test_trade":
+            params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            symbol   = params.get("symbol", "BTC_USDT").replace("/","_").upper()
+            if not symbol.endswith("_USDT"): symbol += "_USDT"
+            direction = int(params.get("dir", 1))
+            # Получаем текущую цену
+            try:
+                price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}", timeout=5).json()
+                price = float(price_r[0]["last"]) if price_r else None
+            except:
+                price = None
+            if not price:
+                self._json({"ok": False, "msg": "Не удалось получить цену"})
+                return
+            # Фиксированные параметры теста: $10 маржа, плечо 10×
+            margin   = 10.0
+            leverage = 10
+            notional = margin * leverage   # $100
+            size     = max(1, round(notional / price))
+            tp = round(price * (1 + (0.5/100)) if direction==1 else price * (1 - (0.5/100)), 6)
+            sl = round(price * (1 - (0.3/100)) if direction==1 else price * (1 + (0.3/100)), 6)
+            ok, log = _gate_execute_signal(params, symbol, direction, price, tp, sl, leverage,
+                                           margin / max(1, (lambda b,e: b[0] if b[0] else margin)(*[_gate_get_balance(params)])) * 100)
+            if ok:
+                dir_str = "ЛОНГ" if direction==1 else "ШОРТ"
+                self._json({"ok": True, "msg": f"{dir_str} {symbol} {size} конт. × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
+            else:
+                self._json({"ok": False, "msg": log.splitlines()[-1] if log else "ошибка"})
         elif parsed.path == "/gate_test":
             params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             balance, err = _gate_get_balance(params)
