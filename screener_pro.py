@@ -222,14 +222,19 @@ def _live_candle_updater():
                         if cc2:
                             live_c = {"t":c["t"],"o":c["open"],"h":c["high"],
                                       "l":c["low"],"c":c["close"],"live":True}
+                            last_closed = next((x for x in reversed(cc2) if not x.get("live")), None)
+                            last_closed_t = last_closed["t"] if last_closed else 0
                             if cc2[-1].get("live"):
-                                # Обновляем существующую live-свечу
-                                cc2[-1] = live_c
-                                opt_state["chart_candles"] = cc2
-                            elif c["t"] >= cc2[-1]["t"]:
-                                # >= : добавляем live даже если t совпадает с последней закрытой
+                                # Обновляем существующую live-свечу только если t совпадает
                                 if c["t"] == cc2[-1]["t"]:
-                                    cc2.pop()  # убираем закрытую версию той же свечи
+                                    cc2[-1] = live_c
+                                    opt_state["chart_candles"] = cc2
+                                elif c["t"] > cc2[-1]["t"]:
+                                    # Новый интервал — убираем старую live и добавляем новую
+                                    cc2.pop()
+                                    opt_state["chart_candles"] = cc2 + [live_c]
+                            elif c["t"] > last_closed_t:
+                                # Строго больше: не дублируем закрытую свечу
                                 opt_state["chart_candles"] = cc2 + [live_c]
         except Exception as e:
             print(f"{_ts()} [SW] ⚠ {e}", flush=True)
@@ -1709,10 +1714,11 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
     if not sim or not sim["_signals"]: return
 
     sigs = sim["_signals"]
-    # Ищем сигнал на предпоследней свече — последней закрытой
-    # last_bar — текущая открытая, last_bar-1 — последняя закрытая
+    # Ищем сигнал на последней закрытой свече.
+    # candles передаются без live-свечи (только закрытые), поэтому
+    # последняя свеча = len(candles)-1 — это и есть только что закрытая.
     last_bar = len(candles) - 1
-    signal_bar = last_bar - 1
+    signal_bar = last_bar  # сигнал на только что закрытой свече
     for s in sigs:
         if s["bar_i"] == signal_bar:
             candle_t = candles[signal_bar]["t"]
