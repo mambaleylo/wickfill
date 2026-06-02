@@ -4170,6 +4170,7 @@ function sendTestEmail(){
 function _slStatus(msg,ok){ /* статус убран из UI, авто-загрузка продолжает работать */ }
 // ── Multi-symbol state ──
 let _symList=[], _activeChart='', _symStates={};
+let _lastLoadedChartSym='';
 
 function _renderSymCards(){
   const strip=document.getElementById('ccStrip');
@@ -4321,6 +4322,7 @@ function _loadChartFrame(sym){
   if(!_chartFrameLoaded){
     // Первая загрузка — грузим полный HTML
     _chartFrameLoaded=true;
+    _lastLoadedChartSym=sym||'';
     frame.src='/chart?t='+Date.now()+'&theme='+theme+symParam;
     frame.style.display='block';
     if(ph) ph.style.display='none';
@@ -4389,6 +4391,7 @@ function poll(){
         const curSt=_symStates[_activeChart]||{};
         if(curSt.chart_updated_at<=0){
           _activeChart=d.active;
+          _chartFrameLoaded=false;  // принудительная перезагрузка при авто-переключении
         }
       }
       _renderSymCards();
@@ -4398,6 +4401,8 @@ function poll(){
       const knownTs=_lastChartTs[_activeChart]||0;
       if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==knownTs){
         _lastChartTs[_activeChart]=activeSt.chart_updated_at;
+        // Если в iframe сейчас другой символ — сбрасываем флаг чтобы загрузить полный HTML
+        if(_lastLoadedChartSym!==_activeChart) _chartFrameLoaded=false;
         _loadChartFrame(_activeChart);
         document.getElementById('chartBtn').style.display='flex';
       }
@@ -4973,9 +4978,21 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/chart_data":
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
-            with opt_lock:
-                cc = list(opt_state.get("chart_candles", []))
-                cs = list(opt_state.get("chart_signals", []))
+            cc = []; cs = []
+            if req_sym:
+                # Мультирежим: берём данные конкретного символа из opt_states
+                with opt_states_lock:
+                    sym_st = dict(opt_states.get(req_sym, {}))
+                if sym_st.get("chart_candles"):
+                    cc = list(sym_st["chart_candles"])
+                    cs = list(sym_st.get("chart_signals") or [])
+            if not cc:
+                # Fallback: активный символ из opt_state
+                with opt_lock:
+                    active_sym = opt_state.get("chart_symbol", "")
+                    if not req_sym or req_sym == active_sym:
+                        cc = list(opt_state.get("chart_candles", []))
+                        cs = list(opt_state.get("chart_signals", []))
             self._json({"ok": True, "candles": cc, "signals": cs})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
