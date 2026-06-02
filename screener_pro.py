@@ -5262,8 +5262,8 @@ class Handler(BaseHTTPRequestHandler):
                 price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}",timeout=5).json()
                 price = float(price_r[0]["last"]) if price_r else None
                 if not price: self._json({"ok":False,"msg":"Не удалось получить цену"}); return
-                notional=float(params.get("notional",25.0)); leverage=int(params.get("leverage",5))
-                # notional = размер позиции (с плечом), margin = notional / leverage
+                leverage=int(params.get("leverage",5)); notional=float(params.get("notional",5.0))*leverage
+                # notional = margin * leverage (пользователь вводит маржу, умножаем на плечо)
                 tp=round(price*(1+(0.5/100)) if direction==1 else price*(1-(0.5/100)),6)
                 sl=round(price*(1-(0.3/100)) if direction==1 else price*(1+(0.3/100)),6)
                 ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_notional_usdt=notional)
