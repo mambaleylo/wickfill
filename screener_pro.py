@@ -1279,8 +1279,17 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     else:
         margin   = balance * (position_pct / 100.0)
     notional   = margin * leverage
-    # Размер в контрактах (1 контракт = 1 USD на Gate USDT-M для большинства пар)
-    size = max(1, round(notional / ep))
+    # Размер в контрактах: получаем quanto_multiplier из Gate API
+    # (для BTC_USDT = 0.0001 BTC, для ETH_USDT = 0.1 ETH и т.д.)
+    try:
+        _ci = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5).json()
+        _qm = float(_ci.get("quanto_multiplier", 0) or 0)
+    except Exception:
+        _qm = 0
+    if _qm > 0:
+        size = max(1, round(notional / (ep * _qm)))
+    else:
+        size = max(1, round(notional / ep))
     log_lines.append(f"✓ Размер: {size} контр. (~{notional:.1f} USDT)")
     # 5. Выставляем ордер
     ok, err = _gate_place_order(cfg, contract, direction, size, tp, sl)
