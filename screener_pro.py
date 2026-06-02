@@ -4490,9 +4490,11 @@ function addLogLine(msg,level,ts){
 }
 
 function _setActivity(text){
+  const wl=document.getElementById('wfLog');
   let el=document.getElementById('ccActivity');
-  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';const wl=document.getElementById('wfLog');wl.insertBefore(el,wl.firstChild);}
+  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';}
   el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
+  if(wl&&el!==wl.firstChild) wl.insertBefore(el,wl.firstChild);
 }
 function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
