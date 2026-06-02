@@ -1252,7 +1252,7 @@ def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
     _gate_request(cfg, "POST", "/api/v4/futures/usdt/price_orders", body=sl_trigger)
     return True, None
 
-def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_pct):
+def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_pct, fixed_margin_usdt=None):
     """Полный цикл: закрыть старую → выставить новую."""
     # Gate контракт: BTC_USDT → BTC_USDT (совпадает)
     contract = symbol.replace("/", "_").upper()
@@ -1274,7 +1274,10 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     else:
         log_lines.append(f"✓ Плечо: {int(leverage)}×")
     # 4. Рассчитываем размер позиции
-    margin     = balance * (position_pct / 100.0)
+    if fixed_margin_usdt is not None:
+        margin   = fixed_margin_usdt
+    else:
+        margin   = balance * (position_pct / 100.0)
     notional   = margin * leverage
     # Размер в контрактах (1 контракт = 1 USD на Gate USDT-M для большинства пар)
     size = max(1, round(notional / ep))
@@ -5233,7 +5236,7 @@ class Handler(BaseHTTPRequestHandler):
                 size=max(1,round(notional/price))
                 tp=round(price*(1+(0.5/100)) if direction==1 else price*(1-(0.5/100)),6)
                 sl=round(price*(1-(0.3/100)) if direction==1 else price*(1+(0.3/100)),6)
-                ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,100.0*margin/max(1,(_gate_get_balance(params)[0] or margin)))
+                ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_margin_usdt=10.0)
                 if ok:
                     dir_str="ЛОНГ" if direction==1 else "ШОРТ"
                     self._json({"ok":True,"msg":f"{dir_str} {symbol} {size}к × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
