@@ -1130,8 +1130,158 @@ def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
     return _send_telegram(cfg, text)
 
 # ═══════════════════════════════════════════════════════════════
-# CHART HTML (live — читается с диска каждый раз)
+# GATE.IO AUTO-TRADING — USDT-M фьючерсы
 # ═══════════════════════════════════════════════════════════════
+import hmac, hashlib
+
+def _gate_sign(api_secret, method, url_path, query_string, body_str, ts):
+    """Подписывает запрос по алгоритму Gate.io v4."""
+    body_hash = hashlib.sha512((body_str or "").encode()).hexdigest()
+    msg = "\n".join([method, url_path, query_string, body_hash, str(ts)])
+    sig = hmac.new(api_secret.encode(), msg.encode(), hashlib.sha512).hexdigest()
+    return sig
+
+def _gate_request(cfg, method, path, params=None, body=None):
+    """Выполняет подписанный запрос к Gate.io Futures API."""
+    api_key    = cfg.get("gate_key", "")
+    api_secret = cfg.get("gate_secret", "")
+    if not api_key or not api_secret:
+        return None, "Gate API ключи не заданы"
+    ts          = str(int(time.time()))
+    query_str   = "&".join(f"{k}={v}" for k, v in (params or {}).items())
+    body_str    = json.dumps(body) if body else ""
+    sig         = _gate_sign(api_secret, method, path, query_str, body_str, ts)
+    url         = f"https://fx-api.gateio.ws{path}" + (f"?{query_str}" if query_str else "")
+    headers     = {
+        "Content-Type":  "application/json",
+        "KEY":           api_key,
+        "SIGN":          sig,
+        "Timestamp":     ts,
+    }
+    try:
+        resp = requests.request(method, url, headers=headers,
+                                data=body_str.encode() if body_str else None, timeout=10)
+        data = resp.json()
+        if not resp.ok:
+            return None, data.get("message") or data.get("label") or str(data)
+        return data, None
+    except Exception as e:
+        return None, str(e)
+
+def _gate_get_balance(cfg):
+    """Возвращает доступный баланс USDT фьючерсного кошелька."""
+    data, err = _gate_request(cfg, "GET", "/api/v4/futures/usdt/accounts")
+    if err: return None, err
+    available = float(data.get("available", 0))
+    return available, None
+
+def _gate_close_position(cfg, contract):
+    """Закрывает открытую позицию по контракту (если есть)."""
+    # Получаем текущую позицию
+    data, err = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
+    if err: return True, None  # нет позиции — ок
+    size = int(data.get("size", 0))
+    if size == 0: return True, None  # уже закрыта
+    # Закрываем противоположным маркет-ордером
+    close_side = "sell" if size > 0 else "buy"
+    order = {
+        "contract": contract,
+        "size":     -size,       # противоположный объём
+        "price":    "0",         # маркет
+        "tif":      "ioc",
+        "reduce_only": True,
+        "text":     "t-wickfill-close"
+    }
+    _, err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=order)
+    return err is None, err
+
+def _gate_set_leverage(cfg, contract, leverage):
+    """Устанавливает кредитное плечо для контракта."""
+    _, err = _gate_request(cfg, "POST", f"/api/v4/futures/usdt/positions/{contract}/leverage",
+                           params={"leverage": str(int(leverage))})
+    return err is None, err
+
+def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
+    """Выставляет рыночный ордер с TP и SL."""
+    is_long = (direction == 1)
+    # Основной маркет-ордер
+    order = {
+        "contract":  contract,
+        "size":      int(size) if is_long else -int(size),
+        "price":     "0",
+        "tif":       "ioc",
+        "text":      "t-wickfill"
+    }
+    data, err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=order)
+    if err: return False, err
+    order_id = data.get("id")
+    # TP ордер (take_profit)
+    tp_order = {
+        "contract":       contract,
+        "size":           -(int(size)) if is_long else int(size),
+        "price":          str(tp_price),
+        "tif":            "gtc",
+        "reduce_only":    True,
+        "text":           "t-wickfill-tp"
+    }
+    _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=tp_order)
+    # SL через price_triggered order
+    sl_trigger = {
+        "initial": {
+            "contract":   contract,
+            "size":       -(int(size)) if is_long else int(size),
+            "price":      "0",
+            "tif":        "ioc",
+            "reduce_only": True,
+            "text":       "t-wickfill-sl"
+        },
+        "trigger": {
+            "strategy_type": 0,
+            "price_type":    0,
+            "price":         str(sl_price),
+            "rule":          2 if is_long else 1,  # 1=>=, 2=<=
+            "expiration":    86400
+        }
+    }
+    _gate_request(cfg, "POST", "/api/v4/futures/usdt/price_orders", body=sl_trigger)
+    return True, None
+
+def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_pct):
+    """Полный цикл: закрыть старую → выставить новую."""
+    # Gate контракт: BTC_USDT → BTC_USDT (совпадает)
+    contract = symbol.replace("/", "_").upper()
+    log_lines = []
+    # 1. Закрываем старую позицию
+    ok, err = _gate_close_position(cfg, contract)
+    if not ok:
+        return False, f"Ошибка закрытия позиции: {err}"
+    log_lines.append("✓ Старая позиция закрыта (или не было)")
+    # 2. Получаем баланс
+    balance, err = _gate_get_balance(cfg)
+    if err or balance is None:
+        return False, f"Ошибка получения баланса: {err}"
+    log_lines.append(f"✓ Баланс: {balance:.2f} USDT")
+    # 3. Устанавливаем плечо
+    ok, err = _gate_set_leverage(cfg, contract, leverage)
+    if not ok:
+        log_lines.append(f"⚠ Плечо: {err}")  # не критично — продолжаем
+    else:
+        log_lines.append(f"✓ Плечо: {int(leverage)}×")
+    # 4. Рассчитываем размер позиции
+    margin     = balance * (position_pct / 100.0)
+    notional   = margin * leverage
+    # Размер в контрактах (1 контракт = 1 USD на Gate USDT-M для большинства пар)
+    size = max(1, round(notional / ep))
+    log_lines.append(f"✓ Размер: {size} контр. (~{notional:.1f} USDT)")
+    # 5. Выставляем ордер
+    ok, err = _gate_place_order(cfg, contract, direction, size, tp, sl)
+    if not ok:
+        return False, f"Ошибка ордера: {err}\n" + "\n".join(log_lines)
+    dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
+    log_lines.append(f"✓ Ордер: {dir_str} {contract} TP={tp:.6g} SL={sl:.6g}")
+    return True, "\n".join(log_lines)
+
+
 def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
     import json as _j
     p=best_result.get("params",{})
@@ -1582,6 +1732,25 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
                     })
                     alert_state["signals"] = alert_state["signals"][:50]
                 print(f"[alert] Сигнал отправлен: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g}")
+            # Автоторговля Gate.io
+            gate_key    = alert_cfg.get("gate_key", "")
+            gate_secret = alert_cfg.get("gate_secret", "")
+            gate_pct    = float(alert_cfg.get("gate_pct", 0))
+            if gate_key and gate_secret and gate_pct > 0:
+                with opt_lock:
+                    best = opt_state.get("all_time_best") or opt_state.get("best") or {}
+                leverage = best.get("leverage", 1) or 1
+                ok_trade, trade_log = _gate_execute_signal(
+                    alert_cfg, symbol, direction, ep, tp, sl, leverage, gate_pct
+                )
+                status = "✓" if ok_trade else "✕"
+                print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
+                with opt_lock:
+                    opt_state.setdefault("logs", []).append({
+                        "ts": time.strftime("%H:%M:%S"),
+                        "msg": f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'} × {int(leverage)} — {trade_log.splitlines()[-1]}",
+                        "level": "ok" if ok_trade else "error"
+                    })
             break
 
 # ═══════════════════════════════════════════════════════════════
@@ -3749,6 +3918,36 @@ details summary::-webkit-details-marker{display:none}
       </div>
     </details>
 
+    <div class="div"></div>
+
+    <!-- Gate.io auto-trading -->
+    <details id="gateDetails">
+      <summary>⚡ Gate.io автоторговля</summary>
+      <div style="margin-top:10px" class="tg-grid">
+        <div class="field">
+          <label>API Key</label>
+          <input type="text" id="gate_key" placeholder="вставьте API Key" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>API Secret</label>
+          <input type="password" id="gate_secret" placeholder="вставьте API Secret" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Размер позиции (% от баланса)</label>
+          <div class="tg-row">
+            <input type="number" id="gate_pct" placeholder="10" min="1" max="100" step="1" value="10" style="width:80px">
+            <span style="font-size:.75rem;color:var(--text3);align-self:center">%</span>
+            <button class="btn-tg-test" id="gateTestBtn" onclick="testGateConnection()">Тест</button>
+          </div>
+        </div>
+        <div class="alert-msg" id="gateStatusMsg"></div>
+        <div style="font-size:.7rem;color:var(--text3);margin-top:4px;line-height:1.4">
+          Плечо берётся из расчётного. TP/SL из сигнала.<br>
+          При новом сигнале старая позиция закрывается.
+        </div>
+      </div>
+    </details>
+
   </aside>
 
   <!-- ── Right panel ── -->
@@ -3875,7 +4074,28 @@ window.addEventListener('DOMContentLoaded', function(){
 function getAlertCfg(){
   const t=document.getElementById('al_tg_token').value.trim();
   const c=document.getElementById('al_tg_chat').value.trim();
-  return (t&&c)?{tg_token:t,tg_chat_id:c}:null;
+  const gk=document.getElementById('gate_key').value.trim();
+  const gs=document.getElementById('gate_secret').value.trim();
+  const gp=parseFloat(document.getElementById('gate_pct').value)||0;
+  const base=(t&&c)?{tg_token:t,tg_chat_id:c}:{};
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp});
+  return Object.keys(base).length?base:null;
+}
+
+function testGateConnection(){
+  const gk=document.getElementById('gate_key').value.trim();
+  const gs=document.getElementById('gate_secret').value.trim();
+  const st=document.getElementById('gateStatusMsg');
+  const btn=document.getElementById('gateTestBtn');
+  if(!gk||!gs){st.className='alert-msg err';st.textContent='Заполните Key и Secret';return;}
+  btn.disabled=true;btn.textContent='...';
+  fetch('/gate_test',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({gate_key:gk,gate_secret:gs})})
+    .then(r=>r.json()).then(d=>{
+      btn.disabled=false;btn.textContent='Тест';
+      if(d.ok){st.className='alert-msg ok';st.textContent='✓ Баланс: '+d.balance+' USDT';}
+      else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
+    }).catch(e=>{btn.disabled=false;btn.textContent='Тест';st.className='alert-msg err';st.textContent='✕ '+e;});
 }
 
 function sendTestEmail(){
@@ -4699,6 +4919,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
             except Exception as e: self.send_response(500);self.end_headers();self.wfile.write(str(e).encode())
+        elif parsed.path == "/gate_test":
+            params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            balance, err = _gate_get_balance(params)
+            if err:
+                self._json({"ok": False, "msg": err})
+            else:
+                self._json({"ok": True, "balance": round(balance, 2)})
         elif parsed.path == "/chart_data":
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
