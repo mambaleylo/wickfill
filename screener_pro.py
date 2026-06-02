@@ -2474,6 +2474,7 @@ def run_optimizer(params):
         if "validated_fitness" not in _s:
             _s["validated_fitness"] = _s.get("fitness", 0)
         _global_best_ever = _s
+        _last_autosave_vfit = _s.get("validated_fitness", _s.get("fitness", 0))
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
@@ -5360,5 +5361,6 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
 
 
