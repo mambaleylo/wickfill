@@ -3967,14 +3967,11 @@ function switchChart(sym){
   _renderSymCards();
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
-  const s=_symStates[sym]||{};
-  // Всегда пробуем загрузить — сервер сам вернёт "не готов" если нет данных
-  // Не проверяем chart_updated_at на клиенте — он может быть устаревшим
   const theme=document.documentElement.getAttribute('data-theme')||'light';
-  frame.src='/chart?symbol='+encodeURIComponent(sym)+'&t='+Date.now()+'&theme='+theme;
-  frame.style.display='block';
-  if(ph) ph.style.display='none';
-  _lastChartTs[sym]=s.chart_updated_at||0;
+  // При переключении символа — всегда полная перезагрузка
+  _chartFrameLoaded=false;
+  _loadChartFrame(sym);
+  _lastChartTs[sym]=(_symStates[sym]||{}).chart_updated_at||0;
 }
 
 function startOpt(){
@@ -4043,29 +4040,30 @@ function stopSW(){
   document.getElementById('swStopBtn').style.display='none';
   addLogLine('⏹ Скользящее окно остановлено','warn');
 }
-function _loadChartFrame(){
+let _chartFrameLoaded = false;
+function _loadChartFrame(sym){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
   if(!frame) return;
   const theme=document.documentElement.getAttribute('data-theme')||'light';
-  // Первая загрузка — грузим src; последующие — шлём данные через postMessage
-  if(frame.src==='about:blank'||frame.src===''){
-    frame.src='/chart?t='+Date.now()+'&theme='+theme;
+  const symParam=sym?'&symbol='+encodeURIComponent(sym):'';
+  if(!_chartFrameLoaded){
+    // Первая загрузка — грузим полный HTML
+    _chartFrameLoaded=true;
+    frame.src='/chart?t='+Date.now()+'&theme='+theme+symParam;
     frame.style.display='block';
     if(ph) ph.style.display='none';
   } else {
-    // Грузим свежие данные и шлём в iframe без перезагрузки
-    fetch('/chart_data')
+    // Последующие — шлём только данные через postMessage, не трогаем src
+    const url='/chart_data'+(sym?'?symbol='+encodeURIComponent(sym):'');
+    fetch(url)
       .then(r=>r.json())
       .then(d=>{
         if(d.candles&&d.signals&&frame.contentWindow){
           frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals},'*');
         }
       })
-      .catch(()=>{
-        // Fallback: перезагружаем если postMessage не сработал
-        frame.src='/chart?t='+Date.now()+'&theme='+theme;
-      });
+      .catch(()=>{});
   }
 }
 function openChart(){window.open('/chart','_blank');}
@@ -4129,12 +4127,7 @@ function poll(){
       const knownTs=_lastChartTs[_activeChart]||0;
       if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==knownTs){
         _lastChartTs[_activeChart]=activeSt.chart_updated_at;
-        const frame=document.getElementById('chartFrame');
-        const ph=document.getElementById('chartPlaceholder');
-        const theme=document.documentElement.getAttribute('data-theme')||'light';
-        frame.src='/chart?symbol='+encodeURIComponent(_activeChart)+'&t='+Date.now()+'&theme='+theme;
-        frame.style.display='block';
-        if(ph) ph.style.display='none';
+        _loadChartFrame(_activeChart);
         document.getElementById('chartBtn').style.display='flex';
       }
     }
@@ -4490,10 +4483,12 @@ function toggleTheme(){
   document.documentElement.setAttribute('data-theme',next);
   document.getElementById('themeBtn').textContent=next==='dark'?'🌙':'☀';
   localStorage.setItem('wf_theme',next);
-  // Reload chart iframe with new theme
+  // Reload chart iframe with new theme — полная перезагрузка нужна для смены цветов
   const frame=document.getElementById('chartFrame');
   if(frame&&frame.style.display!=='none'&&frame.src&&frame.src!=='about:blank'){
+    _chartFrameLoaded=false;
     frame.src='/chart?t='+Date.now()+'&theme='+next;
+    _chartFrameLoaded=true;  // сразу помечаем — следующие обновления пойдут через postMessage
   }
 }
 document.addEventListener('DOMContentLoaded',function(){
