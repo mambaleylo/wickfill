@@ -3969,8 +3969,8 @@ details summary::-webkit-details-marker{display:none}
           При новом сигнале старая позиция закрывается.
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
-          <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Тест лонг $10×10</button>
-          <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Тест шорт $10×10</button>
+          <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Тест лонг $5×5</button>
+          <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Тест шорт $5×5</button>
         </div>
       </div>
     </details>
