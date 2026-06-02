@@ -5195,6 +5195,41 @@ class Handler(BaseHTTPRequestHandler):
             else: self._json({"ok":False,"msg":opt_state.get("error","Ошибка Telegram")})
             return
 
+        if parsed.path == "/gate_test":
+            try: params=json.loads(body) if body.strip() else {}
+            except: self._json({"ok":False,"msg":"bad JSON"}); return
+            try:
+                balance, err = _gate_get_balance(params)
+                if err: self._json({"ok":False,"msg":err})
+                else: self._json({"ok":True,"balance":round(balance,2)})
+            except Exception as e:
+                self._json({"ok":False,"msg":str(e)})
+            return
+
+        if parsed.path == "/gate_test_trade":
+            try: params=json.loads(body) if body.strip() else {}
+            except: self._json({"ok":False,"msg":"bad JSON"}); return
+            try:
+                symbol = params.get("symbol","BTC_USDT").replace("/","_").upper()
+                if not symbol.endswith("_USDT"): symbol += "_USDT"
+                direction = int(params.get("dir",1))
+                price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}",timeout=5).json()
+                price = float(price_r[0]["last"]) if price_r else None
+                if not price: self._json({"ok":False,"msg":"Не удалось получить цену"}); return
+                margin=10.0; leverage=10; notional=margin*leverage
+                size=max(1,round(notional/price))
+                tp=round(price*(1+(0.5/100)) if direction==1 else price*(1-(0.5/100)),6)
+                sl=round(price*(1-(0.3/100)) if direction==1 else price*(1+(0.3/100)),6)
+                ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,100.0*margin/max(1,(_gate_get_balance(params)[0] or margin)))
+                if ok:
+                    dir_str="ЛОНГ" if direction==1 else "ШОРТ"
+                    self._json({"ok":True,"msg":f"{dir_str} {symbol} {size}к × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
+                else:
+                    self._json({"ok":False,"msg":(log or "ошибка").splitlines()[-1]})
+            except Exception as e:
+                self._json({"ok":False,"msg":str(e)})
+            return
+
         if parsed.path == "/update_script":
             try:
                 import urllib.request as _ur
