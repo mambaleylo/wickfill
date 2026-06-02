@@ -5232,11 +5232,11 @@ class Handler(BaseHTTPRequestHandler):
                 price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}",timeout=5).json()
                 price = float(price_r[0]["last"]) if price_r else None
                 if not price: self._json({"ok":False,"msg":"Не удалось получить цену"}); return
-                margin=10.0; leverage=10; notional=margin*leverage
+                margin=5.0; leverage=5; notional=margin*leverage
                 size=max(1,round(notional/price))
                 tp=round(price*(1+(0.5/100)) if direction==1 else price*(1-(0.5/100)),6)
                 sl=round(price*(1-(0.3/100)) if direction==1 else price*(1+(0.3/100)),6)
-                ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_margin_usdt=10.0)
+                ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_margin_usdt=5.0)
                 if ok:
                     dir_str="ЛОНГ" if direction==1 else "ШОРТ"
                     self._json({"ok":True,"msg":f"{dir_str} {symbol} {size}к × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
