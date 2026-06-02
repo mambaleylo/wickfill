@@ -4055,7 +4055,7 @@ function _tryAutoLoad(){
       if(d.best) renderBest(d.best,d.top20||[]);
       _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
       // Показываем конфиг только если оптимизатор не работает
-      if(!polling){ _loadChartFrame(); document.getElementById('chartBtn').style.display='flex'; }
+      if(!polling){ _chartFrameLoaded=false; _loadChartFrame(); document.getElementById('chartBtn').style.display='flex'; }
     }).catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded', function(){
@@ -4953,51 +4953,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             except (BrokenPipeError,ConnectionResetError): pass
             except Exception as e: self.send_response(500);self.end_headers();self.wfile.write(str(e).encode())
-        elif parsed.path == "/gate_test_trade":
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                raw = self.rfile.read(length) if length else b""
-                params = json.loads(raw) if raw else {}
-            except Exception:
-                params = {}
-            symbol   = params.get("symbol", "BTC_USDT").replace("/","_").upper()
-            if not symbol.endswith("_USDT"): symbol += "_USDT"
-            direction = int(params.get("dir", 1))
-            # Получаем текущую цену
-            try:
-                price_r = requests.get(f"{GATE_API}/futures/usdt/tickers?contract={symbol}", timeout=5).json()
-                price = float(price_r[0]["last"]) if price_r else None
-            except:
-                price = None
-            if not price:
-                self._json({"ok": False, "msg": "Не удалось получить цену"})
-                return
-            # Фиксированные параметры теста: $10 маржа, плечо 10×
-            margin   = 10.0
-            leverage = 10
-            notional = margin * leverage   # $100
-            size     = max(1, round(notional / price))
-            tp = round(price * (1 + (0.5/100)) if direction==1 else price * (1 - (0.5/100)), 6)
-            sl = round(price * (1 - (0.3/100)) if direction==1 else price * (1 + (0.3/100)), 6)
-            ok, log = _gate_execute_signal(params, symbol, direction, price, tp, sl, leverage,
-                                           margin / max(1, (lambda b,e: b[0] if b[0] else margin)(*[_gate_get_balance(params)])) * 100)
-            if ok:
-                dir_str = "ЛОНГ" if direction==1 else "ШОРТ"
-                self._json({"ok": True, "msg": f"{dir_str} {symbol} {size} конт. × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
-            else:
-                self._json({"ok": False, "msg": log.splitlines()[-1] if log else "ошибка"})
-        elif parsed.path == "/gate_test":
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length > 0 else b""
-                params = json.loads(raw) if raw.strip() else {}
-                balance, err = _gate_get_balance(params)
-                if err:
-                    self._json({"ok": False, "msg": err})
-                else:
-                    self._json({"ok": True, "balance": round(balance, 2)})
-            except Exception as e:
-                self._json({"ok": False, "msg": str(e)})
         elif parsed.path == "/chart_data":
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
