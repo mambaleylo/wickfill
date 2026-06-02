@@ -1283,17 +1283,34 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     else:
         margin   = balance * (position_pct / 100.0)
         notional = margin * leverage
-    # Размер в контрактах: получаем quanto_multiplier из Gate API
-    # (для BTC_USDT = 0.0001 BTC, для ETH_USDT = 0.1 ETH и т.д.)
-    try:
-        _ci = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5).json()
-        _qm = float(_ci.get("quanto_multiplier", 0) or 0)
-    except Exception:
-        _qm = 0
+    # Размер в контрактах.
+    # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
+    # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
+    # size = notional / (ep * quanto_multiplier)
+    _QM_TABLE = {
+        "BTC_USDT": 0.0001, "ETH_USDT": 0.01,  "SOL_USDT": 0.1,
+        "BNB_USDT": 0.01,   "XRP_USDT": 10.0,  "DOGE_USDT": 100.0,
+        "ADA_USDT": 10.0,   "MATIC_USDT": 10.0,"DOT_USDT": 1.0,
+        "LTC_USDT": 0.1,    "AVAX_USDT": 0.1,  "LINK_USDT": 1.0,
+        "UNI_USDT": 1.0,    "ATOM_USDT": 1.0,  "TRX_USDT": 1000.0,
+        "OP_USDT": 1.0,     "ARB_USDT": 10.0,  "SUI_USDT": 1.0,
+        "APT_USDT": 0.1,    "INJ_USDT": 0.1,   "TON_USDT": 1.0,
+    }
+    _qm = _QM_TABLE.get(contract, 0)
+    if _qm == 0:
+        # Если не в таблице — запрашиваем у Gate
+        try:
+            _ci = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5).json()
+            _qm = float(_ci.get("quanto_multiplier", 0) or 0)
+        except Exception:
+            _qm = 0
     if _qm > 0:
         size = max(1, round(notional / (ep * _qm)))
+        log_lines.append(f"  [debug] notional={notional:.2f} ep={ep:.2f} qm={_qm} → size={size}")
     else:
-        size = max(1, round(notional / ep))
+        # Последний фоллбэк: предполагаем 1 контракт = 1 USD
+        size = max(1, round(notional))
+        log_lines.append(f"  [debug] qm=0 fallback: notional={notional:.2f} → size={size}")
     log_lines.append(f"✓ Размер: {size} контр. (~{notional:.1f} USDT)")
     # 5. Выставляем ордер
     ok, err = _gate_place_order(cfg, contract, direction, size, tp, sl)
