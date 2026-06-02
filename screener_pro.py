@@ -4953,7 +4953,12 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError,ConnectionResetError): pass
             except Exception as e: self.send_response(500);self.end_headers();self.wfile.write(str(e).encode())
         elif parsed.path == "/gate_test_trade":
-            params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                params = json.loads(raw) if raw else {}
+            except Exception:
+                params = {}
             symbol   = params.get("symbol", "BTC_USDT").replace("/","_").upper()
             if not symbol.endswith("_USDT"): symbol += "_USDT"
             direction = int(params.get("dir", 1))
@@ -4981,7 +4986,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "msg": log.splitlines()[-1] if log else "ошибка"})
         elif parsed.path == "/gate_test":
-            params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                params = json.loads(raw) if raw else {}
+            except Exception:
+                params = {}
             balance, err = _gate_get_balance(params)
             if err:
                 self._json({"ok": False, "msg": err})
