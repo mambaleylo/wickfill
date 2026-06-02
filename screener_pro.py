@@ -4109,8 +4109,9 @@ function testGateConnection(){
   btn.disabled=true;btn.textContent='...';
   fetch('/gate_test',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({gate_key:gk,gate_secret:gs})})
-    .then(r=>r.json()).then(d=>{
+    .then(r=>r.text()).then(t=>{
       btn.disabled=false;btn.textContent='Тест';
+      let d; try{d=JSON.parse(t);}catch(e){st.className='alert-msg err';st.textContent='✕ Сервер: '+t.slice(0,120);return;}
       if(d.ok){st.className='alert-msg ok';st.textContent='✓ Баланс: '+d.balance+' USDT';}
       else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
     }).catch(e=>{btn.disabled=false;btn.textContent='Тест';st.className='alert-msg err';st.textContent='✕ '+e;});
@@ -4987,16 +4988,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": log.splitlines()[-1] if log else "ошибка"})
         elif parsed.path == "/gate_test":
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                raw = self.rfile.read(length) if length else b""
-                params = json.loads(raw) if raw else {}
-            except Exception:
-                params = {}
-            balance, err = _gate_get_balance(params)
-            if err:
-                self._json({"ok": False, "msg": err})
-            else:
-                self._json({"ok": True, "balance": round(balance, 2)})
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length > 0 else b""
+                params = json.loads(raw) if raw.strip() else {}
+                balance, err = _gate_get_balance(params)
+                if err:
+                    self._json({"ok": False, "msg": err})
+                else:
+                    self._json({"ok": True, "balance": round(balance, 2)})
+            except Exception as e:
+                self._json({"ok": False, "msg": str(e)})
         elif parsed.path == "/chart_data":
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
