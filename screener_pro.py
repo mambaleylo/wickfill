@@ -4007,6 +4007,7 @@ details summary::-webkit-details-marker{display:none}
 <script>
 let polling=null, startTs=0, lastLogCount=0, chartOpened=false;
 let _lastChartTs={};   // per-symbol: {sym: timestamp} — чтобы не мигал при смене символа
+let _chartFrameLoaded=false;
 const infiniteMode=true;
 function toggleInfinite(){} // режим всегда бесконечный
 
@@ -4260,7 +4261,6 @@ function stopSW(){
   document.getElementById('swStopBtn').style.display='none';
   addLogLine('⏹ Скользящее окно остановлено','warn');
 }
-let _chartFrameLoaded = false;
 function _loadChartFrame(sym){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
