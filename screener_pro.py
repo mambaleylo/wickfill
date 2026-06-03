@@ -1854,8 +1854,19 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
                 with opt_lock:
                     best = opt_state.get("all_time_best") or opt_state.get("best") or {}
                 leverage = best.get("leverage", 1) or 1
+                # TP/SL: если заданы проценты — считаем от ep, иначе берём из сигнала
+                auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
+                auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
+                if auto_tp_pct > 0:
+                    trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6)
+                else:
+                    trade_tp = tp  # из сигнала (ценовая шкала)
+                if auto_sl_pct > 0:
+                    trade_sl = round(ep * (1 - auto_sl_pct/100) if direction==1 else ep * (1 + auto_sl_pct/100), 6)
+                else:
+                    trade_sl = sl  # из сигнала (ценовая шкала)
                 ok_trade, trade_log = _gate_execute_signal(
-                    alert_cfg, symbol, direction, ep, tp, sl, leverage, gate_pct
+                    alert_cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct
                 )
                 status = "✓" if ok_trade else "✕"
                 print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
@@ -4056,9 +4067,30 @@ details summary::-webkit-details-marker{display:none}
             <button class="btn-tg-test" id="gateTestBtn" onclick="testGateConnection()">Тест</button>
           </div>
         </div>
+        <!-- TP/SL для автоторговли -->
+        <div class="field">
+          <label>TP / SL для автосигналов</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:.75rem;color:var(--text3)">TP%</span>
+            <input type="number" id="gate_auto_tp_pct" placeholder="из сигнала" min="0.1" max="1000" step="0.1"
+              style="width:70px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
+            <span style="font-size:.75rem;color:var(--text3)">SL%</span>
+            <input type="number" id="gate_auto_sl_pct" placeholder="из сигнала" min="0.1" max="1000" step="0.1"
+              style="width:70px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
+            <span style="font-size:.65rem;color:var(--text3);line-height:1.2">пусто =<br>из сигнала</span>
+          </div>
+        </div>
+        <!-- Галочка автоторговли -->
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;padding:8px;background:var(--bg2);border-radius:8px;border:1px solid var(--border)">
+          <input type="checkbox" id="gate_auto_enabled" style="width:18px;height:18px;accent-color:var(--green);cursor:pointer" onchange="getAlertCfg();saveAlertCfg&&saveAlertCfg()">
+          <label for="gate_auto_enabled" style="cursor:pointer;font-size:.85rem;color:var(--text1);font-weight:600">
+            🤖 Автоторговля по сигналам
+          </label>
+          <span id="gate_auto_status" style="margin-left:auto;font-size:.7rem;color:var(--text3)">выкл</span>
+        </div>
         <div class="alert-msg" id="gateStatusMsg"></div>
         <div style="font-size:.7rem;color:var(--text3);margin-top:4px;line-height:1.4">
-          Плечо берётся из расчётного. TP/SL из сигнала.<br>
+          Плечо из стратегии. TP/SL: если % не заданы — берётся из сигнала (ценовая шкала).<br>
           При новом сигнале старая позиция закрывается.
         </div>
         <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
@@ -4200,7 +4232,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _fields = ['gate_key','gate_secret','gate_pct'];
+  const _fields = ['gate_key','gate_secret','gate_pct','gate_auto_enabled','gate_auto_tp_pct','gate_auto_sl_pct'];
   _fields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
@@ -4220,7 +4252,13 @@ function getAlertCfg(){
   const gs=document.getElementById('gate_secret').value.trim();
   const gp=parseFloat(document.getElementById('gate_pct').value)||0;
   const base=(t&&c)?{tg_token:t,tg_chat_id:c}:{};
-  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp});
+  const gauto=document.getElementById('gate_auto_enabled')?.checked||false;
+  const gtp=parseFloat(document.getElementById('gate_auto_tp_pct')?.value)||0;
+  const gsl=parseFloat(document.getElementById('gate_auto_sl_pct')?.value)||0;
+  if(gk&&gs&&gp>0&&gauto) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  // Обновляем статус галочки
+  const st=document.getElementById('gate_auto_status');
+  if(st) st.textContent=gauto&&gk&&gs&&gp>0?'🟢 вкл':'⚪ выкл';
   return Object.keys(base).length?base:null;
 }
 
