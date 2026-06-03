@@ -5440,7 +5440,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import urllib.request as _ur
                 _raw_url = "https://raw.githubusercontent.com/mambaleylo/wickfill/main/screener_pro.py"
-                _headers = {"Authorization": "token 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",
+                _headers = {"Authorization": "token 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",
                             "User-Agent": "WickFill-updater"}
                 _req = _ur.Request(_raw_url, headers=_headers)
                 with _ur.urlopen(_req, timeout=30) as _resp:
