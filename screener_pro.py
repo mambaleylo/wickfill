@@ -4061,9 +4061,17 @@ details summary::-webkit-details-marker{display:none}
           Плечо берётся из расчётного. TP/SL из сигнала.<br>
           При новом сигнале старая позиция закрывается.
         </div>
-        <div style="display:flex;gap:6px;margin-top:8px">
-          <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Тест лонг $5×5 = $25</button>
-          <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Тест шорт $5×5 = $25</button>
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+          <label style="font-size:.7rem;color:var(--text3);white-space:nowrap">TP $</label>
+          <input id="gate_tp" type="number" placeholder="авто 10%" step="0.1"
+            style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem;width:0">
+          <label style="font-size:.7rem;color:var(--text3);white-space:nowrap">SL $</label>
+          <input id="gate_sl" type="number" placeholder="авто 10%" step="0.1"
+            style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem;width:0">
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Лонг $5×5</button>
+          <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Шорт $5×5</button>
         </div>
       </div>
     </details>
@@ -4241,8 +4249,10 @@ function gateTestTrade(dir){
   if(!gk||!gs){st.className='alert-msg err';st.textContent='Заполните Key и Secret';return;}
   const dirStr=dir===1?'лонг':'шорт';
   st.className='alert-msg';st.textContent=`⏳ Открываю тест ${dirStr}...`;
+  const tpVal=parseFloat(document.getElementById('gate_tp').value)||null;
+  const slVal=parseFloat(document.getElementById('gate_sl').value)||null;
   fetch('/gate_test_trade',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({gate_key:gk,gate_secret:gs,symbol:sym,dir:dir,notional:5,leverage:5})})
+    body:JSON.stringify({gate_key:gk,gate_secret:gs,symbol:sym,dir:dir,notional:5,leverage:5,tp_fixed:tpVal,sl_fixed:slVal})})
     .then(r=>r.json()).then(d=>{
       if(d.ok){st.className='alert-msg ok';st.textContent='✓ '+d.msg;}
       else{st.className='alert-msg err';st.textContent='✕ '+(d.msg||'ошибка');}
@@ -5327,8 +5337,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not price: self._json({"ok":False,"msg":"Не удалось получить цену"}); return
                 leverage=int(params.get("leverage",5)); notional=float(params.get("notional",5.0))*leverage
                 # notional = margin * leverage (пользователь вводит маржу, умножаем на плечо)
-                tp=round(price*(1+(10/100)) if direction==1 else price*(1-(10/100)),6)
-                sl=round(price*(1-(10/100)) if direction==1 else price*(1+(10/100)),6)
+                tp_fixed = params.get("tp_fixed"); sl_fixed = params.get("sl_fixed")
+                tp = float(tp_fixed) if tp_fixed else round(price*(1+(10/100)) if direction==1 else price*(1-(10/100)),6)
+                sl = float(sl_fixed) if sl_fixed else round(price*(1-(10/100)) if direction==1 else price*(1+(10/100)),6)
                 ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_notional_usdt=notional)
                 if ok:
                     dir_str="ЛОНГ" if direction==1 else "ШОРТ"
