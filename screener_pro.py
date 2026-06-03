@@ -204,11 +204,15 @@ def _live_candle_updater():
                             new_cc = [{"t":c["t"],"o":c["open"],"h":c["high"],
                                        "l":c["low"],"c":c["close"]} for c in fresh]
                             with opt_lock:
-                                opt_state["chart_candles"] = new_cc
-                                opt_state["chart_signals"]  = sigs
-                            cc = new_cc
-                            _last_refresh = now
-                            print(f"{_ts()} [SW] ✅ Перезагружено {len(fresh)} свечей", flush=True)
+                                # Проверяем что символ не сменился пока грузили данные
+                                if opt_state.get("chart_symbol", "") == symbol:
+                                    opt_state["chart_candles"] = new_cc
+                                    opt_state["chart_signals"]  = sigs
+                                    cc = new_cc
+                                    _last_refresh = now
+                                    print(f"{_ts()} [SW] ✅ Перезагружено {len(fresh)} свечей", flush=True)
+                                else:
+                                    print(f"{_ts()} [SW] ⚠ Символ сменился во время загрузки, данные отброшены", flush=True)
                     except Exception as e:
                         print(f"{_ts()} [SW] ❌ Ошибка перезагрузки: {e}", flush=True)
 
@@ -219,24 +223,28 @@ def _live_candle_updater():
                     with _live_candle_lock:
                         _live_candle_cache[key] = dict(c, _fetched_at=time.time())
                     with opt_lock:
-                        cc2 = list(opt_state.get("chart_candles", []))
-                        if cc2:
-                            live_c = {"t":c["t"],"o":c["open"],"h":c["high"],
-                                      "l":c["low"],"c":c["close"],"live":True}
-                            last_closed = next((x for x in reversed(cc2) if not x.get("live")), None)
-                            last_closed_t = last_closed["t"] if last_closed else 0
-                            if cc2[-1].get("live"):
-                                # Обновляем существующую live-свечу только если t совпадает
-                                if c["t"] == cc2[-1]["t"]:
-                                    cc2[-1] = live_c
-                                    opt_state["chart_candles"] = cc2
-                                elif c["t"] > cc2[-1]["t"]:
-                                    # Новый интервал — убираем старую live и добавляем новую
-                                    cc2.pop()
+                        # Проверяем что символ не сменился пока шёл запрос к API
+                        if opt_state.get("chart_symbol", "") != symbol:
+                            pass  # символ сменился — пропускаем, в следующей итерации возьмём новый
+                        else:
+                            cc2 = list(opt_state.get("chart_candles", []))
+                            if cc2:
+                                live_c = {"t":c["t"],"o":c["open"],"h":c["high"],
+                                          "l":c["low"],"c":c["close"],"live":True}
+                                last_closed = next((x for x in reversed(cc2) if not x.get("live")), None)
+                                last_closed_t = last_closed["t"] if last_closed else 0
+                                if cc2[-1].get("live"):
+                                    # Обновляем существующую live-свечу только если t совпадает
+                                    if c["t"] == cc2[-1]["t"]:
+                                        cc2[-1] = live_c
+                                        opt_state["chart_candles"] = cc2
+                                    elif c["t"] > cc2[-1]["t"]:
+                                        # Новый интервал — убираем старую live и добавляем новую
+                                        cc2.pop()
+                                        opt_state["chart_candles"] = cc2 + [live_c]
+                                elif c["t"] > last_closed_t:
+                                    # Строго больше: не дублируем закрытую свечу
                                     opt_state["chart_candles"] = cc2 + [live_c]
-                            elif c["t"] > last_closed_t:
-                                # Строго больше: не дублируем закрытую свечу
-                                opt_state["chart_candles"] = cc2 + [live_c]
         except Exception as e:
             print(f"{_ts()} [SW] ⚠ {e}", flush=True)
         time.sleep(3)
