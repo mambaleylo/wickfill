@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.112
+WickFill Optimizer v3.113
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -1053,7 +1053,10 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                     candidates.append({**current, key: True})
 
                 results = pmap_fn(candidates); results.sort(key=lambda x: -x["fitness"])
-                if _eco_mode: time.sleep(0.15)  # eco: пауза между параметрами, снижает нагрев
+                if _eco_mode and not (stop_flag and stop_flag()):
+                    for _ in range(3):  # 3×50мс = 150мс, прерывается по stop_flag
+                        if stop_flag and stop_flag(): break
+                        time.sleep(0.05)
                 _param_dt = round(time.time() - _param_t0, 3)
                 param_best = results[0]
                 best_use_val = param_best["params"][key]
@@ -1090,7 +1093,10 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                 candidates.append({**current, use_key:False})
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
-            if _eco_mode: time.sleep(0.15)  # eco: пауза между параметрами
+            if _eco_mode and not (stop_flag and stop_flag()):
+                for _ in range(3):  # прерываемый sleep
+                    if stop_flag and stop_flag(): break
+                    time.sleep(0.05)
             _param_dt = round(time.time() - _param_t0, 3)
             param_best=results[0]; best_val=param_best["params"][key]
 
@@ -2653,7 +2659,7 @@ def run_optimizer(params):
         olog(f"⚠ Предварительный график не удался: {e}", "warn")
 
     # Запускаем прогрев пула ПАРАЛЛЕЛЬНО с остальной подготовкой (критично для Windows spawn)
-    _n_workers = 1 if _eco_mode else max(1, os.cpu_count() or 1)
+    _n_workers = max(1, os.cpu_count() or 1)
     _plog("pool_create", workers=_n_workers, pool_type=_POOL_TYPE, n_candles=len(candles))
     olog(f"⚙ Запуск {'ThreadPool' if _POOL_TYPE=='thread' else 'ProcessPool'} ({_n_workers} {'потоков' if _POOL_TYPE=='thread' else 'процессов'})...", "info")
     _pool_ready = threading.Event()
@@ -3359,7 +3365,7 @@ def _run_multi_parallel(sym_list, base_params):
     import traceback
     global _active_chart_symbol
 
-    cpu = 1 if _eco_mode else max(1, os.cpu_count() or 1)
+    cpu = max(1, os.cpu_count() or 1)
     n_syms = min(len(sym_list), cpu)
     if n_syms < len(sym_list):
         print(f"[par] Ограничено ядрами: запускаем {n_syms} из {len(sym_list)} символов", flush=True)
@@ -4031,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.112</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.113</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4096,10 +4102,14 @@ details summary::-webkit-details-marker{display:none}
       <span>🔍</span> Запустить оптимизацию
     </button>
 
-    <label style="display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 2px;margin-top:2px;user-select:none" title="Режим экономии: 1 ядро + паузы между итерациями. Меньше нагрев и расход батареи, дольше работает.">
-      <input type="checkbox" id="ecoModeChk" style="width:15px;height:15px;accent-color:var(--bark);cursor:pointer;flex-shrink:0" onchange="fetch('/set_eco?v='+(this.checked?'1':'0'))">
-      <span style="font-size:.78rem;color:var(--text2)">🍃 Режим экономии батареи</span>
-    </label>
+    <div style="display:flex;align-items:center;gap:9px;padding:7px 10px;margin-top:4px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;user-select:none" onclick="var c=document.getElementById('ecoModeChk');c.checked=!c.checked;fetch('/set_eco?v='+(c.checked?'1':'0'));var sw=document.getElementById('ecoSw');sw.classList.toggle('on',c.checked)" title="1 ядро + паузы между итерациями. Меньше нагрев, дольше работает.">
+      <input type="checkbox" id="ecoModeChk" style="display:none">
+      <div id="ecoSw" class="toggle-sw" style="display:block"></div>
+      <div style="flex:1">
+        <div style="font-size:.8rem;color:var(--text2);font-weight:500">🍃 Режим экономии</div>
+        <div style="font-size:.68rem;color:var(--text3);margin-top:1px">Меньше нагрев · дольше перебор</div>
+      </div>
+    </div>
 
     <div class="action-row">
       <button class="btn-ghost red" id="wfStopBtn" style="display:none" onclick="stopOpt()">
@@ -5681,7 +5691,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.112")
+    print(f"WickFill Optimizer v3.113")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
