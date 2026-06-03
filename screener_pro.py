@@ -39,7 +39,7 @@ TF_SECONDS = {
 # PARAM SPACE
 # ═══════════════════════════════════════════════════════════════
 PARAM_SPACE = {
-    "sl_pct":             {"min": 0.2,  "max": 0.8,  "step": 0.05, "type": "float", "label": "Стоп-лосс (%)"},
+    "sl_pct":             {"min": 0.3,  "max": 0.8,  "step": 0.05, "type": "float", "label": "Стоп-лосс (%)"},
     "tp_pct":             {"min": 0.5,  "max": 2.5,  "step": 0.05, "type": "float", "label": "Тейк-профит (%)"},
     "min_wick_pct":       {"min": 30.0, "max": 80.0, "step": 5.0,  "type": "float", "label": "Мин. фитиль (% диапазона)"},
     "min_wick_pct_price": {"min": 0.05, "max": 0.5,  "step": 0.05, "type": "float", "label": "Мин. фитиль (% цены)"},
