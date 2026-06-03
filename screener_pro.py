@@ -1833,20 +1833,22 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
             if candle_t <= last_signal_t:
                 return  # уже отправляли
             ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
-            ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t)
-            if ok:
-                with opt_lock:
-                    opt_state["last_signal_t"] = candle_t
-                with alert_lock:
-                    alert_state["sent"] += 1
-                    alert_state["signals"].insert(0, {
-                        "symbol": symbol, "tf": tf, "dir": direction,
-                        "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
-                        "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
-                    })
-                    alert_state["signals"] = alert_state["signals"][:50]
-                print(f"[alert] Сигнал отправлен: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g}")
-            # Автоторговля Gate.io
+            # 1. Телеграм-уведомление (независимо от Gate)
+            tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t)
+            # Сохраняем сигнал в любом случае
+            with opt_lock:
+                opt_state["last_signal_t"] = candle_t
+            with alert_lock:
+                alert_state["sent"] += 1
+                alert_state["signals"].insert(0, {
+                    "symbol": symbol, "tf": tf, "dir": direction,
+                    "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
+                    "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
+                })
+                alert_state["signals"] = alert_state["signals"][:50]
+            print(f"[alert] Сигнал: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tg={'✓' if tg_ok else '✕'}")
+
+            # 2. Автоторговля Gate.io (независимо от успеха телеграма)
             gate_key    = alert_cfg.get("gate_key", "")
             gate_secret = alert_cfg.get("gate_secret", "")
             gate_pct    = float(alert_cfg.get("gate_pct", 0))
