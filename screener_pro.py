@@ -4850,6 +4850,10 @@ function renderValid(v, best, windows, minDays, days){
   if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
+  const trainEq=best?.equity??100;
+  const trainDd=best?.max_dd??0;
+  const trainTrades=best?.trades??0;
+  const trainDays=best?.days??(days||20);
   const ratio=v&&trainWr>0?(v.winrate/trainWr):null;
   // ok = стабильная только если И валид хорош И хотя бы часть окон работает
   const okWindows=windows?windows.filter(w=>w.ok).length:0;
@@ -4858,35 +4862,58 @@ function renderValid(v, best, windows, minDays, days){
   // Последнее (свежее) окно — первый элемент массива (wi=0 самое свежее)
   const lastWindow=windows&&windows.length>0?windows[0]:null;
   const lastWindowOk=!lastWindow||lastWindow.ok;
+  // Если в валид-периоде 0 сделок — стратегия просто не торговала, это не провал
+  const noTradesInValid = v && v.trades===0;
   // Стабильная если: валид хороший ИЛИ большинство окон зелёные — НО только если последний период не красный
-  const ok=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&lastWindowOk;
+  // Также считаем стабильной если 0 сделок в коротком валид-периоде но окна хорошие
+  const ok=(ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&lastWindowOk)
+          ||(noTradesInValid&&windowsOk&&okWindows>=2&&lastWindowOk);
   // Деградация: в целом хорошо, но последний период плохой
-  const degrading=ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&!lastWindowOk;
+  const degrading=!ok&&ratio!==null&&(ratio>=0.75||windowsOk&&okWindows>=2)&&!lastWindowOk;
+  // Нет сигналов в валидационном периоде — отдельный статус
+  const noSignals=noTradesInValid&&!ok&&!degrading;
   const color=ok?'var(--green)':degrading?'var(--yellow)':'var(--red)';
   const bgColor=ok?'var(--green-light)':degrading?'rgba(138,106,26,0.12)':'var(--red-light)';
 
-  // Заголовок: иконка + статус + ключевые цифры в одну строку
-  const validWr = v ? v.winrate.toFixed(0)+'%' : '—';
-  const validEq = v ? '$'+v.equity.toFixed(0) : '—';
-  const validDd = v ? v.max_dd.toFixed(0)+'%' : '—';
-  const eqColor = v ? (v.equity>=100?'var(--green)':'var(--red)') : 'var(--text3)';
-  const ddColor = v ? (v.max_dd<15?'var(--green)':v.max_dd>25?'var(--red)':'var(--yellow)') : 'var(--text3)';
+  const validWr = v && !noTradesInValid ? v.winrate.toFixed(0)+'%' : '—';
+  const validEq = v && !noTradesInValid ? '$'+v.equity.toFixed(0) : '—';
+  const validDd = v && !noTradesInValid ? v.max_dd.toFixed(0)+'%' : '—';
+  const eqColor = v && !noTradesInValid ? (v.equity>=100?'var(--green)':'var(--red)') : 'var(--text3)';
+  const ddColor = v && !noTradesInValid ? (v.max_dd<15?'var(--green)':v.max_dd>25?'var(--red)':'var(--yellow)') : 'var(--text3)';
 
   let html=`<div style="margin-top:8px;padding:10px 12px;border-radius:12px;border:1.5px solid ${color};background:${bgColor}">`;
 
+  // Строка 0: лучшая комбинация (train) — всегда показываем
+  const trainEqColor=trainEq>100?'var(--green)':trainEq<100?'var(--red)':'var(--text2)';
+  const trainDdColor=trainDd<15?'var(--green)':trainDd>25?'var(--red)':'var(--yellow)';
+  html+=`<div style="display:flex;gap:10px;margin-bottom:6px;font-size:.78rem;padding-bottom:6px;border-bottom:1px solid rgba(128,128,128,0.15)">
+    <span style="color:var(--text3);font-size:.65rem;align-self:center">Лучшая:</span>
+    <span>💰 <b style="color:${trainEqColor}">$${trainEq.toFixed(0)}</b></span>
+    <span>WR <b style="color:var(--green)">${trainWr.toFixed(0)}%</b></span>
+    <span>📉 DD <b style="color:${trainDdColor}">${trainDd.toFixed(0)}%</b></span>
+    <span style="color:var(--text3)">${trainTrades} сд</span>
+  </div>`;
+
   // Строка 1: статус + валид WR vs трейн WR
+  const statusLabel = ratio===null ? '— Нет данных'
+    : ok ? '✓ Стабильная'
+    : degrading ? '⚠ Деградация'
+    : noSignals ? '⏸ Нет сигналов'
+    : '⚠ Нестабильная';
   html+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <span style="color:${color};font-weight:700;font-size:.88rem">${ratio===null?'— Нет данных':ok?'✓ Стабильная':degrading?'⚠ Деградация':'⚠ Нестабильная'}</span>
+    <span style="color:${color};font-weight:700;font-size:.88rem">${statusLabel}</span>
     <span style="font-size:.72rem;color:var(--text3)">валид <b style="color:${color}">${validWr}</b> / трейн <b style="color:var(--text2)">${trainWr.toFixed(0)}%</b></span>
   </div>`;
 
-  // Строка 2: Депозит · DD · Сделок
-  if(v){
+  // Строка 2: Депозит · DD · Сделок (валидационный период)
+  if(v && !noTradesInValid){
     html+=`<div style="display:flex;gap:10px;margin-bottom:10px;font-size:.78rem">
       <span>💰 <b style="color:${eqColor}">${validEq}</b></span>
       <span>📉 DD <b style="color:${ddColor}">${validDd}</b></span>
       <span style="color:var(--text3)">${v.trades} сд · ${v.days}д</span>
     </div>`;
+  } else if(noSignals){
+    html+=`<div style="font-size:.72rem;color:var(--text3);margin-bottom:8px">За последние ${v?v.days.toFixed(0):'-'}д сигналов не было — рынок не давал условий для входа</div>`;
   }
 
   // Строка 3: гистограмма окон — слева старое, справа свежее
