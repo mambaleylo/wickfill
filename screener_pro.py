@@ -1114,18 +1114,34 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 # EMAIL
 # ═══════════════════════════════════════════════════════════════
 def _send_telegram(cfg, text):
-    try:
-        token = cfg.get("tg_token","")
-        chat_id = cfg.get("tg_chat_id","")
-        if not token or not chat_id: return False
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
-        if not resp.ok:
-            with opt_lock: opt_state["error"]=f"Telegram: {resp.text}"
-        return resp.ok
-    except Exception as e:
-        with opt_lock: opt_state["error"]=f"Telegram: {e}"
-        return False
+    token = cfg.get("tg_token","")
+    chat_id = cfg.get("tg_chat_id","")
+    if not token or not chat_id: return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    # Retry 3 раза при сетевых ошибках (таймаут, connection reset и т.п.)
+    for _attempt in range(3):
+        try:
+            resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=15)
+            if resp.ok:
+                return True
+            err_text = resp.text
+            # 429 Too Many Requests — подождать и повторить
+            if resp.status_code == 429:
+                retry_after = int(resp.json().get("parameters", {}).get("retry_after", 5))
+                print(f"[tg] 429 flood wait {retry_after}s", flush=True)
+                time.sleep(retry_after)
+                continue
+            with opt_lock: opt_state["error"]=f"Telegram: {err_text}"
+            print(f"[tg] ERROR {resp.status_code}: {err_text[:200]}", flush=True)
+            return False
+        except Exception as e:
+            print(f"[tg] attempt {_attempt+1}/3 failed: {e}", flush=True)
+            if _attempt < 2:
+                time.sleep(3)
+            else:
+                with opt_lock: opt_state["error"]=f"Telegram: {e}"
+                return False
+    return False
 
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
@@ -1867,13 +1883,15 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
     # Ищем сигнал на последней закрытой свече.
     # candles передаются без live-свечи (только закрытые), поэтому
     # последняя свеча = len(candles)-1 — это и есть только что закрытая.
+    # ВАЖНО: если use_next_bar=True, bar_i в _csigs — это свеча ВХОДА (signal+1),
+    # поэтому проверяем и last_bar, и last_bar-1 (сигнал на предыдущей свече → вход сейчас).
     last_bar = len(candles) - 1
-    signal_bar = last_bar  # сигнал на только что закрытой свече
+    check_bars = {last_bar, last_bar - 1} if last_bar > 0 else {last_bar}
     for s in sigs:
-        if s["bar_i"] == signal_bar:
-            candle_t = candles[signal_bar]["t"]
+        if s["bar_i"] in check_bars:
+            candle_t = candles[s["bar_i"]]["t"]
             if candle_t <= last_signal_t:
-                return  # уже отправляли
+                continue  # уже отправляли этот бар
             ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
             # 1. Телеграм-уведомление (независимо от Gate)
             tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t)
@@ -2045,7 +2063,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
         now = int(time.time())
         next_close = ((now // interval_sec) + 1) * interval_sec
         wait_sec = next_close - now
-        sleep_total = wait_sec + 5
+        sleep_total = wait_sec + 15  # +15с — биржа иногда задерживает финализацию свечи
         print(f"[sw:{symbol}] Следующая свеча через {sleep_total}с")
 
         for _ in range(sleep_total):
@@ -2054,7 +2072,19 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
 
         if not _get_running(): break
 
-        new_c = _fetch_latest_candle(symbol, tf)
+        # Retry: биржа может задержать свечу — пробуем до 5 раз с интервалом 5с
+        new_c = None
+        for _retry in range(5):
+            _cand = _fetch_latest_candle(symbol, tf)
+            _cur_candles, _ = _get_candles_params()
+            if _cand and _cur_candles and _cand["t"] > _cur_candles[-1]["t"]:
+                new_c = _cand
+                break
+            print(f"[sw:{symbol}] Свеча ещё не финализирована, retry {_retry+1}/5...")
+            time.sleep(5)
+        if new_c is None:
+            new_c = _fetch_latest_candle(symbol, tf)
+
         if not new_c:
             print(f"[sw:{symbol}] Не удалось загрузить новую свечу"); continue
 
@@ -4303,10 +4333,13 @@ function getAlertCfg(){
   const gauto=document.getElementById('gate_auto_enabled')?.checked||false;
   const gtp=parseFloat(document.getElementById('gate_auto_tp_pct')?.value)||0;
   const gsl=parseFloat(document.getElementById('gate_auto_sl_pct')?.value)||0;
+  // BUG FIX: Gate работает независимо от заполненности Telegram-полей
+  // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
   if(gk&&gs&&gp>0&&gauto) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
   // Обновляем статус галочки
   const st=document.getElementById('gate_auto_status');
   if(st) st.textContent=gauto&&gk&&gs&&gp>0?'🟢 вкл':'⚪ выкл';
+  // Если нет ни telegram ни gate — return null. Если есть хотя бы что-то — возвращаем
   return Object.keys(base).length?base:null;
 }
 
