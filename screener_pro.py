@@ -5269,7 +5269,7 @@ class Handler(BaseHTTPRequestHandler):
                 ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_notional_usdt=notional)
                 if ok:
                     dir_str="ЛОНГ" if direction==1 else "ШОРТ"
-                    self._json({"ok":True,"msg":f"{dir_str} {symbol} {size}к × {leverage} (${notional:.0f}), TP={tp}, SL={sl}"})
+                    self._json({"ok":True,"msg":f"{dir_str} {symbol} × {leverage} (${notional:.0f} notional), TP={tp}, SL={sl}\n{log}"})
                 else:
                     self._json({"ok":False,"msg":(log or "ошибка").splitlines()[-1]})
             except Exception as e:
