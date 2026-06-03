@@ -1833,15 +1833,23 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
             status = "✓" if ok else "✕"
             print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
 
-def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
+def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None):
     """Проверяет последнюю свечу. Если сигнал — шлёт email."""
     if not best_params or not alert_cfg: return
     if len(candles) < 5: return
 
     with opt_lock:
+        if symbol is None:
+            symbol = opt_state.get("chart_symbol", "?")
+        if tf is None:
+            tf = opt_state.get("chart_tf", "?")
         last_signal_t = opt_state.get("last_signal_t", 0)
-        symbol = opt_state.get("chart_symbol", "?")
-        tf     = opt_state.get("chart_tf", "?")
+
+    # В мультирежиме берём per-symbol last_signal_t чтобы не блокировать сигналы
+    # других символов когда один из них уже отправил сигнал
+    if symbol and symbol in opt_states:
+        with opt_states_lock:
+            last_signal_t = opt_states[symbol].get("last_signal_t", last_signal_t)
 
     # Запускаем симуляцию с _collect=True только на последней части данных
     sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
@@ -1861,9 +1869,13 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg):
             ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
             # 1. Телеграм-уведомление (независимо от Gate)
             tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t)
-            # Сохраняем сигнал в любом случае
+            # Сохраняем сигнал — и в глобальный, и в per-symbol стейт
             with opt_lock:
                 opt_state["last_signal_t"] = candle_t
+            if symbol and symbol in opt_states:
+                with opt_states_lock:
+                    if symbol in opt_states:
+                        opt_states[symbol]["last_signal_t"] = candle_t
             with alert_lock:
                 alert_state["sent"] += 1
                 alert_state["signals"].insert(0, {
@@ -2087,7 +2099,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             if alert_cfg and prev_signals_for_close:
                 _check_trade_close(prev_signals_for_close, chart_signals_data, alert_cfg, symbol, tf)
             if alert_cfg:
-                _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg)
+                _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg, symbol=symbol, tf=tf)
         else:
             _set_candles(new_candles)
 
@@ -5561,6 +5573,7 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
 
 
 
