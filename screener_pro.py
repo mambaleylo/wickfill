@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.114
+WickFill Optimizer v3.115
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.114</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.115</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4063,16 +4063,16 @@ details summary::-webkit-details-marker{display:none}
     <div class="card">
       <div class="field-inset" style="margin-bottom:6px">
         <label>Символы (через запятую)</label>
-        <input type="text" id="wf_symbol" value="BTC" placeholder="BTC, ETH, SOL" style="width:100%">
+        <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
       </div>
       <div class="field-row" style="margin-bottom:0">
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
-            <option value="5m" selected>5m</option>
+            <option value="5m">5m</option>
             <option value="15m">15m</option>
             <option value="30m">30m</option>
-            <option value="1h">1h</option>
+            <option value="1h" selected>1h</option>
             <option value="4h">4h</option>
             <option value="1d">1d</option>
           </select>
@@ -5691,7 +5691,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.114")
+    print(f"WickFill Optimizer v3.115")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
