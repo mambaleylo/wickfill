@@ -1208,49 +1208,71 @@ def _gate_set_leverage(cfg, contract, leverage):
     return err is None, err
 
 def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
-    """Выставляет рыночный ордер с TP и SL."""
+    """Выставляет рыночный ордер с TP и SL через price_orders (триггерные)."""
     is_long = (direction == 1)
-    # Основной маркет-ордер
+    close_size = -(int(size)) if is_long else int(size)
+
+    # 1. Основной маркет-ордер
     order = {
-        "contract":  contract,
-        "size":      int(size) if is_long else -int(size),
-        "price":     "0",
-        "tif":       "ioc",
-        "text":      "t-wickfill"
+        "contract": contract,
+        "size":     int(size) if is_long else -int(size),
+        "price":    "0",
+        "tif":      "ioc",
+        "text":     "t-wickfill"
     }
     data, err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=order)
     if err: return False, err
-    order_id = data.get("id")
-    # TP ордер (take_profit)
-    tp_order = {
-        "contract":       contract,
-        "size":           -(int(size)) if is_long else int(size),
-        "price":          str(tp_price),
-        "tif":            "gtc",
-        "reduce_only":    True,
-        "text":           "t-wickfill-tp"
+
+    # 2. TP — триггерный ордер (price_orders)
+    # Лонг: срабатывает когда цена >= tp_price (rule=1)
+    # Шорт: срабатывает когда цена <= tp_price (rule=2)
+    tp_trigger = {
+        "initial": {
+            "contract":    contract,
+            "size":        close_size,
+            "price":       "0",
+            "tif":         "ioc",
+            "reduce_only": True,
+            "text":        "t-wickfill-tp"
+        },
+        "trigger": {
+            "strategy_type": 0,
+            "price_type":    0,
+            "price":         str(tp_price),
+            "rule":          1 if is_long else 2,
+            "expiration":    86400
+        }
     }
-    _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=tp_order)
-    # SL через price_triggered order
+    tp_data, tp_err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/price_orders", body=tp_trigger)
+    if tp_err:
+        # Логируем но не прерываем
+        pass
+
+    # 3. SL — триггерный ордер (price_orders)
+    # Лонг: срабатывает когда цена <= sl_price (rule=2)
+    # Шорт: срабатывает когда цена >= sl_price (rule=1)
     sl_trigger = {
         "initial": {
-            "contract":   contract,
-            "size":       -(int(size)) if is_long else int(size),
-            "price":      "0",
-            "tif":        "ioc",
+            "contract":    contract,
+            "size":        close_size,
+            "price":       "0",
+            "tif":         "ioc",
             "reduce_only": True,
-            "text":       "t-wickfill-sl"
+            "text":        "t-wickfill-sl"
         },
         "trigger": {
             "strategy_type": 0,
             "price_type":    0,
             "price":         str(sl_price),
-            "rule":          2 if is_long else 1,  # 1=>=, 2=<=
+            "rule":          2 if is_long else 1,
             "expiration":    86400
         }
     }
-    _gate_request(cfg, "POST", "/api/v4/futures/usdt/price_orders", body=sl_trigger)
-    return True, None
+    sl_data, sl_err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/price_orders", body=sl_trigger)
+
+    tp_status  = f"TP={tp_price} {'✅' if not tp_err else '❌'+str(tp_err)}"
+    sl_status  = f"SL={sl_price} {'✅' if not sl_err else '❌'+str(sl_err)}"
+    return True, f"{tp_status} | {sl_status}"
 
 def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_pct, fixed_margin_usdt=None, fixed_notional_usdt=None):
     """Полный цикл: закрыть старую → выставить новую."""
@@ -1313,11 +1335,11 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         log_lines.append(f"  [debug] qm=0 fallback: notional={notional:.2f} → size={size}")
     log_lines.append(f"✓ Размер: {size} контр. (~{notional:.1f} USDT)")
     # 5. Выставляем ордер
-    ok, err = _gate_place_order(cfg, contract, direction, size, tp, sl)
+    ok, order_log = _gate_place_order(cfg, contract, direction, size, tp, sl)
     if not ok:
-        return False, f"Ошибка ордера: {err}\n" + "\n".join(log_lines)
+        return False, f"Ошибка ордера: {order_log}\n" + "\n".join(log_lines)
     dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
-    log_lines.append(f"✓ Ордер: {dir_str} {contract} TP={tp:.6g} SL={sl:.6g}")
+    log_lines.append(f"✓ Ордер: {dir_str} {contract} {order_log or ""}")
     return True, "\n".join(log_lines)
 
 
