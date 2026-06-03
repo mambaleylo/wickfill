@@ -4640,7 +4640,7 @@ function poll(){
     const _atb=d.all_time_best||d.best;
     if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
     if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
-    if(d.valid!==undefined) renderValid(d.valid, d.best, d.windows||[], d.min_stable_days??null, d.days||30);
+    if(d.valid!==undefined) renderValid(d.valid, d.all_time_best||d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(!useMulti&&d.chart_updated_at>0){
       document.getElementById('chartBtn').style.display='flex';
       const _singleSym=_symList[0]||'__single__';
