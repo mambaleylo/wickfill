@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.111
+WickFill Optimizer v3.112
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4031,7 +4031,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.111</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.112</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4097,7 +4097,7 @@ details summary::-webkit-details-marker{display:none}
     </button>
 
     <label style="display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 2px;margin-top:2px;user-select:none" title="Режим экономии: 1 ядро + паузы между итерациями. Меньше нагрев и расход батареи, дольше работает.">
-      <input type="checkbox" id="ecoModeChk" style="width:15px;height:15px;accent-color:var(--bark);cursor:pointer;flex-shrink:0">
+      <input type="checkbox" id="ecoModeChk" style="width:15px;height:15px;accent-color:var(--bark);cursor:pointer;flex-shrink:0" onchange="fetch('/set_eco?v='+(this.checked?'1':'0'))">
       <span style="font-size:.78rem;color:var(--text2)">🍃 Режим экономии батареи</span>
     </label>
 
@@ -5357,7 +5357,12 @@ class Handler(BaseHTTPRequestHandler):
             except requests.exceptions.Timeout: result={"ok":False,"ms":None,"error":"Таймаут >6с"}
             except Exception as e: result={"ok":False,"ms":None,"error":str(e)}
             self._json(result)
-        elif parsed.path == "/scan_stop":
+        elif parsed.path.startswith("/set_eco"):
+            global _eco_mode
+            qs = parse_qs(parsed.query)
+            v = qs.get("v", ["1"])[0]
+            _eco_mode = v in ("1", "true", "on", "yes")
+            self._json({"ok": True, "eco_mode": _eco_mode})
             import traceback
             print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
@@ -5676,7 +5681,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.111")
+    print(f"WickFill Optimizer v3.112")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
