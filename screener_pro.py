@@ -2831,12 +2831,25 @@ def run_optimizer(params):
             train_wr = all_time_best["winrate"]
 
             def _wf_sim(d_from, d_to=None):
-                """Прогоняет конфиг на отрезке [now - d_from*86400 .. now - (d_to or 0)*86400]."""
+                """Прогоняет конфиг на отрезке [now - d_from*86400 .. now - (d_to or 0)*86400].
+                ВАЖНО: берём свечи с запасом для прогрева индикаторов (RSI, ATR, уровни),
+                но считаем сделки только внутри целевого окна через маркировку индекса."""
                 cutoff_from = now_ts - d_from * 86400
                 cutoff_to   = now_ts - (d_to or 0) * 86400
-                sl = [c for c in _fresh_candles if cutoff_from <= c.get("t", 0) < cutoff_to]
-                if len(sl) < 10: return None
-                return _simulate(sl, all_time_params, 0, risk_pct=risk_pct)
+                # Берём на 50 свечей больше для прогрева индикаторов
+                warmup_extra = 50
+                # Ищем индекс первой свечи окна в полном списке
+                full = _fresh_candles
+                start_idx = 0
+                for _i, _c in enumerate(full):
+                    if _c.get("t", 0) >= cutoff_from:
+                        start_idx = max(0, _i - warmup_extra)
+                        break
+                sl_warm = [c for c in full[start_idx:] if (d_to is None or c.get("t", 0) < cutoff_to)]
+                if len(sl_warm) < 10: return None
+                # Запускаем симуляцию на всём окне с прогревом, но days_limit обрежет по cutoff_from
+                warmup_days = (now_ts - cutoff_from) / 86400
+                return _simulate(sl_warm, all_time_params, warmup_days, risk_pct=risk_pct)
 
             # 1) Валидация на последних 30%
             valid_sim = _wf_sim(valid_days, 0)
