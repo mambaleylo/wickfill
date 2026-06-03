@@ -1181,19 +1181,37 @@ def _gate_get_balance(cfg):
     available = float(data.get("available", 0))
     return available, None
 
+def _gate_cancel_all_orders(cfg, contract):
+    """Отменяет все открытые обычные и триггерные ордера по контракту."""
+    # 1. Обычные лимитные ордера
+    _gate_request(cfg, "DELETE", "/api/v4/futures/usdt/orders",
+                  params={"contract": contract, "side": "ask"})
+    _gate_request(cfg, "DELETE", "/api/v4/futures/usdt/orders",
+                  params={"contract": contract, "side": "bid"})
+    # 2. Триггерные ордера (price_orders) — TP и SL
+    data, err = _gate_request(cfg, "GET", "/api/v4/futures/usdt/price_orders",
+                              params={"contract": contract, "status": "open"})
+    if not err and isinstance(data, list):
+        for o in data:
+            oid = o.get("id")
+            if oid:
+                _gate_request(cfg, "DELETE", f"/api/v4/futures/usdt/price_orders/{oid}")
+
+
 def _gate_close_position(cfg, contract):
-    """Закрывает открытую позицию по контракту (если есть)."""
+    """Отменяет все ордера и закрывает открытую позицию по контракту (если есть)."""
+    # Сначала отменяем все висящие ордера (TP/SL от предыдущей сделки)
+    _gate_cancel_all_orders(cfg, contract)
     # Получаем текущую позицию
     data, err = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
     if err: return True, None  # нет позиции — ок
     size = int(data.get("size", 0))
     if size == 0: return True, None  # уже закрыта
     # Закрываем противоположным маркет-ордером
-    close_side = "sell" if size > 0 else "buy"
     order = {
         "contract": contract,
-        "size":     -size,       # противоположный объём
-        "price":    "0",         # маркет
+        "size":     -size,
+        "price":    "0",
         "tif":      "ioc",
         "reduce_only": True,
         "text":     "t-wickfill-close"
