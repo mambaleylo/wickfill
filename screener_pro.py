@@ -1207,10 +1207,33 @@ def _gate_set_leverage(cfg, contract, leverage):
                            params={"leverage": str(int(leverage))})
     return err is None, err
 
+def _gate_round_price(price, contract):
+    """Округляет цену до шага Gate (order_price_round).
+    Известные шаги: BTC=0.1, ETH=0.01, SOL=0.001, остальные=0.0001 или берём из API.
+    """
+    _TICK = {
+        "BTC_USDT": 0.1,   "ETH_USDT": 0.01,  "SOL_USDT": 0.001,
+        "BNB_USDT": 0.01,  "XRP_USDT": 0.0001,"DOGE_USDT": 0.00001,
+        "LTC_USDT": 0.001, "AVAX_USDT": 0.001,"LINK_USDT": 0.001,
+        "DOT_USDT": 0.001, "UNI_USDT": 0.001, "ATOM_USDT": 0.001,
+        "OP_USDT":  0.0001,"ARB_USDT": 0.0001,"SUI_USDT": 0.0001,
+        "APT_USDT": 0.001, "INJ_USDT": 0.001, "TON_USDT": 0.001,
+        "TRX_USDT": 0.00001,"ADA_USDT": 0.00001,"MATIC_USDT": 0.00001,
+    }
+    tick = _TICK.get(contract, 0.1)
+    import math
+    rounded = round(round(price / tick) * tick, 10)
+    # Форматируем без лишних нулей
+    decimals = max(0, -int(math.floor(math.log10(tick)))) if tick < 1 else 0
+    return f"{rounded:.{decimals}f}"
+
+
 def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
     """Выставляет рыночный ордер с TP и SL через price_orders (триггерные)."""
     is_long = (direction == 1)
     close_size = -(int(size)) if is_long else int(size)
+    tp_price_str = _gate_round_price(tp_price, contract)
+    sl_price_str = _gate_round_price(sl_price, contract)
 
     # 1. Основной маркет-ордер
     order = {
@@ -1238,7 +1261,7 @@ def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
         "trigger": {
             "strategy_type": 0,
             "price_type":    0,
-            "price":         str(tp_price),
+            "price":         tp_price_str,
             "rule":          1 if is_long else 2,
             "expiration":    86400
         }
@@ -1263,7 +1286,7 @@ def _gate_place_order(cfg, contract, direction, size, tp_price, sl_price):
         "trigger": {
             "strategy_type": 0,
             "price_type":    0,
-            "price":         str(sl_price),
+            "price":         sl_price_str,
             "rule":          2 if is_long else 1,
             "expiration":    86400
         }
