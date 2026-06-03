@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.108
+WickFill Optimizer v3.109
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -256,7 +256,7 @@ threading.Thread(target=_live_candle_updater, daemon=True).start()
 # SIMULATE
 # ═══════════════════════════════════════════════════════════════
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
-              max_pos=6000.0, _collect=False):
+              max_pos=6000.0, _collect=False, trade_from_ts=None):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -454,6 +454,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 
     start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ret_lb,rep_lb,clu_lb)+2
     start_i=min(start_i,n-1)
+    # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
+    if trade_from_ts is not None:
+        for _ti in range(start_i, n):
+            if candles_list[_ti].get('t', 0) >= trade_from_ts:
+                start_i = _ti
+                break
 
     for i in range(start_i, n):
         c=candles_list[i]; hi=c["high"]; lo=c["low"]; op=c["open"]; cl=c["close"]
@@ -2832,24 +2838,26 @@ def run_optimizer(params):
 
             def _wf_sim(d_from, d_to=None):
                 """Прогоняет конфиг на отрезке [now - d_from*86400 .. now - (d_to or 0)*86400].
-                ВАЖНО: берём свечи с запасом для прогрева индикаторов (RSI, ATR, уровни),
-                но считаем сделки только внутри целевого окна через маркировку индекса."""
+                Передаём полный список свечей и используем days_limit для обрезки только снизу.
+                days_limit в _simulate режет по cutoff = time.time() - days_limit*86400,
+                то есть _wf_sim(6, 0) → days_limit=6 → берёт последние 6 дней.
+                НО индикаторы (RSI, ATR) прогреваются на всех свечах ДО cutoff тоже,
+                потому что _simulate сначала строит rsi_series/atr_series по всему списку,
+                а потом внутри цикла проверяет i >= start_i (индекс первой свечи в окне).
+                Проблема была в том что мы передавали УРЕЗАННЫЙ список — исправляем:
+                передаём ПОЛНЫЙ _fresh_candles, а days_limit отсекает торговлю снизу."""
                 cutoff_from = now_ts - d_from * 86400
                 cutoff_to   = now_ts - (d_to or 0) * 86400
-                # Берём на 50 свечей больше для прогрева индикаторов
-                warmup_extra = 50
-                # Ищем индекс первой свечи окна в полном списке
-                full = _fresh_candles
-                start_idx = 0
-                for _i, _c in enumerate(full):
-                    if _c.get("t", 0) >= cutoff_from:
-                        start_idx = max(0, _i - warmup_extra)
-                        break
-                sl_warm = [c for c in full[start_idx:] if (d_to is None or c.get("t", 0) < cutoff_to)]
-                if len(sl_warm) < 10: return None
-                # Запускаем симуляцию на всём окне с прогревом, но days_limit обрежет по cutoff_from
-                warmup_days = (now_ts - cutoff_from) / 86400
-                return _simulate(sl_warm, all_time_params, warmup_days, risk_pct=risk_pct)
+                # Фильтруем только верхнюю границу (d_to), нижнюю отдаём на откуп days_limit
+                # Передаём полный список — индикаторы прогреваются на всей истории
+                # trade_from_ts ограничивает только торговлю, не данные
+                if d_to and d_to > 0:
+                    sl = [c for c in _fresh_candles if c.get("t", 0) < cutoff_to]
+                else:
+                    sl = list(_fresh_candles)
+                if len(sl) < 10: return None
+                return _simulate(sl, all_time_params, 0, risk_pct=risk_pct,
+                                 trade_from_ts=cutoff_from)
 
             # 1) Валидация на последних 30%
             valid_sim = _wf_sim(valid_days, 0)
@@ -4011,7 +4019,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.108</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.109</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5649,7 +5657,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.108")
+    print(f"WickFill Optimizer v3.109")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
