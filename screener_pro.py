@@ -1668,6 +1668,30 @@ wrap.addEventListener('mousemove',e=>{{
   const tx=offsetX+14;tip.style.left=(tx+tip.offsetWidth>W?tx-tip.offsetWidth-20:tx)+'px';tip.style.top=Math.max(0,e.offsetY-10)+'px';
 }});
 wrap.addEventListener('mouseleave',()=>tip.style.display='none');
+// Touch tooltip для мобильных
+function showTipAtTouch(e){{
+  if(e.touches.length!==1){{tip.style.display='none';return;}}
+  const rect=wrap.getBoundingClientRect();
+  const offsetX=e.touches[0].clientX-rect.left;
+  const offsetY=e.touches[0].clientY-rect.top;
+  const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
+  if(offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
+  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart)),cw2=drawW/vis.length;
+  const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
+  if(i<0||i>=vis.length){{tip.style.display='none';return;}}
+  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
+  const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
+  const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
+  let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
+  if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
+  tip.innerHTML=html;tip.style.display='block';
+  // На мобильном показываем тултип сверху пальца
+  const ty=Math.max(0,offsetY-tip.offsetHeight-16);
+  const tx=Math.min(W-tip.offsetWidth-4,Math.max(4,offsetX-tip.offsetWidth/2));
+  tip.style.left=tx+'px';tip.style.top=ty+'px';
+}}
+wrap.addEventListener('touchmove',showTipAtTouch,{{passive:true}});
+wrap.addEventListener('touchend',()=>{{setTimeout(()=>tip.style.display='none',1500);}},{{passive:true}});
 window.addEventListener('resize',render);
 // ── Live candle: обновляем незакрытую свечу каждые 2 секунды ──
 const LIVE_SYMBOL = '{symbol}';
