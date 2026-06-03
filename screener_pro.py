@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.113
+WickFill Optimizer v3.114
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.113</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.114</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4079,7 +4079,7 @@ details summary::-webkit-details-marker{display:none}
         </div>
         <div class="field-inset">
           <label>История (дни)</label>
-          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" value="3" style="width:100%">
+          <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" value="20" style="width:100%">
         </div>
       </div>
       <input type="hidden" id="wf_risk" value="10">
@@ -5691,7 +5691,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.113")
+    print(f"WickFill Optimizer v3.114")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
