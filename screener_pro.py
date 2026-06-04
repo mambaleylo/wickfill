@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.133
+WickFill Optimizer v3.134
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4196,7 +4196,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.133</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.134</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4294,6 +4294,9 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" onclick="listConfigs()">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/><line x1="3" y1="4" x2="9" y2="4"/><line x1="3" y1="6.5" x2="9" y2="6.5"/><line x1="3" y1="9" x2="7" y2="9"/></svg> Конфиги
       </button>
+      <button class="btn-ghost" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
+      <button class="btn-ghost" onclick="renameDownload()">✏ Rename</button>
+      <button class="btn-ghost success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
     </div>
 
     <!-- Best result (desktop) -->
@@ -4829,22 +4832,23 @@ function listConfigs(){
 
 function updateScript(){
   const btn=document.getElementById('updateBtn');
-  btn.disabled=true; btn.textContent='⏳ Загрузка...';
+  const btnMob=document.getElementById('updateBtnMob');
+  [btn,btnMob].forEach(b=>{if(b){b.disabled=true;b.textContent='⏳...';}});
   fetch('/update_script',{method:'POST'})
     .then(r=>r.json())
     .then(d=>{
       if(d.ok){
         addLogLine('✅ Скрипт обновлён: '+d.path+' ('+d.size_kb+' KB)','ok');
-        btn.textContent='✅ Готово';
+        [btn,btnMob].forEach(b=>{if(b) b.textContent='✅ Готово';});
       } else {
         addLogLine('❌ Ошибка обновления: '+d.msg,'error');
-        btn.textContent='❌ Ошибка';
+        [btn,btnMob].forEach(b=>{if(b) b.textContent='❌ Ошибка';});
       }
-      setTimeout(()=>{btn.disabled=false;btn.textContent='⬇ Download';},3000);
+      setTimeout(()=>{[btn,btnMob].forEach(b=>{if(b){b.disabled=false;b.textContent='⬇ Download';}});},3000);
     })
     .catch(e=>{
       addLogLine('❌ Ошибка: '+e,'error');
-      btn.disabled=false; btn.textContent='⬇ Download';
+      [btn,btnMob].forEach(b=>{if(b){b.disabled=false;b.textContent='⬇ Download';}});
     });
 }
 
@@ -6064,7 +6068,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.133")
+    print(f"WickFill Optimizer v3.134")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
