@@ -1462,7 +1462,7 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
 html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
-[data-theme="light"] body{{background:#ede8e1;color:#2b2620}}
+[data-theme="light"] body{{background:#FAE6D8;color:#1e1209}}
 [data-theme="light"] #tooltip{{background:rgba(237,232,225,.98);border:1px solid rgba(60,45,30,.14);color:#2b2620;box-shadow:0 4px 16px rgba(40,30,20,.10)}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
@@ -1533,7 +1533,7 @@ function render(){{
   const cx=i=>PAD_L+(i+0.5)*cw;
   // Theme-aware colors
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  const clrBg        = isDark ? '#1e1a17' : '#ede8e1';
+  const clrBg        = isDark ? '#1e1a17' : '#FAE6D8';
   const clrAxis      = isDark ? 'rgba(255,255,255,.12)' : 'rgba(30,40,60,.12)';
   const clrGrid      = isDark ? 'rgba(255,255,255,.05)' : 'rgba(30,40,60,.05)';
   const clrPriceText = isDark ? '#9a8e83' : '#6a7a8e';
@@ -3444,34 +3444,34 @@ if(window.innerWidth<=700){
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#ede8e1;
-  --cream2:#e5dfd7;
-  --cream3:#dad3c9;
-  --sand:#c8c0b4;
-  --sand2:#9e968c;
-  --warm:#7a8090;
-  --bark:#3a3028;
-  --text:#2b2620;
-  --text2:#56504a;
-  --text3:#8a8078;
-  --glass:rgba(237,232,225,0.96);
-  --glass2:rgba(229,223,215,0.82);
+  --cream:#FAE6D8;
+  --cream2:#f5dece;
+  --cream3:#edd8c4;
+  --sand:#d4b89a;
+  --sand2:#a07858;
+  --warm:#7a6050;
+  --bark:#1e1209;
+  --text:#1e1209;
+  --text2:#4a3520;
+  --text3:#9a7d62;
+  --glass:rgba(250,230,216,0.96);
+  --glass2:rgba(245,222,206,0.82);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 16px rgba(40,30,20,0.07);
-  --shadow2:0 8px 32px rgba(40,30,20,0.11);
+  --shadow:0 2px 16px rgba(80,40,10,0.08);
+  --shadow2:0 8px 32px rgba(80,40,10,0.13);
   --radius:18px;
-  --radius-sm:12px;
-  --accent:#5a6880;
-  --green:#2a6e48;
-  --green-light:#d8ede2;
-  --red:#8b2828;
-  --red-light:#f0dede;
+  --radius-sm:14px;
+  --accent:#FF8234;
+  --green:#6e8a3e;
+  --green-light:#edf3e0;
+  --red:#c85a18;
+  --red-light:#fff0e8;
   --blue:#2a4e78;
   --blue-light:#d8e6f2;
   --yellow:#7a5a20;
   --yellow-light:#f0e8d4;
-  --border:rgba(60,45,30,0.12);
-  --border2:rgba(60,45,30,0.06);
+  --border:rgba(100,65,30,0.13);
+  --border2:rgba(100,65,30,0.07);
 }
 
 [data-theme="dark"]{
@@ -3529,7 +3529,7 @@ body>*{position:relative;z-index:1}
 .topbar{
   display:flex;align-items:center;gap:10px;
   padding:12px 20px;
-  background:var(--glass);
+  background:#fff8f3;
   backdrop-filter:var(--blur);
   -webkit-backdrop-filter:var(--blur);
   border-bottom:1px solid var(--border);
@@ -3541,8 +3541,8 @@ body>*{position:relative;z-index:1}
 }
 .topbar-logo .dot-live{
   width:7px;height:7px;border-radius:50%;
-  background:var(--green);flex-shrink:0;
-  box-shadow:0 0 0 2px var(--green-light);
+  background:#A3BF6F;flex-shrink:0;
+  box-shadow:0 0 0 2px rgba(163,191,111,.25);
 }
 .topbar-spacer{flex:1}
 .topbar-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -3584,7 +3584,7 @@ body>*{position:relative;z-index:1}
 /* ── Left sidebar ── */
 .sidebar{
   width:320px;flex-shrink:0;
-  background:var(--glass);
+  background:#fff8f3;
   backdrop-filter:var(--blur);
   -webkit-backdrop-filter:var(--blur);
   border-right:1px solid var(--border);
@@ -3595,8 +3595,8 @@ body>*{position:relative;z-index:1}
 
 /* Card */
 .card{
-  background:var(--glass2);
-  border:1px solid var(--border2);
+  background:#fff8f3;
+  border:1px solid var(--border);
   border-radius:var(--radius);
   padding:14px 15px;
 }
@@ -3622,7 +3622,7 @@ body>*{position:relative;z-index:1}
 
 input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
-  background:var(--cream);
+  background:rgba(255,248,243,0.8);
   border:1px solid var(--border);
   border-radius:10px;
   color:var(--text);
@@ -3632,7 +3632,7 @@ input[type=text],input[type=password],input[type=number],select{
   transition:border-color .18s;
   -webkit-appearance:none;appearance:none;
 }
-input:focus,select:focus{outline:none;border-color:var(--sand2);background:var(--cream)}
+input:focus,select:focus{outline:none;border-color:#FF8234;background:#fff8f3}
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
@@ -3687,18 +3687,18 @@ input[type=number]{-moz-appearance:textfield}
 /* ── Primary button ── */
 .btn-primary{
   width:100%;padding:11px 16px;
-  background:linear-gradient(135deg,#2a4e78 0%,#3a6496 100%);
+  background:#FF8234;
   border:none;border-radius:var(--radius-sm);
-  color:#f0f5ff;font-size:.9rem;font-weight:600;
+  color:#fff;font-size:.9rem;font-weight:600;
   font-family:'DM Sans',sans-serif;
   cursor:pointer;letter-spacing:-.01em;
-  box-shadow:0 2px 12px rgba(42,78,120,.22),inset 0 1px 0 rgba(255,255,255,.12);
+  box-shadow:0 4px 16px rgba(255,130,52,.3),inset 0 1px 0 rgba(255,255,255,.15);
   transition:all .18s ease;
   display:flex;align-items:center;justify-content:center;gap:7px;
 }
 .btn-primary:hover:not(:disabled){
-  background:linear-gradient(135deg,#345e8a 0%,#4474a8 100%);
-  box-shadow:0 4px 20px rgba(42,78,120,.28);transform:translateY(-1px);
+  background:#e86d1e;
+  box-shadow:0 6px 20px rgba(255,130,52,.38);transform:translateY(-1px);
 }
 .btn-primary:disabled{opacity:.45;cursor:not-allowed;transform:none}
 
@@ -3740,13 +3740,13 @@ input[type=number]{-moz-appearance:textfield}
   transition:background .3s, border-color .3s;
   position:relative;overflow:hidden;
 }
-.stat-cell.good{background:var(--green-light);border-color:rgba(42,110,72,.2)}
+.stat-cell.good{background:#edf3e0;border-color:rgba(110,138,62,.25)}
 .stat-cell.bad{background:var(--red-light);border-color:rgba(139,40,40,.2)}
 .stat-cell.warn{background:var(--yellow-light);border-color:rgba(122,90,32,.2)}
 @keyframes stat-flash{0%{opacity:.5;transform:scale(.97)}100%{opacity:1;transform:scale(1)}}
 .stat-cell.flash{animation:stat-flash .28s ease-out}
 .stat-v{font-size:.92rem;font-weight:700;color:var(--bark);font-family:'DM Mono',monospace;line-height:1}
-.stat-cell.good .stat-v{color:var(--green)}
+.stat-cell.good .stat-v{color:#6e8a3e}
 .stat-cell.bad .stat-v{color:var(--red)}
 .stat-cell.warn .stat-v{color:var(--yellow)}
 .stat-l{font-size:.58rem;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
@@ -3802,7 +3802,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Chart area — fills all remaining space */
 .chart-area{
   flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
-  background:var(--cream);
+  background:#FAE6D8;
 }
 .chart-placeholder{
   flex:1;display:flex;align-items:center;justify-content:center;
@@ -3833,7 +3833,7 @@ input[type=number]{-moz-appearance:textfield}
 .sym-btn.running{animation:cc-glow 1.6s ease-in-out infinite}
 .sym-card{min-width:120px;max-width:160px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border2);background:var(--glass);position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
 .sym-card:hover{border-color:var(--sand2)}
-.sym-card.active{border-color:var(--bark)}
+.sym-card.active{border-color:#FF8234}
 .sym-card.pos{border-color:rgba(74,124,89,.4);background:var(--green-light)}
 .sym-card.neg{border-color:rgba(139,58,58,.3);background:var(--red-light)}
 .sym-card.running{border-color:rgba(92,79,67,.3);animation:cc-glow 1.6s ease-in-out infinite}
@@ -5373,7 +5373,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
                 req_theme = qs.get("theme", ["light"])[0]
-                _bg   = "#1e1a17" if req_theme == "dark" else "#ede8e1"
+                _bg   = "#1e1a17" if req_theme == "dark" else "#FAE6D8"
                 _fg   = "#d4c8bc" if req_theme == "dark" else "#252b35"
                 _sub  = "#7a7069" if req_theme == "dark" else "#848d9e"
                 self.wfile.write(f"<html><body style='background:{_bg};color:{_fg};font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:{_sub};margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
