@@ -3547,8 +3547,8 @@ if(window.innerWidth<=700){
 [data-theme="dark"] .toggle{ background:#8B2508 !important; }
 [data-theme="dark"] .dot-live,
 [data-theme="dark"] .topbar-logo .dot-live{
-  background:#8B2508 !important;
-  box-shadow:0 0 0 2px rgba(139,37,8,0.25) !important;
+  background:#7ab84a !important;
+  box-shadow:0 0 0 2px rgba(122,184,74,0.25) !important;
 }
 [data-theme="dark"] .stat-cell.good{
   background:rgba(122,184,74,0.1) !important;
