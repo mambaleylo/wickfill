@@ -6081,7 +6081,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.139")
+    print(f"WickFill Optimizer v{APP_VERSION}")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
