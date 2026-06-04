@@ -3620,8 +3620,7 @@ body>*{position:relative;z-index:1}
 }
 .pill.green{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
 .pill.blue{background:var(--blue-light);border-color:rgba(74,101,128,.2);color:var(--blue)}
-.pill.pulse{animation:softpulse 2s ease-in-out infinite}
-@keyframes softpulse{0%,100%{opacity:1}50%{opacity:.6}}
+.pill.pulse{}
 
 /* ── Icon Buttons (topbar) ── */
 .icon-btn{
@@ -4644,6 +4643,8 @@ function startOpt(){
       _resetLog();
       document.getElementById('bestSection').style.display='none';
       document.getElementById('top20Wrap').style.display='none';
+      const _vs=document.getElementById('validSection');if(_vs){_vs._everShown=false;_vs.style.display='none';}
+      const _spEl=document.getElementById('speedPill');if(_spEl){_spEl._lastShown=0;_spEl.style.display='none';}
       document.getElementById('progBar').style.width='0%';
       document.getElementById('progParam').textContent='';
       document.getElementById('chartBtn').style.display='none';
@@ -4819,7 +4820,8 @@ function poll(){
         const secs=Math.round(d.avg_cycle_s%60);
         sp.textContent='⚡ '+(mins>0?mins+'м ':'')+secs+'с/цикл';
         sp.title='Среднее время одного цикла оптимизации';
-      } else {
+        sp._lastShown=Date.now();
+      } else if(!sp._lastShown||(Date.now()-sp._lastShown)>8000){
         sp.style.display='none';
       }
     }
@@ -4995,7 +4997,11 @@ function toggleParams(){
 function renderValid(v, best, windows, minDays, days){
   const wrap=document.getElementById('validSection');
   if(!wrap) return;
-  if(!v && (!windows||!windows.length) && !minDays){wrap.style.display='none';return;}
+  if(!v && (!windows||!windows.length) && !minDays){
+    if(!wrap._everShown) wrap.style.display='none';
+    return;
+  }
+  wrap._everShown=true;
   wrap.style.display='block';
   const trainWr=best?.winrate??0;
   const trainEq=best?.equity??100;
