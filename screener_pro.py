@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.121
+WickFill Optimizer v3.122
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -1533,7 +1533,7 @@ function render(){{
   const cx=i=>PAD_L+(i+0.5)*cw;
   // Theme-aware colors
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  const clrBg        = isDark ? '#1e1a17' : '#fafafa';
+  const clrBg        = isDark ? '#1e1a17' : '#ede8e1';
   const clrAxis      = isDark ? 'rgba(255,255,255,.12)' : 'rgba(30,40,60,.12)';
   const clrGrid      = isDark ? 'rgba(255,255,255,.05)' : 'rgba(30,40,60,.05)';
   const clrPriceText = isDark ? '#9a8e83' : '#6a7a8e';
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.121</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.122</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5345,7 +5345,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
                 req_theme = qs.get("theme", ["light"])[0]
-                _bg   = "#1e1a17" if req_theme == "dark" else "#fafafa"
+                _bg   = "#1e1a17" if req_theme == "dark" else "#ede8e1"
                 _fg   = "#d4c8bc" if req_theme == "dark" else "#252b35"
                 _sub  = "#7a7069" if req_theme == "dark" else "#848d9e"
                 self.wfile.write(f"<html><body style='background:{_bg};color:{_fg};font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:{_sub};margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
@@ -5776,7 +5776,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.121")
+    print(f"WickFill Optimizer v3.122")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
