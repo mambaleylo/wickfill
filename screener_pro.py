@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.117
+WickFill Optimizer v3.118
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.117</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.118</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5056,7 +5056,7 @@ function termuxUpdate(){
     if(d.ok){
       btn.textContent='✓';
       addLogLine('⏳ Перезапуск скрипта...','info');
-      setTimeout(()=>location.reload(),3000);
+      setTimeout(()=>location.href='/?v='+Date.now(),3000);
     } else {
       btn.disabled=false;btn.textContent='↺ Обновить';
       addLogLine('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
@@ -5064,7 +5064,7 @@ function termuxUpdate(){
   }).catch(()=>{
     btn.textContent='✓';
     addLogLine('⏳ Сервер перезапускается...','info');
-    setTimeout(()=>location.reload(),4000);
+    setTimeout(()=>location.href='/?v='+Date.now(),4000);
   });
 }
 
@@ -5750,7 +5750,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.117")
+    print(f"WickFill Optimizer v3.118")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
