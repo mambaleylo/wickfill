@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.120
+WickFill Optimizer v3.121
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.120</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.121</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5059,17 +5059,38 @@ function termuxUpdate(){
   const btn=event.target;btn.disabled=true;btn.textContent='⏳';
   fetch('/termux_update').then(r=>r.json()).then(d=>{
     if(d.ok){
-      btn.textContent='✓';
+      btn.textContent='⏳ ~5с';
       addLogLine('⏳ Перезапуск скрипта...','info');
-      setTimeout(()=>location.href='/?v='+Date.now(),3000);
+      // Ждём пока новый сервер поднимется — пингуем каждую секунду
+      let attempts=0;
+      function tryReload(){
+        attempts++;
+        fetch('/opt_status',{cache:'no-store'}).then(()=>{
+          location.href='/?v='+Date.now();
+        }).catch(()=>{
+          if(attempts<20) setTimeout(tryReload,1000);
+          else location.href='/?v='+Date.now();
+        });
+      }
+      setTimeout(tryReload, 3000); // первая попытка через 3с — раньше смысла нет
     } else {
-      btn.disabled=false;btn.textContent='↺ Обновить';
+      btn.disabled=false;btn.textContent='↺ Restart';
       addLogLine('⚠ Обновление: '+(d.msg||'Ошибка'),'warn');
     }
   }).catch(()=>{
-    btn.textContent='✓';
+    btn.textContent='⏳';
     addLogLine('⏳ Сервер перезапускается...','info');
-    setTimeout(()=>location.href='/?v='+Date.now(),4000);
+    let attempts=0;
+    function tryReload(){
+      attempts++;
+      fetch('/opt_status',{cache:'no-store'}).then(()=>{
+        location.href='/?v='+Date.now();
+      }).catch(()=>{
+        if(attempts<20) setTimeout(tryReload,1000);
+        else location.href='/?v='+Date.now();
+      });
+    }
+    setTimeout(tryReload, 3000);
   });
 }
 
@@ -5506,7 +5527,7 @@ class Handler(BaseHTTPRequestHandler):
                     f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
                     f.write("termux-wake-lock\n")
                     f.write(f"pkill -f {script_name}\n")
-                    f.write("sleep 1\n")
+                    f.write("sleep 2\n")
                     f.write(f"cp '{src}' '{script_path}'\n")
                     f.write(f"{sys.executable} '{script_path}'\n")
                 os.chmod(sh, 0o755)
@@ -5514,7 +5535,7 @@ class Handler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     start_new_session=True)
                 self._json({"ok":True,"msg":"⏳ Перезапуск..."})
-                def _die(): time.sleep(0.4); os._exit(0)
+                def _die(): time.sleep(0.8); os._exit(0)
                 threading.Thread(target=_die,daemon=True).start()
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         elif parsed.path == "/load_result":
@@ -5755,7 +5776,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.120")
+    print(f"WickFill Optimizer v3.121")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
