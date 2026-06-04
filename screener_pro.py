@@ -3497,7 +3497,7 @@ html,body{
   font-size:14px;
   overflow:hidden;
   overscroll-behavior:none;
-  touch-action:none;
+  touch-action:pan-y;
 }
 
 /* Subtle noise texture */
@@ -3947,76 +3947,76 @@ details summary::-webkit-details-marker{display:none}
   /* Шапка — скрыта */
   .topbar{display:none}
 
-  /* Весь интерфейс — flex-колонка на весь экран */
-  .app{height:100dvh;height:100vh}
-  .main{flex-direction:column;flex:1;min-height:0}
+  /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
+  html,body{overflow:auto !important;height:auto !important;touch-action:pan-y !important}
+  .app{height:auto;min-height:100dvh;overflow:visible}
+  .main{flex-direction:column;flex:1;min-height:0;overflow:visible}
 
-  /* ── САЙДБАР: компактный верхний блок, не скроллится ── */
+  /* ── САЙДБАР: вся ширина, без overflow:hidden ── */
   .sidebar{
     width:100%;border-right:none;border-bottom:1px solid var(--border);
-    padding:8px 10px;gap:6px;
-    overflow:hidden;
+    padding:10px 12px;gap:8px;
+    overflow:visible;
     flex-shrink:0;
+    touch-action:pan-y;
   }
 
-  /* Карточка настроек — 2 поля + 2 слайдера ужаты */
-  .card{padding:8px 10px}
+  /* Карточка настроек */
+  .card{padding:10px 12px}
   .card-title{display:none}
   .field-row{gap:6px;margin-bottom:6px !important}
-  .field label{font-size:.65rem}
-  input[type=text],input[type=number],select{padding:6px 9px;font-size:.82rem}
+  .field label{font-size:.68rem}
+  input[type=text],input[type=number],select{padding:9px 11px;font-size:.88rem}
 
-  /* Слайдеры — убрать лейблы, только значение */
+  /* Слайдеры */
   .slider-wrap{gap:6px}
-  .slider-val{min-width:26px;font-size:.75rem}
+  .slider-val{min-width:28px;font-size:.78rem}
   .field .slider-wrap{margin-top:0}
-  /* Лейбл слайдеров — сжать */
   .field>label{margin-bottom:1px;line-height:1.2}
 
-  /* Прогресс бар */
-  .prog-wrap{display:none !important}
+  /* Прогресс — показываем (важно на мобиле!) */
+  .prog-wrap{display:flex !important}
   .prog-meta{font-size:.65rem}
   .prog-param{font-size:.62rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-  /* Кнопки — чуть меньше чем стандарт, но удобные */
-  .btn-primary{padding:10px 14px;font-size:.88rem}
-  .btn-ghost{padding:8px 10px;font-size:.8rem}
+  /* Кнопки */
+  .btn-primary{padding:12px 14px;font-size:.92rem}
+  .btn-ghost{padding:10px 10px;font-size:.82rem}
   .action-row{gap:5px}
-  /* SW кнопка — скрыть на мобилке (редко нужна) */
   #swStopBtn{display:none !important}
 
-  /* Бесконечный тоггл — скрыт (он всегда on) */
+  /* Скрываем не нужные элементы */
   #infiniteRow{display:none}
-
-  /* Топ-результат: 1 строка */
   #bestSection{display:none !important}
   #validSection{display:block !important}
   #mob-best-row{display:none !important}
-
-  /* Telegram и сохранение — скрыть на мобилке (в настройках десктопа) */
   .sidebar details{display:none}
   .sidebar .div{display:none}
 
-  /* ── ПРАВАЯ ПАНЕЛЬ: занимает остаток экрана ── */
-  .right{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+  /* ── Недавние конфиги — свёрнуты по умолчанию на мобиле ── */
+  #recentBody{max-height:0px !important}
+  #recentArrow{transform:rotate(0deg) !important}
 
-  /* Top strip — вертикально на мобилке, сам скроллится */
-  .top-strip{flex-direction:column;height:auto;max-height:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  /* ── ПРАВАЯ ПАНЕЛЬ ── */
+  .right{flex:1;min-height:0;overflow:visible;display:flex;flex-direction:column}
+
+  /* Top strip — вертикально, без overflow:hidden */
+  .top-strip{flex-direction:column;height:auto;max-height:none;flex:none;overflow:visible;}
   .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;flex-shrink:0;}
-  .cc-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;}
-  .log-col{flex:1;min-height:120px;overflow:visible;}
-  .log-area{min-height:150px;overflow-y:visible;touch-action:pan-y;}
+  .cc-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x;}
+  .log-col{flex:1;min-height:0;overflow:visible;}
+  .log-area{min-height:120px;max-height:200px;overflow-y:auto;touch-action:pan-y;}
 
-  /* График — под таблицей, компактнее */
-  .chart-area{height:220px;flex:none;}
-  #chartFrame{height:220px;min-height:0;}
+  /* График */
+  .chart-area{height:260px;flex:none;}
+  #chartFrame{height:260px;min-height:0;display:block;}
 
   /* Циклы — компактная лента */
   .cycles-bar{padding:6px 10px 4px;flex-shrink:0}
   .cycles-label{display:none}
-  .cc{width:82px;padding:7px 8px}
-  .cc-eq{font-size:.9rem}
-  .cc-n{font-size:.55rem}
+  .cc{width:86px;padding:7px 9px}
+  .cc-eq{font-size:.92rem}
+  .cc-n{font-size:.58rem}
 
   /* Мобильные кнопки Топ / Логи */
   #mob-top-toggle{display:flex !important;flex-shrink:0}
@@ -4024,10 +4024,7 @@ details summary::-webkit-details-marker{display:none}
   /* На мобиле осветляем тёмный график */
   #chartFrame{filter:brightness(1.35) contrast(0.92);}
 
-  /* Лог */
-  .log-area{padding:4px 10px;min-height:80px;}
-
-  /* Таблица топ — обычный блок */
+  /* Таблица топ — обычный блок, скроллится вместе со страницей */
   #top20Wrap{
     display:none;
     position:static;
@@ -4035,6 +4032,7 @@ details summary::-webkit-details-marker{display:none}
     background:var(--cream);
     z-index:auto;
   }
+  .table-panel{max-height:none;overflow:visible;}
 }
 </style></head><body>
 
