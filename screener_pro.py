@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.116
+WickFill Optimizer v3.117
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.116</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.117</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4058,6 +4058,12 @@ details summary::-webkit-details-marker{display:none}
 
   <!-- ── Sidebar ── -->
   <aside class="sidebar">
+
+    <!-- Recent configs quick-select -->
+    <div id="recentPanel" style="display:none;margin-bottom:8px">
+      <div style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;margin-bottom:5px;padding:0 2px">Недавние конфиги</div>
+      <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
+    </div>
 
     <!-- Settings card -->
     <div class="card">
@@ -5094,6 +5100,36 @@ document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
   const t=document.documentElement.getAttribute('data-theme')||'light';
   if(btn) btn.textContent=t==='dark'?'🌙':'☀';
+
+  // Загрузка панели недавних конфигов
+  fetch('/recent_configs').then(r=>r.json()).then(d=>{
+    if(!d.ok||!d.configs||!d.configs.length) return;
+    const panel=document.getElementById('recentPanel');
+    const list=document.getElementById('recentList');
+    d.configs.forEach(c=>{
+      const sym=(c.symbol||'').replace('_USDT','').replace('USDT','').toUpperCase();
+      const eq=c.equity?'$'+c.equity:'';
+      const btn=document.createElement('div');
+      btn.style.cssText='display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;transition:background .15s';
+      btn.onmouseenter=function(){this.style.background='var(--cream2)'};
+      btn.onmouseleave=function(){this.style.background='var(--glass2)'};
+      btn.innerHTML=`
+        <span style="font-size:.82rem;font-weight:600;color:var(--bark);min-width:52px">${sym}</span>
+        <span style="font-size:.75rem;color:var(--text2);background:var(--cream3);padding:2px 6px;border-radius:5px">${c.tf}</span>
+        <span style="font-size:.75rem;color:var(--text3)">${c.days}д</span>
+        <span style="flex:1"></span>
+        <span style="font-size:.72rem;color:var(--text3);font-family:'DM Mono',monospace">${eq}</span>`;
+      btn.onclick=function(){
+        const rawSym=(c.symbol||'').replace(/_?USDT$/i,'').toUpperCase();
+        document.getElementById('wf_symbol').value=rawSym;
+        const sel=document.getElementById('wf_tf_sel');
+        for(let i=0;i<sel.options.length;i++) if(sel.options[i].value===c.tf){sel.selectedIndex=i;break;}
+        document.getElementById('wf_days').value=c.days;
+      };
+      list.appendChild(btn);
+    });
+    panel.style.display='block';
+  }).catch(()=>{});
 });
 
 </script></body></html>"""
@@ -5373,10 +5409,33 @@ class Handler(BaseHTTPRequestHandler):
             v = qs.get("v", ["1"])[0]
             _eco_mode = v in ("1", "true", "on", "yes")
             self._json({"ok": True, "eco_mode": _eco_mode})
+        elif parsed.path == "/scan_stop":
             import traceback
             print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
             self._json({"ok":True})
+        elif parsed.path == "/recent_configs":
+            import glob as _glob
+            seen = {}
+            for d in _AUTO_DIRS:
+                if not os.path.isdir(d): continue
+                for fp in _glob.glob(os.path.join(d, "wickfill_*.json")):
+                    fname = os.path.basename(fp)
+                    if fname in seen: continue
+                    try:
+                        with open(fp, encoding="utf-8") as _f:
+                            _d = json.load(_f)
+                        seen[fname] = {
+                            "symbol":   _d.get("symbol", ""),
+                            "tf":       _d.get("tf", ""),
+                            "days":     _d.get("days", 0),
+                            "risk_pct": _d.get("risk_pct", 20),
+                            "equity":   round(_d.get("best", {}).get("equity", 0)),
+                            "saved_at": _d.get("saved_at", ""),
+                        }
+                    except: pass
+            items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
+            self._json({"ok": True, "configs": items})
         elif parsed.path == "/sw_stop":
             with opt_lock: opt_state["sw_running"]=False
             self._json({"ok":True})
@@ -5691,7 +5750,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.116")
+    print(f"WickFill Optimizer v3.117")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
