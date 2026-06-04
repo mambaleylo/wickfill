@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.132
+WickFill Optimizer v3.133
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -1958,8 +1958,8 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
             status = "✓" if ok else "✕"
             print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
 
-def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None):
-    """Проверяет последнюю свечу. Если сигнал — шлёт email."""
+def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None, precomp_signals=None):
+    """Проверяет последнюю свечу. Если сигнал — шлёт telegram + открывает сделку."""
     if not best_params or not alert_cfg: return
     if len(candles) < 5: return
 
@@ -1970,24 +1970,27 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             tf = opt_state.get("chart_tf", "?")
         last_signal_t = opt_state.get("last_signal_t", 0)
 
-    # В мультирежиме берём per-symbol last_signal_t чтобы не блокировать сигналы
-    # других символов когда один из них уже отправил сигнал
     if symbol and symbol in opt_states:
         with opt_states_lock:
             last_signal_t = opt_states[symbol].get("last_signal_t", last_signal_t)
 
-    # Запускаем симуляцию с _collect=True только на последней части данных
-    sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
-    if not sim or not sim["_signals"]: return
+    # Используем уже готовые сигналы если переданы, иначе считаем
+    if precomp_signals is not None:
+        sigs = precomp_signals
+    else:
+        sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
+        if not sim or not sim["_signals"]: return
+        sigs = sim["_signals"]
 
-    sigs = sim["_signals"]
-    # Ищем сигнал на последней закрытой свече.
-    # candles передаются без live-свечи (только закрытые), поэтому
-    # последняя свеча = len(candles)-1 — это и есть только что закрытая.
-    # ВАЖНО: если use_next_bar=True, bar_i в _csigs — это свеча ВХОДА (signal+1),
-    # поэтому проверяем и last_bar, и last_bar-1 (сигнал на предыдущей свече → вход сейчас).
+    if not sigs: return
+
     last_bar = len(candles) - 1
-    check_bars = {last_bar, last_bar - 1} if last_bar > 0 else {last_bar}
+    nb = bool(best_params.get("use_next_bar", False))
+
+    # use_next_bar=False: сигнал и вход на одной свече — ждём закрытия сигнальной (last_bar)
+    # use_next_bar=True:  вход на свече после сигнала — bar_i = signal+1, т.е. last_bar
+    # В обоих случаях ищем bar_i == last_bar
+    check_bars = {last_bar}
     for s in sigs:
         if s["bar_i"] in check_bars:
             candle_t = candles[s["bar_i"]]["t"]
@@ -2238,7 +2241,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             if alert_cfg and prev_signals_for_close:
                 _check_trade_close(prev_signals_for_close, chart_signals_data, alert_cfg, symbol, tf)
             if alert_cfg:
-                _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg, symbol=symbol, tf=tf)
+                _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
         else:
             _set_candles(new_candles)
 
@@ -4193,7 +4196,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.132</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.133</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -6061,7 +6064,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.132")
+    print(f"WickFill Optimizer v3.133")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
