@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.131
+WickFill Optimizer v3.132
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4193,7 +4193,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.131</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.132</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4765,9 +4765,9 @@ function stopOpt(){
   document.getElementById('wfBtn').disabled=false;
   document.getElementById('wfStopBtn').style.display='none';
   document.getElementById('swStopBtn').style.display='flex';
-  const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs)_rp.style.display='block';
   if(window._lastTop20&&window._lastTop20.length) renderTop20(window._lastTop20);
   else if(window._lastBest) renderTop20([window._lastBest]);
+  _loadRecentConfigs();
   addLogLine('⏹ Остановлен','warn');
 }
 function stopSW(){
@@ -5382,16 +5382,12 @@ function toggleTheme(){
     _chartFrameLoaded=true;  // сразу помечаем — следующие обновления пойдут через postMessage
   }
 }
-document.addEventListener('DOMContentLoaded',function(){
-  const btn=document.getElementById('themeBtn');
-  const t=document.documentElement.getAttribute('data-theme')||'light';
-  if(btn) btn.textContent=t==='dark'?'🌙':'☀';
-
-  // Загрузка панели недавних конфигов
+function _loadRecentConfigs(){
   fetch('/recent_configs').then(r=>r.json()).then(d=>{
     if(!d.ok||!d.configs||!d.configs.length) return;
     const panel=document.getElementById('recentPanel');
     const list=document.getElementById('recentList');
+    list.innerHTML='';
     d.configs.forEach(c=>{
       const sym=(c.symbol||'').replace('_USDT','').replace('USDT','').toUpperCase();
       const eq=c.equity?'$'+c.equity:'';
@@ -5417,6 +5413,12 @@ document.addEventListener('DOMContentLoaded',function(){
     panel.dataset.hasConfigs='1';
     panel.style.display='block';
   }).catch(()=>{});
+}
+document.addEventListener('DOMContentLoaded',function(){
+  const btn=document.getElementById('themeBtn');
+  const t=document.documentElement.getAttribute('data-theme')||'light';
+  if(btn) btn.textContent=t==='dark'?'🌙':'☀';
+  _loadRecentConfigs();
 });
 
 </script></body></html>"""
@@ -6059,7 +6061,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.131")
+    print(f"WickFill Optimizer v3.132")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
