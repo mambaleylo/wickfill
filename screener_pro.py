@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.140
+WickFill Optimizer v3.141
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.140"
+APP_VERSION = "3.141"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5429,7 +5429,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.140';
+  const _cv = '3.141';
   setInterval(function(){
     fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
       if(d.version && d.version !== _cv){ location.reload(true); }
@@ -5815,7 +5815,10 @@ class Handler(BaseHTTPRequestHandler):
                 with open(sh,"w") as f:
                     f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
                     f.write("termux-wake-lock\n")
-                    f.write(f"pkill -f {script_name}\n")
+                    # Убиваем главный процесс и все его дочерние (multiprocessing workers)
+                    f.write(f"pkill -9 -f {script_name}\n")
+                    f.write("pkill -9 -f 'multiprocessing.spawn'\n")
+                    f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
                     f.write("sleep 2\n")
                     f.write(f"cp '{src}' '{script_path}'\n")
                     f.write(f"{sys.executable} '{script_path}'\n")
