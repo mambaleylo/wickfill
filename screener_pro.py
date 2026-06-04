@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.118
+WickFill Optimizer v3.119
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.118</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.119</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4060,9 +4060,14 @@ details summary::-webkit-details-marker{display:none}
   <aside class="sidebar">
 
     <!-- Recent configs quick-select -->
-    <div id="recentPanel" style="display:none;margin-bottom:8px">
-      <div style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;margin-bottom:5px;padding:0 2px">Недавние конфиги</div>
-      <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
+    <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);overflow:hidden">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'260px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+        <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
+        <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
+      </div>
+      <div id="recentBody" style="max-height:260px;overflow-y:auto;transition:max-height .25s ease;padding:0 6px 6px">
+        <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
     </div>
 
     <!-- Settings card -->
@@ -5750,7 +5755,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.118")
+    print(f"WickFill Optimizer v3.119")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
