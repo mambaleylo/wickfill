@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.135
+WickFill Optimizer v3.136
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4196,7 +4196,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.135</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.136</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4513,7 +4513,7 @@ function _tryAutoLoad(){
       if(d.best) renderBest(d.best,d.top20||[]);
       _slStatus(`✓ Авто: $${d.best?.equity?.toFixed(0)} WR${d.best?.winrate?.toFixed(0)}% · ${d.file||''}`,true);
       // Показываем конфиг только если оптимизатор не работает
-      if(!polling){ _chartFrameLoaded=false; _loadChartFrame(); document.getElementById('chartBtn').style.display='flex'; }
+      if(!polling){ _chartFrameLoaded=false; _loadChartFrame(); }
     }).catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded', function(){
@@ -4734,7 +4734,6 @@ function startOpt(){
       const _spEl=document.getElementById('speedPill');if(_spEl){_spEl._lastShown=0;_spEl.style.display='none';}
       document.getElementById('progBar').style.width='0%';
       document.getElementById('progParam').textContent='';
-      document.getElementById('chartBtn').style.display='none';
       document.getElementById('swStopBtn').style.display='none';
       document.getElementById('wfBtn').disabled=true;
       document.getElementById('wfStopBtn').style.display='flex';
@@ -4920,7 +4919,6 @@ function poll(){
         // Если в iframe сейчас другой символ — сбрасываем флаг чтобы загрузить полный HTML
         if(_lastLoadedChartSym!==_activeChart) _chartFrameLoaded=false;
         _loadChartFrame(_activeChart);
-        document.getElementById('chartBtn').style.display='flex';
       }
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
@@ -5002,7 +5000,6 @@ function poll(){
     if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
     if(d.valid!==undefined) renderValid(d.valid, d.all_time_best||d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(!useMulti&&d.chart_updated_at>0){
-      document.getElementById('chartBtn').style.display='flex';
       const _singleSym=_symList[0]||'__single__';
       if(d.chart_updated_at!==(_lastChartTs[_singleSym]||0)){
         _lastChartTs[_singleSym]=d.chart_updated_at;
@@ -6065,7 +6062,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.135")
+    print(f"WickFill Optimizer v3.136")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
