@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.127
+WickFill Optimizer v3.128
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -145,6 +145,8 @@ opt_state = {
     "sw_running": False, "sw_last_update": 0, "sw_candle_count": 0,
     # live signal alert
     "last_signal_t": 0,   # timestamp последней свечи с сигналом (чтобы не дублировать)
+    # fetch progress (0-100, -1 = не идёт)
+    "fetch_pct": -1, "fetch_symbol": "",
 }
 opt_lock = threading.Lock()
 
@@ -885,10 +887,22 @@ def _fetch_candles(symbol, tf, days):
     current_from = since
     last_http_error = None
     last_exception  = None
+    # Сообщаем UI что начался fetch
+    try:
+        with opt_lock:
+            opt_state["fetch_pct"] = 0
+            opt_state["fetch_symbol"] = symbol
+    except Exception:
+        pass
     print(f"{_ts()} [fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
         print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
+        try:
+            with opt_lock:
+                opt_state["fetch_pct"] = pct
+        except Exception:
+            pass
         _fetch_attempt = 0
         _fetch_max_attempts = 5
         _fetch_ok = False
@@ -945,6 +959,12 @@ def _fetch_candles(symbol, tf, days):
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
     print(f"\n{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
+    # Сигнализируем UI: загрузка завершена (100%), затем сбрасываем
+    try:
+        with opt_lock:
+            opt_state["fetch_pct"] = 100
+    except Exception:
+        pass
     # Возвращаем причину ошибки вместе с результатом через глобал (для лога оптимизатора)
     global _last_fetch_error
     _last_fetch_error = last_http_error or last_exception or None
@@ -2672,8 +2692,11 @@ def run_optimizer(params):
     olog(f"🚀 Старт · {symbol} · {tf} · {days}д · риск {risk_pct:.0f}%")
 
     # Загрузка свечей
-    olog(f"📡 Загрузка свечей {symbol} {tf} за {days}д...")
     candles = _fetch_candles(symbol, tf, days)
+    # Сбрасываем прогресс-бар загрузки
+    with opt_lock:
+        opt_state["fetch_pct"] = -1
+        opt_state["fetch_symbol"] = ""
     if len(candles) < 30:
         reason = _last_fetch_error or "нет данных от биржи"
         olog(f"❌ Мало свечей: {len(candles)} — {reason}", "error")
@@ -2682,8 +2705,6 @@ def run_optimizer(params):
     # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
     cutoff_check = time.time() - days * 86400
     candles_in_window = [c for c in candles if c.get("t", 0) >= cutoff_check]
-    expected_per_day = round(86400 / TF_SECONDS.get(tf, 3600))
-    olog(f"   Загружено {len(candles)} свечей → в окне {days}д: {len(candles_in_window)} (≈{expected_per_day}/день × {days}д = {expected_per_day*days})", "ok")
 
     # Если задано n_candles — обрезаем окно
     if n_candles > 0 and n_candles < len(candles):
@@ -3244,15 +3265,15 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
     _slog(f"⚙ Параллельный режим · {n_workers} {'процессов' if _POOL_TYPE=='proc' else 'потоков'} · {tf} · {days}д", "info")
 
     # Загружаем свечи
-    _slog("📡 Загрузка свечей...", "info")
     candles = _fetch_candles(sym, tf, days)
+    with opt_lock:
+        opt_state["fetch_pct"] = -1
+        opt_state["fetch_symbol"] = ""
     if len(candles) < 30:
         _slog(f"❌ Мало свечей: {len(candles)}", "error")
         with opt_states_lock:
             opt_states.setdefault(sym, {})["running"] = False
         return
-
-    _slog(f"   Загружено {len(candles)} свечей", "ok")
 
     # Создаём пул с выделенными воркерами
     try:
@@ -4170,7 +4191,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.127</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.128</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4896,25 +4917,41 @@ function poll(){
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
     document.getElementById('progTime').textContent=elapsed+'с';
-    // Полоска = прогресс цикла (стартов + BH итераций), не отдельного круга
-    const cycStep=d.cycle_step||0, cycTotal=d.cycle_total||0;
-    const pct=cycTotal>0?Math.round(cycStep/cycTotal*100):0;
-    document.getElementById('progBar').style.width=pct+'%';
-    const cycleStr=d.infinite?` · Цикл #${d.cycle}`:'';
-    // Лейбл: фаза (Старт / BH) + N/total + % + цикл
-    const n_starts=d.generation||0;
-    const bh_total=cycTotal>0?cycTotal-n_starts:0; // BH_MAX = cycle_total - n_restarts
-    let phaseLabel='';
-    if(cycTotal===0||cycStep===0){
-      phaseLabel='Запуск...';
-    } else if(cycStep<=n_starts){
-      phaseLabel=`Старт ${cycStep}/${n_starts}`;
+
+    // ── Прогресс загрузки свечей ──────────────────────────────────
+    const fetchPct = (d.fetch_pct != null) ? d.fetch_pct : -1;
+    const isFetching = fetchPct >= 0 && fetchPct < 100;
+    const fetchDone  = fetchPct === 100;
+    // Показываем fetch-прогресс вместо основного, пока идёт загрузка
+    if (isFetching) {
+      document.getElementById('progBar').style.width = fetchPct + '%';
+      document.getElementById('progBar').style.background = 'linear-gradient(90deg,#5a7fa0,#4a8c6a)';
+      document.getElementById('progLabel').textContent = `📡 Загрузка свечей ${d.fetch_symbol||''} · ${fetchPct}%`;
+      document.getElementById('progParam').textContent = '';
     } else {
-      const bhDone=cycStep-n_starts;
-      phaseLabel=`Basin Hopping ${bhDone}/${bh_total}`;
+      document.getElementById('progBar').style.background = '';
+      // Полоска = прогресс цикла (стартов + BH итераций), не отдельного круга
+      const cycStep=d.cycle_step||0, cycTotal=d.cycle_total||0;
+      const pct=cycTotal>0?Math.round(cycStep/cycTotal*100):0;
+      document.getElementById('progBar').style.width=pct+'%';
+      const cycleStr=d.infinite?` · Цикл #${d.cycle}`:'';
+      // Лейбл: фаза (Старт / BH) + N/total + % + цикл
+      const n_starts=d.generation||0;
+      const bh_total=cycTotal>0?cycTotal-n_starts:0;
+      let phaseLabel='';
+      if(fetchDone){
+        phaseLabel='Запуск...';
+      } else if(cycTotal===0||cycStep===0){
+        phaseLabel='Запуск...';
+      } else if(cycStep<=n_starts){
+        phaseLabel=`Старт ${cycStep}/${n_starts}`;
+      } else {
+        const bhDone=cycStep-n_starts;
+        phaseLabel=`Basin Hopping ${bhDone}/${bh_total}`;
+      }
+      document.getElementById('progLabel').textContent=`${phaseLabel} · ${pct}%${cycleStr}`;
+      if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
     }
-    document.getElementById('progLabel').textContent=`${phaseLabel} · ${pct}%${cycleStr}`;
-    if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
 
     // SW status
     const sw2=document.getElementById('swStatus2');
@@ -5421,6 +5458,8 @@ class Handler(BaseHTTPRequestHandler):
                     "sw_running":     opt_state.get("sw_running",False),
                     "sw_last_update": opt_state.get("sw_last_update",0),
                     "sw_candle_count":opt_state.get("sw_candle_count",0),
+                    "fetch_pct":      opt_state.get("fetch_pct", -1),
+                    "fetch_symbol":   opt_state.get("fetch_symbol", ""),
                 }
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
@@ -6016,7 +6055,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.127")
+    print(f"WickFill Optimizer v3.128")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
