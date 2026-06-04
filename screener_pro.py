@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.119
+WickFill Optimizer v3.120
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -1462,8 +1462,8 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
 html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
-[data-theme="light"] body{{background:#fafafa;color:#252b35}}
-[data-theme="light"] #tooltip{{background:rgba(248,249,251,.97);border:1px solid rgba(30,40,60,.12);color:#252b35;box-shadow:0 4px 16px rgba(30,40,60,.10)}}
+[data-theme="light"] body{{background:#ede8e1;color:#2b2620}}
+[data-theme="light"] #tooltip{{background:rgba(237,232,225,.98);border:1px solid rgba(60,45,30,.14);color:#2b2620;box-shadow:0 4px 16px rgba(40,30,20,.10)}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
 canvas{{display:block;width:100%;height:100%}}
@@ -3431,34 +3431,34 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --cream:#fafafa;
-  --cream2:#f4f5f7;
-  --cream3:#eceef2;
-  --sand:#dde0e8;
-  --sand2:#b8bdc9;
+  --cream:#ede8e1;
+  --cream2:#e5dfd7;
+  --cream3:#dad3c9;
+  --sand:#c8c0b4;
+  --sand2:#9e968c;
   --warm:#7a8090;
-  --bark:#232830;
-  --text:#252b35;
-  --text2:#4a5262;
-  --text3:#848d9e;
-  --glass:rgba(250,250,250,0.93);
-  --glass2:rgba(244,245,247,0.84);
+  --bark:#3a3028;
+  --text:#2b2620;
+  --text2:#56504a;
+  --text3:#8a8078;
+  --glass:rgba(237,232,225,0.96);
+  --glass2:rgba(229,223,215,0.82);
   --blur:saturate(180%) blur(20px);
-  --shadow:0 2px 16px rgba(30,40,60,0.06);
-  --shadow2:0 8px 32px rgba(30,40,60,0.10);
+  --shadow:0 2px 16px rgba(40,30,20,0.07);
+  --shadow2:0 8px 32px rgba(40,30,20,0.11);
   --radius:18px;
   --radius-sm:12px;
   --accent:#5a6880;
   --green:#2a6e48;
-  --green-light:#dff0e8;
+  --green-light:#d8ede2;
   --red:#8b2828;
-  --red-light:#f5e0e0;
+  --red-light:#f0dede;
   --blue:#2a4e78;
-  --blue-light:#dce8f5;
+  --blue-light:#d8e6f2;
   --yellow:#7a5a20;
-  --yellow-light:#f5eedc;
-  --border:rgba(30,40,60,0.09);
-  --border2:rgba(30,40,60,0.05);
+  --yellow-light:#f0e8d4;
+  --border:rgba(60,45,30,0.12);
+  --border2:rgba(60,45,30,0.06);
 }
 
 [data-theme="dark"]{
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.119</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.120</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5755,7 +5755,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.119")
+    print(f"WickFill Optimizer v3.120")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
