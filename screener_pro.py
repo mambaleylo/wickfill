@@ -4200,7 +4200,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.139</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)" id="versionSpan">v</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5430,6 +5430,10 @@ document.addEventListener('DOMContentLoaded',function(){
 <script>
 (function(){
   const _cv = '3.141';
+  fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    const sp=document.getElementById('versionSpan');
+    if(sp && d.version) sp.textContent='v'+d.version;
+  }).catch(()=>{});
   setInterval(function(){
     fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
       if(d.version && d.version !== _cv){ location.reload(true); }
