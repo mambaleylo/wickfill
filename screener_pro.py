@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.139"
+APP_VERSION = "3.140"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5429,7 +5429,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.139';
+  const _cv = '3.140';
   setInterval(function(){
     fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
       if(d.version && d.version !== _cv){ location.reload(true); }
