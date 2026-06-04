@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.139
+WickFill Optimizer v3.140
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4211,6 +4211,8 @@ details summary::-webkit-details-marker{display:none}
     <span class="pill" id="latencyPill">— мс</span>
     <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
     <button class="icon-btn" id="updateBtn" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
+    <button class="icon-btn" onclick="renameDownload()">✏ Rename</button>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
   </div>
 </header>
 
