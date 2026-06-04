@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.137
+WickFill Optimizer v3.138
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,6 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
+APP_VERSION = "3.138"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3506,6 +3507,9 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <script>
 document.documentElement.setAttribute("data-theme",localStorage.getItem("wf_theme")||"light");
 if(window.innerWidth<=700){
@@ -4196,7 +4200,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.137</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.138</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5418,6 +5422,16 @@ document.addEventListener('DOMContentLoaded',function(){
   _loadRecentConfigs();
 });
 
+</script>
+<script>
+(function(){
+  const _cv = '3.138';
+  setInterval(function(){
+    fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+      if(d.version && d.version !== _cv){ location.reload(true); }
+    }).catch(()=>{});
+  }, 15000);
+})();
 </script></body></html>"""
 
 # ═══════════════════════════════════════════════════════════════
@@ -5430,6 +5444,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._html(HTML.encode())
+        elif parsed.path == "/version":
+            self._json({"version": APP_VERSION})
         elif parsed.path == "/opt_status":
             with opt_lock:
                 cr = opt_state.get("chart_path","")
@@ -6058,7 +6074,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.137")
+    print(f"WickFill Optimizer v3.138")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
