@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.141
+WickFill Optimizer v3.142
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.141"
+APP_VERSION = "3.142"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -44,7 +44,7 @@ PARAM_SPACE = {
     "tp_pct":             {"min": 0.5,  "max": 2,  "step": 0.05, "type": "float", "label": "Тейк-профит (%)"},
     "min_wick_pct":       {"min": 30.0, "max": 90.0, "step": 5.0,  "type": "float", "label": "Мин. фитиль (% диапазона)"},
     "min_wick_pct_price": {"min": 0.05, "max": 0.5,  "step": 0.05, "type": "float", "label": "Мин. фитиль (% цены)"},
-    "wick_dir":           {"values": ["both", "upper", "lower"], "type": "cat",  "label": "Направление фитиля"},
+    "wick_dir":           {"values": ["both", "upper", "lower", "bounce"], "type": "cat",  "label": "Направление фитиля"},
     "filter_body_rat":    {"values": [True, False], "type": "bool", "label": "Фильтр: тело < фитиль"},
     "filter_consec":      {"values": [False, True], "type": "bool", "label": "Фильтр: не 2 сигнала подряд"},
     "use_confirm_candle": {"values": [True, False], "type": "bool", "label": "Подтверждающая свеча"},
@@ -517,6 +517,8 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         is_dn_w=dn_w_pct>=mwp and dn_w_pp>=mwpp
         if wd=="upper": is_dn_w=False
         if wd=="lower": is_up_w=False
+        # bounce: нижний фитиль = лонг, верхний = шорт (отталкивание)
+        if wd=="bounce": is_up_w, is_dn_w = is_dn_w, is_up_w
 
         body_ok_up=(not fbr) or (body<up_w)
         body_ok_dn=(not fbr) or (body<dn_w)
@@ -1504,7 +1506,7 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     if not ok:
         return False, f"Ошибка ордера: {order_log}\n" + "\n".join(log_lines)
     dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
-    log_lines.append(f"\n Oppep: {dir_str} {contract} {order_log or ''}")
+    log_lines.append(f"✓ Ордер: {dir_str} {contract} {order_log or ""}")
     return True, "\n".join(log_lines)
 
 
@@ -5429,7 +5431,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.141';
+  const _cv = '3.142';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
