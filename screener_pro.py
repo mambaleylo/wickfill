@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.125
+WickFill Optimizer v3.126
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -3446,6 +3446,8 @@ if(window.innerWidth<=700){
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
+  --card-bg:#fff8f3;
+  --input-bg:rgba(255,248,243,0.8);
   --cream:#FAE6D8;
   --cream2:#f5dece;
   --cream3:#edd8c4;
@@ -3477,6 +3479,8 @@ if(window.innerWidth<=700){
 }
 
 [data-theme="dark"]{
+  --card-bg:#1a1a1a;
+  --input-bg:#111111;
   --cream:#111111;
   --cream2:#1a1a1a;
   --cream3:#222222;
@@ -3586,7 +3590,7 @@ body>*{position:relative;z-index:1}
 .topbar{
   display:flex;align-items:center;gap:10px;
   padding:12px 20px;
-  background:#fff8f3;
+  background:var(--card-bg);
   backdrop-filter:var(--blur);
   -webkit-backdrop-filter:var(--blur);
   border-bottom:1px solid var(--border);
@@ -3641,7 +3645,7 @@ body>*{position:relative;z-index:1}
 /* ── Left sidebar ── */
 .sidebar{
   width:320px;flex-shrink:0;
-  background:#fff8f3;
+  background:var(--card-bg);
   backdrop-filter:var(--blur);
   -webkit-backdrop-filter:var(--blur);
   border-right:1px solid var(--border);
@@ -3652,7 +3656,7 @@ body>*{position:relative;z-index:1}
 
 /* Card */
 .card{
-  background:#fff8f3;
+  background:var(--card-bg);
   border:1px solid var(--border);
   border-radius:var(--radius);
   padding:14px 15px;
@@ -3679,7 +3683,7 @@ body>*{position:relative;z-index:1}
 
 input[type=text],input[type=password],input[type=number],select{
   padding:8px 11px;
-  background:rgba(255,248,243,0.8);
+  background:var(--input-bg,rgba(255,248,243,0.8));
   border:1px solid var(--border);
   border-radius:10px;
   color:var(--text);
@@ -3689,7 +3693,7 @@ input[type=text],input[type=password],input[type=number],select{
   transition:border-color .18s;
   -webkit-appearance:none;appearance:none;
 }
-input:focus,select:focus{outline:none;border-color:#FF8234;background:#fff8f3}
+input:focus,select:focus{outline:none;border-color:#FF8234;background:var(--card-bg)}
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
@@ -3859,7 +3863,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Chart area — fills all remaining space */
 .chart-area{
   flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;
-  background:#FAE6D8;
+  background:var(--cream);
 }
 .chart-placeholder{
   flex:1;display:flex;align-items:center;justify-content:center;
@@ -4113,7 +4117,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.125</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.126</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5863,7 +5867,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.125")
+    print(f"WickFill Optimizer v3.126")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
