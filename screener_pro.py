@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.126
+WickFill Optimizer v3.127
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4170,7 +4170,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.126</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.127</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5659,6 +5659,13 @@ class Handler(BaseHTTPRequestHandler):
             import traceback
             print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
+            # Немедленно сбрасываем флаг running — не ждём пока тред сам дойдёт до выхода
+            with opt_lock:
+                opt_state["running"] = False
+                opt_state["done"] = True
+            with opt_states_lock:
+                for s in list(opt_states.keys()):
+                    opt_states[s]["running"] = False
             self._json({"ok":True})
         elif parsed.path == "/recent_configs":
             import glob as _glob
@@ -5889,17 +5896,18 @@ class Handler(BaseHTTPRequestHandler):
             _eco_mode = bool(params.get("eco_mode", False))
             print(f"{_ts()} [SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
             if _opt_thread and _opt_thread.is_alive():
-                # Доп. проверка: если opt_state говорит что оптимизация не активна
-                # (зависший тред), позволяем принудительный перезапуск
+                # Проверяем реальное состояние: если opt_state["running"]==False —
+                # тред завершается или завис, но уже не активен — разрешаем перезапуск
                 with opt_lock:
                     _actually_running = opt_state.get("running", False)
                 if _actually_running:
                     self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
                 else:
-                    # Зависший тред: сигнализируем ему остановиться и продолжаем
-                    print(f"{_ts()} [SCAN] ⚠ Обнаружен зависший поток, принудительный сброс.", flush=True)
+                    # Тред живой, но running=False (завершается или зависший zombie)
+                    # Даём ему 2с на завершение, потом принудительно продолжаем
+                    print(f"{_ts()} [SCAN] ⚠ Тред жив, но running=False — ожидаем завершения...", flush=True)
                     _opt_stop_flag.set()
-                    _opt_thread.join(timeout=3)
+                    _opt_thread.join(timeout=2)
             # Останавливаем старые SW-треды
             with _sw_state_lock:
                 for s in list(_sw_state.keys()):
@@ -6008,7 +6016,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.126")
+    print(f"WickFill Optimizer v3.127")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
