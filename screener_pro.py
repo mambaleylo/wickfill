@@ -3424,7 +3424,20 @@ HTML = r"""<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
-<script>document.documentElement.setAttribute("data-theme",localStorage.getItem("wf_theme")||"light");</script>
+<script>
+document.documentElement.setAttribute("data-theme",localStorage.getItem("wf_theme")||"light");
+if(window.innerWidth<=700){
+  var _mfix=function(){
+    var s=document.documentElement.style;
+    s.overflow='auto';s.height='auto';s.touchAction='pan-y';
+    var b=document.body;
+    if(b){b.style.overflow='auto';b.style.height='auto';b.style.touchAction='pan-y';b.style.overscrollBehavior='auto';}
+    var a=document.querySelector('.app');
+    if(a){a.style.height='auto';a.style.overflow='visible';a.style.minHeight='100dvh';}
+  };
+  if(document.body) _mfix(); else document.addEventListener('DOMContentLoaded',_mfix);
+}
+</script>
 <title>WickFill · Optimizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -3948,9 +3961,9 @@ details summary::-webkit-details-marker{display:none}
   .topbar{display:none}
 
   /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
-  html,body{overflow:auto !important;height:auto !important;touch-action:pan-y !important}
-  .app{height:auto;min-height:100dvh;overflow:visible}
-  .main{flex-direction:column;flex:1;min-height:0;overflow:visible}
+  html,body{overflow:auto !important;height:auto !important;min-height:100dvh !important;touch-action:pan-y !important;overscroll-behavior:auto !important}
+  .app{height:auto !important;min-height:100dvh;overflow:visible !important;display:flex;flex-direction:column}
+  .main{flex-direction:column;flex:1;min-height:0;overflow:visible !important}
 
   /* ── САЙДБАР: вся ширина, без overflow:hidden ── */
   .sidebar{
