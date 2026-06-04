@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.124
+WickFill Optimizer v3.125
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -3721,13 +3721,21 @@ input[type=number]{-moz-appearance:textfield}
 /* Best stats */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .stat-cell{
-  background:var(--cream);
+  background:var(--cream2);
   border:1px solid var(--border2);
-  border-radius:10px;padding:8px 8px;text-align:center;
+  border-radius:10px;padding:9px 6px;text-align:center;
+  transition:background .3s, border-color .3s;
+  position:relative;overflow:hidden;
 }
-.stat-v{font-size:.95rem;font-weight:700;color:var(--bark);font-family:'DM Mono',monospace;line-height:1}
-.stat-v.good{color:var(--green)}
-.stat-v.bad{color:var(--red)}
+.stat-cell.good{background:var(--green-light);border-color:rgba(42,110,72,.2)}
+.stat-cell.bad{background:var(--red-light);border-color:rgba(139,40,40,.2)}
+.stat-cell.warn{background:var(--yellow-light);border-color:rgba(122,90,32,.2)}
+@keyframes stat-flash{0%{opacity:.5;transform:scale(.97)}100%{opacity:1;transform:scale(1)}}
+.stat-cell.flash{animation:stat-flash .28s ease-out}
+.stat-v{font-size:.92rem;font-weight:700;color:var(--bark);font-family:'DM Mono',monospace;line-height:1}
+.stat-cell.good .stat-v{color:var(--green)}
+.stat-cell.bad .stat-v{color:var(--red)}
+.stat-cell.warn .stat-v{color:var(--yellow)}
 .stat-l{font-size:.58rem;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
 
 /* ── Telegram field ── */
@@ -4037,7 +4045,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.124</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.125</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4124,18 +4132,17 @@ details summary::-webkit-details-marker{display:none}
 
     <div class="action-row">
       <button class="btn-ghost red" id="wfStopBtn" style="display:none" onclick="stopOpt()">
-        ⏹ Стоп
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> Стоп
       </button>
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
-        ⏹ SW
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
       </button>
       <button class="btn-ghost green2" id="chartBtn" style="display:none" onclick="openChart()">
-        📊 График
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0"><polyline points="1,9 4,5 7,7 11,2"/></svg> График
       </button>
       <button class="btn-ghost" onclick="listConfigs()">
-        🗂 Конфиги
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/><line x1="3" y1="4" x2="9" y2="4"/><line x1="3" y1="6.5" x2="9" y2="6.5"/><line x1="3" y1="9" x2="7" y2="9"/></svg> Конфиги
       </button>
-
     </div>
 
     <!-- Best result (desktop) -->
@@ -4883,16 +4890,22 @@ function renderBest(b){
     document.getElementById('mob-tp').textContent='TP '+(b.params?.tp_pct??'—')+'%';
   }
   const stats=[
-    {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>100?'good':eq<100?'bad':''},
-    {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=55?'good':wr<45?'bad':''},
-    {v:tr,l:'Сделок',c:''},
-    {v:dd.toFixed(1)+'%',l:'Max DD',c:dd<15?'good':dd>30?'bad':''},
-    {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.5?'good':'bad'},
+    {v:'$'+eq.toFixed(0),l:'Депозит',c:eq>110?'good':eq<95?'bad':''},
+    {v:wr.toFixed(1)+'%',l:'Winrate',c:wr>=60?'good':wr>=50?'warn':wr<40?'bad':''},
+    {v:tr,l:'Сделок',c:tr>=20?'good':tr<8?'bad':'warn'},
+    {v:dd.toFixed(1)+'%',l:'Max DD',c:dd<15?'good':dd<30?'warn':'bad'},
+    {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.8?'good':pf>=1.2?'warn':'bad'},
     {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
     {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
     {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
-  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell"><div class="stat-v ${s.c}">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
+  document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell ${s.c}"><div class="stat-v">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
+  // flash animation on update
+  document.querySelectorAll('#bestGrid .stat-cell').forEach(el=>{
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  });
   if(b.params){
     document.getElementById('bestParamsWrap').style.display='block';
     const lines=Object.entries(b.params).map(([k,v])=>{
@@ -5782,7 +5795,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.124")
+    print(f"WickFill Optimizer v3.125")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
