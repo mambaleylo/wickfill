@@ -44,7 +44,7 @@ PARAM_SPACE = {
     "tp_pct":             {"min": 0.5,  "max": 2,  "step": 0.05, "type": "float", "label": "Тейк-профит (%)"},
     "min_wick_pct":       {"min": 30.0, "max": 90.0, "step": 5.0,  "type": "float", "label": "Мин. фитиль (% диапазона)"},
     "min_wick_pct_price": {"min": 0.05, "max": 0.5,  "step": 0.05, "type": "float", "label": "Мин. фитиль (% цены)"},
-    "wick_dir":           {"values": ["both", "upper", "lower", "bounce"], "type": "cat",  "label": "Направление фитиля"},
+    "wick_dir":           {"values": ["bounce"], "type": "cat",  "label": "Направление фитиля"},
     "filter_body_rat":    {"values": [True, False], "type": "bool", "label": "Фильтр: тело < фитиль"},
     "filter_consec":      {"values": [False, True], "type": "bool", "label": "Фильтр: не 2 сигнала подряд"},
     "use_confirm_candle": {"values": [True, False], "type": "bool", "label": "Подтверждающая свеча"},
