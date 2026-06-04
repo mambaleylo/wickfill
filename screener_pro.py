@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.115
+WickFill Optimizer v3.116
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -1054,7 +1054,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 
                 results = pmap_fn(candidates); results.sort(key=lambda x: -x["fitness"])
                 if _eco_mode and not (stop_flag and stop_flag()):
-                    for _ in range(3):  # 3×50мс = 150мс, прерывается по stop_flag
+                    for _ in range(9):  # 9×50мс = 450мс, прерывается по stop_flag
                         if stop_flag and stop_flag(): break
                         time.sleep(0.05)
                 _param_dt = round(time.time() - _param_t0, 3)
@@ -1094,7 +1094,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
 
             results=pmap_fn(candidates); results.sort(key=lambda x:-x["fitness"])
             if _eco_mode and not (stop_flag and stop_flag()):
-                for _ in range(3):  # прерываемый sleep
+                for _ in range(9):  # прерываемый sleep 450мс
                     if stop_flag and stop_flag(): break
                     time.sleep(0.05)
             _param_dt = round(time.time() - _param_t0, 3)
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.115</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.116</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -5691,7 +5691,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.115")
+    print(f"WickFill Optimizer v3.116")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
