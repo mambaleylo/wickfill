@@ -1504,7 +1504,7 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     if not ok:
         return False, f"Ошибка ордера: {order_log}\n" + "\n".join(log_lines)
     dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
-    log_lines.append(f"✓ Ордер: {dir_str} {contract} {order_log or ""}")
+    log_lines.append(f"\n Oppep: {dir_str} {contract} {order_log or ''}")
     return True, "\n".join(log_lines)
 
 
