@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.123
+WickFill Optimizer v3.124
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -4037,7 +4037,7 @@ details summary::-webkit-details-marker{display:none}
   <div class="topbar-logo">
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
-    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.123</span>
+    <span style="font-size:.72rem;font-weight:400;color:var(--text3)">v3.124</span>
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
@@ -4572,6 +4572,7 @@ function startOpt(){
       document.getElementById('wfBtn').disabled=true;
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
+      const _rp=document.getElementById('recentPanel');if(_rp)_rp.style.display='none';
       const _cf=document.getElementById('chartFrame');
       const _cp=document.getElementById('chartPlaceholder');
       if(_cf){_cf.style.display='none';_cf.src='about:blank';_chartFrameLoaded=false;}
@@ -4594,6 +4595,7 @@ function stopOpt(){
   document.getElementById('wfBtn').disabled=false;
   document.getElementById('wfStopBtn').style.display='none';
   document.getElementById('swStopBtn').style.display='flex';
+  const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs)_rp.style.display='block';
   addLogLine('⏹ Остановлен','warn');
 }
 function stopSW(){
@@ -4769,6 +4771,7 @@ function poll(){
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
       document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
+      const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs)_rp.style.display='block';
     }
   }).catch(()=>{});
 }
@@ -5154,6 +5157,7 @@ document.addEventListener('DOMContentLoaded',function(){
       };
       list.appendChild(btn);
     });
+    panel.dataset.hasConfigs='1';
     panel.style.display='block';
   }).catch(()=>{});
 });
@@ -5778,7 +5782,7 @@ if __name__ == "__main__":
             try: self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEPORT,1)
             except (AttributeError,OSError): pass
             super().server_bind()
-    print(f"WickFill Optimizer v3.123")
+    print(f"WickFill Optimizer v3.124")
     print(f"  Локально:  http://localhost:{port}")
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
