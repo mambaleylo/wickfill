@@ -1461,8 +1461,10 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --green:#3a7d52;--red:#a03030;--yellow:#8a6a1a;
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
-html,body{{height:100%;background:#1e1a17;color:#d4c8bc;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
+html,body{{height:100%;background:#111111;color:#F5F5F5;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
 [data-theme="light"] body{{background:#FAE6D8;color:#1e1209}}
+[data-theme="dark"] body{{background:#111111;color:#F5F5F5}}
+[data-theme="dark"] #tooltip{{background:rgba(26,26,26,.97);border:1px solid rgba(245,245,245,.12);color:#F5F5F5;box-shadow:0 4px 16px rgba(0,0,0,.5)}}
 [data-theme="light"] #tooltip{{background:rgba(237,232,225,.98);border:1px solid rgba(60,45,30,.14);color:#2b2620;box-shadow:0 4px 16px rgba(40,30,20,.10)}}
 .body{{display:flex;flex:1;min-height:0}}
 #canvas-wrap{{flex:1;position:relative;overflow:hidden}}
@@ -1533,7 +1535,7 @@ function render(){{
   const cx=i=>PAD_L+(i+0.5)*cw;
   // Theme-aware colors
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  const clrBg        = isDark ? '#1e1a17' : '#FAE6D8';
+  const clrBg        = isDark ? '#111111' : '#FAE6D8';
   const clrAxis      = isDark ? 'rgba(255,255,255,.12)' : 'rgba(30,40,60,.12)';
   const clrGrid      = isDark ? 'rgba(255,255,255,.05)' : 'rgba(30,40,60,.05)';
   const clrPriceText = isDark ? '#9a8e83' : '#6a7a8e';
@@ -3475,31 +3477,86 @@ if(window.innerWidth<=700){
 }
 
 [data-theme="dark"]{
-  --cream:#1a1612;
-  --cream2:#221e19;
-  --cream3:#2a2520;
-  --sand:#3d3630;
-  --sand2:#504840;
-  --warm:#8c7b6b;
-  --bark:#c9bfb0;
-  --text:#f0ebe4;
-  --text2:#c9bfb0;
-  --text3:#8c7b6b;
-  --glass:rgba(26,22,18,0.82);
-  --glass2:rgba(34,30,25,0.65);
-  --shadow:0 2px 20px rgba(0,0,0,0.35);
-  --shadow2:0 8px 40px rgba(0,0,0,0.45);
-  --accent:#a09080;
-  --green:#5a9e6f;
-  --green-light:rgba(90,158,111,0.12);
-  --red:#c05050;
-  --red-light:rgba(192,80,80,0.12);
+  --cream:#111111;
+  --cream2:#1a1a1a;
+  --cream3:#222222;
+  --sand:#2e2e2e;
+  --sand2:#444444;
+  --warm:#888888;
+  --bark:#F5F5F5;
+  --text:#F5F5F5;
+  --text2:#cccccc;
+  --text3:#888888;
+  --glass:rgba(17,17,17,0.95);
+  --glass2:rgba(26,26,26,0.90);
+  --shadow:0 2px 20px rgba(0,0,0,0.6);
+  --shadow2:0 8px 40px rgba(0,0,0,0.7);
+  --accent:#8B2508;
+  --green:#7ab84a;
+  --green-light:rgba(122,184,74,0.12);
+  --red:#8B2508;
+  --red-light:rgba(139,37,8,0.2);
   --blue:#5a7fa0;
   --blue-light:rgba(90,127,160,0.12);
   --yellow:#b09050;
   --yellow-light:rgba(176,144,80,0.12);
-  --border:rgba(255,255,255,0.08);
-  --border2:rgba(255,255,255,0.05);
+  --border:rgba(245,245,245,0.10);
+  --border2:rgba(245,245,245,0.06);
+}
+
+[data-theme="dark"] .card,
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .topbar,
+[data-theme="dark"] #recentPanel{
+  background:#1a1a1a !important;
+}
+[data-theme="dark"] input[type=text],
+[data-theme="dark"] input[type=password],
+[data-theme="dark"] input[type=number],
+[data-theme="dark"] select{
+  background:#111111 !important;
+  color:#F5F5F5 !important;
+  border-color:rgba(245,245,245,0.12) !important;
+}
+[data-theme="dark"] input:focus,
+[data-theme="dark"] select:focus{
+  border-color:#8B2508 !important;
+  background:#1a1a1a !important;
+}
+[data-theme="dark"] .btn-primary{
+  background:#8B2508 !important;
+  box-shadow:0 4px 16px rgba(139,37,8,.4),inset 0 1px 0 rgba(255,255,255,.08) !important;
+}
+[data-theme="dark"] .btn-primary:hover:not(:disabled){
+  background:#a52e0a !important;
+  box-shadow:0 6px 20px rgba(139,37,8,.5) !important;
+}
+[data-theme="dark"] .chart-area{
+  background:#111111 !important;
+}
+[data-theme="dark"] .eco-row{
+  background:rgba(139,37,8,0.1) !important;
+  border-color:rgba(139,37,8,0.25) !important;
+}
+[data-theme="dark"] .eco-row b{ color:#e07060 !important; }
+[data-theme="dark"] .eco-row small{ color:#a05040 !important; }
+[data-theme="dark"] .toggle{ background:#8B2508 !important; }
+[data-theme="dark"] .dot-live,
+[data-theme="dark"] .topbar-logo .dot-live{
+  background:#8B2508 !important;
+  box-shadow:0 0 0 2px rgba(139,37,8,0.25) !important;
+}
+[data-theme="dark"] .stat-cell.good{
+  background:rgba(122,184,74,0.1) !important;
+  border-color:rgba(122,184,74,0.2) !important;
+}
+[data-theme="dark"] .stat-cell.good .stat-v{ color:#7ab84a !important; }
+[data-theme="dark"] .sym-card.active{ border-color:#8B2508 !important; }
+[data-theme="dark"] .api-pill,
+[data-theme="dark"] .pill.green{
+  background:rgba(122,184,74,0.12) !important;
+  color:#7ab84a !important;
+  border-color:rgba(122,184,74,0.2) !important;
 }
 
 html,body{
@@ -5373,7 +5430,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type","text/html;charset=utf-8"); self.end_headers()
                 req_theme = qs.get("theme", ["light"])[0]
-                _bg   = "#1e1a17" if req_theme == "dark" else "#FAE6D8"
+                _bg   = "#111111" if req_theme == "dark" else "#FAE6D8"
                 _fg   = "#d4c8bc" if req_theme == "dark" else "#252b35"
                 _sub  = "#7a7069" if req_theme == "dark" else "#848d9e"
                 self.wfile.write(f"<html><body style='background:{_bg};color:{_fg};font-family:system-ui;padding:40px'><h2>⏳ График ещё не готов</h2><p style='color:{_sub};margin-top:10px'>Запустите оптимизацию и подождите первого цикла.</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>".encode())
