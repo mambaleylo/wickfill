@@ -168,10 +168,13 @@ _live_candle_lock  = threading.Lock()
 def _live_candle_updater():
     """Фоновый поток: каждые 3 секунды обновляет незакрытую свечу.
     Если chart_candles устарели (последняя свеча > 2 интервалов назад) —
-    перегружает исторические свечи с API."""
+    перегружает исторические свечи с API.
+    При сетевых ошибках делает паузу с экспоненциальным backoff (до 60с)."""
     _last_refresh = 0  # время последней полной перезагрузки истории
+    _net_errors = 0    # счётчик последовательных сетевых ошибок
 
     while True:
+        sleep_time = 3
         try:
             with opt_lock:
                 symbol   = opt_state.get("chart_symbol", "")
@@ -210,15 +213,18 @@ def _live_candle_updater():
                                     opt_state["chart_signals"]  = sigs
                                     cc = new_cc
                                     _last_refresh = now
+                                    _net_errors = 0
                                     print(f"{_ts()} [SW] ✅ Перезагружено {len(fresh)} свечей", flush=True)
                                 else:
                                     print(f"{_ts()} [SW] ⚠ Символ сменился во время загрузки, данные отброшены", flush=True)
                     except Exception as e:
+                        _net_errors += 1
                         print(f"{_ts()} [SW] ❌ Ошибка перезагрузки: {e}", flush=True)
 
                 # Обновляем незакрытую свечу
                 c = _fetch_current_candle(symbol, tf)
                 if c:
+                    _net_errors = 0  # сброс счётчика ошибок при успехе
                     key = f"{symbol}_{tf}"
                     with _live_candle_lock:
                         _live_candle_cache[key] = dict(c, _fetched_at=time.time())
@@ -245,9 +251,22 @@ def _live_candle_updater():
                                 elif c["t"] > last_closed_t:
                                     # Строго больше: не дублируем закрытую свечу
                                     opt_state["chart_candles"] = cc2 + [live_c]
+                else:
+                    _net_errors += 1
+
+            # Адаптивная пауза: при сетевых ошибках увеличиваем интервал до 60с
+            if _net_errors > 0:
+                sleep_time = min(3 * (2 ** min(_net_errors - 1, 4)), 60)
+                if _net_errors == 1:
+                    print(f"{_ts()} [SW] ⚠ Нет соединения, пауза {sleep_time}с...", flush=True)
+            else:
+                sleep_time = 3
+
         except Exception as e:
+            _net_errors += 1
+            sleep_time = min(3 * (2 ** min(_net_errors - 1, 4)), 60)
             print(f"{_ts()} [SW] ⚠ {e}", flush=True)
-        time.sleep(3)
+        time.sleep(sleep_time)
 
 # Запускаем фоновый поток сразу
 threading.Thread(target=_live_candle_updater, daemon=True).start()
@@ -870,32 +889,58 @@ def _fetch_candles(symbol, tf, days):
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
         print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
-        try:
-            r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
-                params={"contract": symbol, "interval": tf,
-                        "from": current_from, "limit": LIMIT}, timeout=15)
-            if r.status_code != 200:
-                last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
-                print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True); break
-            data = r.json()
-            if not isinstance(data, list):
-                last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
-                print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True); break
-            if not data: break
-            for c in data:
-                t = int(c.get("t", 0))
-                if t < since - interval_sec: continue  # мягкий порог
-                all_candles.append({"t": t, "open": float(c["o"]),
-                    "high": float(c["h"]), "low": float(c["l"]), "close": float(c["c"])})
-            last_t = int(data[-1].get("t", 0))
-            next_from = last_t + interval_sec
-            if next_from <= current_from: break
-            if last_t >= now - interval_sec: break
-            current_from = next_from
-            time.sleep(0.05)
-        except Exception as e:
-            last_exception = str(e)
-            print(f"\n{_ts()} [fetch] ❌ Ошибка: {e}", flush=True); break
+        _fetch_attempt = 0
+        _fetch_max_attempts = 5
+        _fetch_ok = False
+        while _fetch_attempt < _fetch_max_attempts:
+            try:
+                r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+                    params={"contract": symbol, "interval": tf,
+                            "from": current_from, "limit": LIMIT}, timeout=15)
+                if r.status_code != 200:
+                    last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                    if r.status_code in (429, 502, 503, 504):
+                        _wait = min(2 ** _fetch_attempt * 2, 60)
+                        print(f"\n{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с...", flush=True)
+                        time.sleep(_wait)
+                        _fetch_attempt += 1
+                        continue
+                    print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True)
+                    _fetch_ok = False
+                    break
+                data = r.json()
+                if not isinstance(data, list):
+                    last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
+                    print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True)
+                    _fetch_ok = False
+                    break
+                if not data:
+                    _fetch_ok = True
+                    break
+                for c in data:
+                    t = int(c.get("t", 0))
+                    if t < since - interval_sec: continue  # мягкий порог
+                    all_candles.append({"t": t, "open": float(c["o"]),
+                        "high": float(c["h"]), "low": float(c["l"]), "close": float(c["c"])})
+                last_t = int(data[-1].get("t", 0))
+                next_from = last_t + interval_sec
+                if next_from <= current_from:
+                    _fetch_ok = True; break
+                if last_t >= now - interval_sec:
+                    _fetch_ok = True; break
+                current_from = next_from
+                time.sleep(0.05)
+                _fetch_ok = True
+                break
+            except Exception as e:
+                last_exception = str(e)
+                _wait = min(2 ** _fetch_attempt * 3, 60)
+                print(f"\n{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}/{_fetch_max_attempts}): {e}, повтор через {_wait}с...", flush=True)
+                time.sleep(_wait)
+                _fetch_attempt += 1
+        if not _fetch_ok and _fetch_attempt >= _fetch_max_attempts:
+            print(f"\n{_ts()} [fetch] ❌ Превышено кол-во попыток. Последняя ошибка: {last_exception or last_http_error}", flush=True)
+            break
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
@@ -924,51 +969,60 @@ def _fetch_current_candle(symbol, tf):
     """Возвращает текущую (возможно незакрытую) свечу.
     Gate.io при запросе без параметра 'to' отдаёт последние N свечей,
     где последняя — текущая (незакрытая). Сравниваем её timestamp
-    с предпоследней чтобы убедиться что это новый интервал."""
-    try:
-        interval_sec = TF_SECONDS.get(tf, 3600)
-        r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
-            params={"contract": symbol, "interval": tf, "limit": 3}, timeout=8)
-        if r.status_code != 200:
-            print(f"[live_candle] HTTP {r.status_code}", flush=True)
-            return None
-        data = r.json()
-        if not data or len(data) < 2:
-            print(f"[live_candle] мало данных: {data}", flush=True)
-            return None
-        last = data[-1]
-        prev = data[-2]
-        last_t = int(last.get("t", 0))
-        prev_t = int(prev.get("t", 0))
-        # Текущая незакрытая свеча — это последняя, у неё t >= prev_t + interval_sec
-        # ИЛИ просто берём её всегда — она либо закрыта либо нет,
-        # в любом случае это самая свежая информация
-        now = int(time.time())
-        candle_open_t = (now // interval_sec) * interval_sec
-        # Если последняя свеча из API — это уже текущий интервал, берём её
-        if last_t >= candle_open_t:
-            c = last
-        else:
-            # Gate.io ещё не выдал текущую — строим из тикера
-            r2 = requests.get(f"{GATE_API}/futures/usdt/tickers",
-                params={"contract": symbol}, timeout=5)
-            if r2.status_code != 200: return None
-            td = r2.json()
-            if not td: return None
-            price = float(td[0].get("last", 0))
-            open_p = float(last.get("c", price))
-            print(f"[live_candle] тикер: price={price} open={open_p} t={candle_open_t}", flush=True)
-            return {"t": candle_open_t, "open": open_p,
-                    "high": max(open_p, price), "low": min(open_p, price),
-                    "close": price, "live": True}
-        result = {"t": last_t, "open": float(c["o"]),
-                  "high": float(c["h"]), "low": float(c["l"]),
-                  "close": float(c["c"]), "live": True}
-        print(f"[live_candle] OK t={last_t} c={result['close']} (now={now} interval_t={candle_open_t})", flush=True)
-        return result
-    except Exception as e:
-        print(f"[live_candle] exception: {e}", flush=True)
-        return None
+    с предпоследней чтобы убедиться что это новый интервал.
+    При сетевых ошибках делает до 3 попыток с паузами."""
+    _max_retries = 3
+    for _attempt in range(_max_retries):
+        try:
+            interval_sec = TF_SECONDS.get(tf, 3600)
+            r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+                params={"contract": symbol, "interval": tf, "limit": 3}, timeout=8)
+            if r.status_code != 200:
+                print(f"[live_candle] HTTP {r.status_code}", flush=True)
+                if _attempt < _max_retries - 1:
+                    time.sleep(2 ** _attempt)
+                    continue
+                return None
+            data = r.json()
+            if not data or len(data) < 2:
+                print(f"[live_candle] мало данных: {data}", flush=True)
+                return None
+            last = data[-1]
+            prev = data[-2]
+            last_t = int(last.get("t", 0))
+            prev_t = int(prev.get("t", 0))
+            # Текущая незакрытая свеча — это последняя, у неё t >= prev_t + interval_sec
+            # ИЛИ просто берём её всегда — она либо закрыта либо нет,
+            # в любом случае это самая свежая информация
+            now = int(time.time())
+            candle_open_t = (now // interval_sec) * interval_sec
+            # Если последняя свеча из API — это уже текущий интервал, берём её
+            if last_t >= candle_open_t:
+                c = last
+            else:
+                # Gate.io ещё не выдал текущую — строим из тикера
+                r2 = requests.get(f"{GATE_API}/futures/usdt/tickers",
+                    params={"contract": symbol}, timeout=5)
+                if r2.status_code != 200: return None
+                td = r2.json()
+                if not td: return None
+                price = float(td[0].get("last", 0))
+                open_p = float(last.get("c", price))
+                print(f"[live_candle] тикер: price={price} open={open_p} t={candle_open_t}", flush=True)
+                return {"t": candle_open_t, "open": open_p,
+                        "high": max(open_p, price), "low": min(open_p, price),
+                        "close": price, "live": True}
+            result = {"t": last_t, "open": float(c["o"]),
+                      "high": float(c["h"]), "low": float(c["l"]),
+                      "close": float(c["c"]), "live": True}
+            print(f"[live_candle] OK t={last_t} c={result['close']} (now={now} interval_t={candle_open_t})", flush=True)
+            return result
+        except Exception as e:
+            _wait = 2 ** _attempt
+            print(f"[live_candle] exception (попытка {_attempt+1}/{_max_retries}): {e}, пауза {_wait}с...", flush=True)
+            if _attempt < _max_retries - 1:
+                time.sleep(_wait)
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 # COORDINATE DESCENT
@@ -4396,6 +4450,13 @@ function checkApi(){
   }).catch(()=>{pill.textContent='офлайн';pill.className='pill';});
 }
 checkApi();setInterval(checkApi,60000);
+// Каждую секунду обновляем текст "нет соединения Xs"
+setInterval(()=>{ if(_connLost) _setConnStatus(false); },1000);
+// Стандартные browser events как доп. триггер
+window.addEventListener('online', ()=>{ if(_connLost){ poll(); } });
+window.addEventListener('offline', ()=>{
+  if(!_connLost){ _connLost=true; _connLostAt=Date.now(); _setConnStatus(false); }
+});
 
 // Нормализует символы: "BTC, ETH" → "BTC_USDT, ETH_USDT" (добавляет _USDT если нет суффикса)
 function _normalizeSymbols(raw){
@@ -4659,7 +4720,13 @@ function startOpt(){
       if(_cp){_cp.style.display='flex';}
       startTs=Date.now();
       function scheduleNext(){
-        const interval=document.hidden?5000:1500;
+        let interval;
+        if (_connLost) {
+          // При потере связи: экспоненциальный backoff, макс 15с
+          interval = Math.min(_MIN_POLL_INTERVAL * Math.pow(1.8, Math.min(_connRetryCount, 6)), _MAX_POLL_INTERVAL);
+        } else {
+          interval = document.hidden ? 5000 : _MIN_POLL_INTERVAL;
+        }
         polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
       }
       scheduleNext();
@@ -4687,6 +4754,13 @@ function _loadChartFrame(sym){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
   if(!frame) return;
+  // Если офлайн — помечаем что нужна перезагрузка, но не трогаем iframe
+  if(_connLost){
+    frame._pendingReload=true;
+    frame._pendingSym=sym||_activeChart||'';
+    return;
+  }
+  frame._pendingReload=false;
   const theme=document.documentElement.getAttribute('data-theme')||'light';
   const symParam=sym?'&symbol='+encodeURIComponent(sym):'';
   if(!_chartFrameLoaded){
@@ -4746,11 +4820,54 @@ function updateScript(){
     });
 }
 
+/* ── Connection state tracking ── */
+let _connLost = false;
+let _connLostAt = 0;
+let _connRetryCount = 0;
+const _MAX_POLL_INTERVAL = 15000;
+const _MIN_POLL_INTERVAL = 1500;
+
+function _setConnStatus(online) {
+  let ind = document.getElementById('connIndicator');
+  if (!ind) {
+    ind = document.createElement('div');
+    ind.id = 'connIndicator';
+    ind.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:9999;padding:7px 14px;border-radius:20px;font-size:.78rem;font-weight:600;display:none;box-shadow:0 2px 10px rgba(0,0,0,.15);transition:opacity .3s';
+    document.body.appendChild(ind);
+  }
+  if (online) {
+    ind.style.display = 'none';
+  } else {
+    ind.style.background = 'rgba(139,37,8,0.92)';
+    ind.style.color = '#fff';
+    ind.style.display = 'block';
+    const secs = Math.round((Date.now() - _connLostAt) / 1000);
+    ind.textContent = '⚡ Нет соединения' + (secs > 5 ? ' (' + secs + 'с)' : '');
+  }
+}
+
+function _onReconnect() {
+  _connLost = false;
+  _connRetryCount = 0;
+  _setConnStatus(true);
+  addLogLine('✅ Соединение восстановлено', 'ok');
+  // Перезагрузить график если был офлайн или отложен
+  const frame = document.getElementById('chartFrame');
+  if (frame && (frame._pendingReload || (frame.style.display !== 'none' && frame.src !== 'about:blank'))) {
+    _chartFrameLoaded = false;
+    _loadChartFrame(frame._pendingSym || _activeChart || undefined);
+  }
+}
+
 /* ── Poll ── */
 function poll(){
   const useMulti=_symList.length>1;
   const endpoint=useMulti?'/opt_status_all':'/opt_status';
-  fetch(endpoint).then(r=>r.json()).then(d=>{
+  fetch(endpoint,{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    const wasLost = _connLost;
+    _connLost = false;
+    _connRetryCount = 0;
+    if (wasLost) _onReconnect();
     // Merge multi-symbol states
     if(useMulti&&d.states){
       for(const sym of _symList){
@@ -4854,7 +4971,15 @@ function poll(){
       document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
       const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs)_rp.style.display='block';
     }
-  }).catch(()=>{});
+  }).catch(()=>{
+    if (!_connLost) {
+      _connLost = true;
+      _connLostAt = Date.now();
+      addLogLine('⚠ Потеряно соединение с сервером...', 'warn');
+    }
+    _connRetryCount++;
+    _setConnStatus(false);
+  });
 }
 
 /* ── Cycle cards ── */
@@ -5764,7 +5889,17 @@ class Handler(BaseHTTPRequestHandler):
             _eco_mode = bool(params.get("eco_mode", False))
             print(f"{_ts()} [SCAN] infinite={params.get('infinite')} symbol={params.get('wf_symbol')} tf={params.get('wf_tf')}", flush=True)
             if _opt_thread and _opt_thread.is_alive():
-                self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
+                # Доп. проверка: если opt_state говорит что оптимизация не активна
+                # (зависший тред), позволяем принудительный перезапуск
+                with opt_lock:
+                    _actually_running = opt_state.get("running", False)
+                if _actually_running:
+                    self._json({"ok":False,"msg":"Оптимизация уже запущена. Сначала нажмите Стоп."}); return
+                else:
+                    # Зависший тред: сигнализируем ему остановиться и продолжаем
+                    print(f"{_ts()} [SCAN] ⚠ Обнаружен зависший поток, принудительный сброс.", flush=True)
+                    _opt_stop_flag.set()
+                    _opt_thread.join(timeout=3)
             # Останавливаем старые SW-треды
             with _sw_state_lock:
                 for s in list(_sw_state.keys()):
