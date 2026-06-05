@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.166
+WickFill Optimizer v3.167
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.166"
+APP_VERSION = "3.167"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4651,11 +4651,10 @@ function checkApi(){
   const pill=document.getElementById('latencyPill');
   const txt=document.getElementById('latencyText');
   if(txt) txt.textContent='...'; else if(pill) pill.textContent='...';
-  pill&&(pill.className='pill');
   fetch('/ping').then(r=>r.json()).then(d=>{
-    if(d.ok){if(txt)txt.textContent=d.ms+'мс';else if(pill)pill.textContent=d.ms+'мс';pill&&(pill.className='pill green');}
-    else{if(txt)txt.textContent=d.error||'err';else if(pill)pill.textContent=d.error||'err';pill&&(pill.className='pill');}
-  }).catch(()=>{if(txt)txt.textContent='офлайн';else if(pill)pill.textContent='офлайн';pill&&(pill.className='pill');});
+    if(d.ok){if(txt)txt.textContent=d.ms+'мс';else if(pill)pill.textContent=d.ms+'мс';pill&&pill.classList.toggle('green',true);}
+    else{if(txt)txt.textContent=d.error||'err';else if(pill)pill.textContent=d.error||'err';pill&&pill.classList.toggle('green',false);}
+  }).catch(()=>{if(txt)txt.textContent='офлайн';else if(pill)pill.textContent='офлайн';pill&&pill.classList.toggle('green',false);});
 }
 checkApi();setInterval(checkApi,60000);
 // Каждую секунду обновляем текст "нет соединения Xs"
