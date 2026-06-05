@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.176"
+APP_VERSION = "3.177"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1248,6 +1248,34 @@ def _send_telegram(cfg, text):
                 return False
     return False
 
+def _send_ntfy(cfg, text):
+    """Резервный канал уведомлений через ntfy.sh (open-source push)."""
+    topic = cfg.get("ntfy_topic", "")
+    if not topic: return False
+    server = cfg.get("ntfy_server", "https://ntfy.sh")
+    url = f"{server}/{topic}"
+    # Убираем HTML-теги для plain text
+    import re as _re
+    plain = _re.sub(r"<[^>]+>", "", text).strip()
+    try:
+        resp = requests.post(url, data=plain.encode("utf-8"),
+                             headers={"Title": "WickFill", "Priority": "high",
+                                      "Tags": "chart_increasing"},
+                             timeout=10)
+        if resp.ok:
+            return True
+        print(f"[ntfy] ERROR {resp.status_code}: {resp.text[:100]}", flush=True)
+        return False
+    except Exception as e:
+        print(f"[ntfy] failed: {e}", flush=True)
+        return False
+
+def _send_alert(cfg, text):
+    """Шлёт в Telegram и/или ntfy — оба канала независимо."""
+    tg_ok = _send_telegram(cfg, text)
+    ntfy_ok = _send_ntfy(cfg, text)
+    return tg_ok or ntfy_ok
+
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leverage=None):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
     # Показываем время ЗАКРЫТИЯ свечи (открытие + интервал), в московском времени (UTC+3)
@@ -1264,7 +1292,7 @@ def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leve
         f"❌ Стоп-лосс: <b>{sl:.6g}</b>"
         f"{lev_str}"
     )
-    return _send_telegram(cfg, text)
+    return _send_alert(cfg, text)
 
 # ═══════════════════════════════════════════════════════════════
 # GATE.IO AUTO-TRADING — USDT-M фьючерсы
@@ -2001,7 +2029,7 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
                 f"📤 Выход:  <b>{exit_p:.6g}</b>\n"
                 f"🕐 {dt} (МСК)"
             )
-            ok = _send_telegram(alert_cfg, text)
+            ok = _send_alert(alert_cfg, text)
             status = "✓" if ok else "✕"
             print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
 
@@ -4624,6 +4652,13 @@ details summary::-webkit-details-marker{display:none}
             <button class="btn-tg-test" id="testMailBtn" onclick="sendTestEmail()">Тест</button>
           </div>
         </div>
+        <div class="field" style="margin-top:6px">
+          <label>ntfy.sh топик <span style="font-weight:400;color:var(--text3)">(резерв)</span></label>
+          <div class="tg-row">
+            <input type="text" id="al_ntfy_topic" placeholder="wickfill_мой_топик">
+            <button class="btn-tg-test" onclick="sendTestNtfy()">Тест</button>
+          </div>
+        </div>
         <div class="alert-msg" id="alertStatusMsg"></div>
       </div>
     </details>
@@ -4856,7 +4891,9 @@ function getAlertCfg(){
   const gk=document.getElementById('gate_key').value.trim();
   const gs=document.getElementById('gate_secret').value.trim();
   const gp=parseFloat(document.getElementById('gate_pct').value)||0;
+  const ntfy=document.getElementById('al_ntfy_topic').value.trim();
   const base=(t&&c)?{tg_token:t,tg_chat_id:c}:{};
+  if(ntfy) base.ntfy_topic=ntfy;
   const gauto=document.getElementById('gate_auto_enabled')?.checked||false;
   const gtp=parseFloat(document.getElementById('gate_auto_tp_pct')?.value)||0;
   const gsl=parseFloat(document.getElementById('gate_auto_sl_pct')?.value)||0;
@@ -4870,6 +4907,17 @@ function getAlertCfg(){
   return Object.keys(base).length?base:null;
 }
 
+function sendTestNtfy(){
+  const topic=document.getElementById('al_ntfy_topic').value.trim();
+  if(!topic){alert('Введи ntfy топик');return;}
+  const msg=document.getElementById('alertStatusMsg');
+  if(msg){msg.textContent='Отправляю...';msg.style.color='';}
+  fetch('/test_ntfy',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ntfy_topic:topic})})
+    .then(r=>r.json()).then(d=>{
+      if(msg){msg.textContent=d.ok?'✅ ntfy доставлен':'❌ '+d.error;msg.style.color=d.ok?'':'#e05050';}
+    }).catch(e=>{if(msg){msg.textContent='❌ '+e;msg.style.color='#e05050';}});
+}
 function testGateConnection(){
   const gk=document.getElementById('gate_key').value.trim();
   const gs=document.getElementById('gate_secret').value.trim();
@@ -5981,6 +6029,11 @@ class Handler(BaseHTTPRequestHandler):
                         cc = list(opt_state.get("chart_candles", []))
                         cs = list(opt_state.get("chart_signals", []))
             self._json({"ok": True, "candles": cc, "signals": cs})
+        elif parsed.path == "/test_ntfy":
+            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+            cfg = {"ntfy_topic": body.get("ntfy_topic","")}
+            ok = _send_ntfy(cfg, "🔔 <b>WickFill</b> — тест ntfy.sh")
+            self._json({"ok": ok, "error": "" if ok else "не удалось отправить"})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
