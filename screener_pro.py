@@ -27,7 +27,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.171"
+APP_VERSION = "3.172"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4520,24 +4520,23 @@ details summary::-webkit-details-marker{display:none}
       <div class="prog-param" id="progParam"></div>
     </div>
 
-    <!-- Main action buttons -->
-    <button class="btn-primary" id="wfBtn" onclick="startOpt()">
-      <span>🔍</span> Запустить оптимизацию
-    </button>
-
-    <div style="display:flex;align-items:center;gap:9px;padding:7px 10px;margin-top:4px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;user-select:none" onclick="var c=document.getElementById('ecoModeChk');c.checked=!c.checked;fetch('/set_eco?v='+(c.checked?'1':'0'));var sw=document.getElementById('ecoSw');sw.classList.toggle('on',c.checked)" title="1 ядро + паузы между итерациями. Меньше нагрев, дольше работает.">
-      <input type="checkbox" id="ecoModeChk" style="display:none">
-      <div id="ecoSw" class="toggle-sw" style="display:block"></div>
-      <div style="flex:1">
-        <div style="font-size:.8rem;color:var(--text2);font-weight:500">🍃 Режим экономии</div>
-        <div style="font-size:.68rem;color:var(--text3);margin-top:1px">Меньше нагрев · дольше перебор</div>
+    <!-- Main action buttons: Старт + Эко на одной строке; Стоп заменяет Старт -->
+    <div style="display:flex;align-items:stretch;gap:8px;margin-bottom:4px">
+      <button class="btn-primary" id="wfBtn" onclick="startOpt()" style="flex:1;min-width:0">
+        <span>🔍</span> Запустить оптимизацию
+      </button>
+      <button class="btn-ghost red" id="wfStopBtn" style="display:none;flex:1;min-width:0" onclick="stopOpt()">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> Стоп
+      </button>
+      <!-- Eco toggle compact -->
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:6px 10px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;user-select:none;flex-shrink:0" onclick="var c=document.getElementById('ecoModeChk');c.checked=!c.checked;fetch('/set_eco?v='+(c.checked?'1':'0'));var sw=document.getElementById('ecoSw');sw.classList.toggle('on',c.checked)" title="1 ядро + паузы между итерациями. Меньше нагрев, дольше работает.">
+        <input type="checkbox" id="ecoModeChk" style="display:none">
+        <div id="ecoSw" class="toggle-sw" style="display:block"></div>
+        <div style="font-size:.62rem;color:var(--text3);margin-top:2px">🍃 Эко</div>
       </div>
     </div>
 
     <div class="action-row">
-      <button class="btn-ghost red" id="wfStopBtn" style="display:none" onclick="stopOpt()">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> Стоп
-      </button>
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
       </button>
@@ -5002,7 +5001,7 @@ function startOpt(){
       document.getElementById('progBar').style.width='0%';
       document.getElementById('progParam').textContent='';
       document.getElementById('swStopBtn').style.display='none';
-      document.getElementById('wfBtn').disabled=true;
+      document.getElementById('wfBtn').style.display='none';
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
       const _rp=document.getElementById('recentPanel');if(_rp)_rp.style.display='none';
@@ -5031,7 +5030,7 @@ function startOpt(){
 function stopOpt(){
   fetch('/scan_stop').then(()=>{});
   if(polling){clearTimeout(polling);polling=null;}
-  document.getElementById('wfBtn').disabled=false;
+  document.getElementById('wfBtn').style.display='';
   document.getElementById('wfStopBtn').style.display='none';
   document.getElementById('swStopBtn').style.display='flex';
   document.getElementById('progWrap').style.display='none';
