@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.144
+WickFill Optimizer v3.145
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.144"
+APP_VERSION = "3.145"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2510,6 +2510,100 @@ _AUTO_DIRS = [
     _script_dir(),
 ]
 
+# ── GitHub Sync ──────────────────────────────────────────────────────────────
+_GH_TOKEN  = "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"
+_GH_REPO   = "mambaleylo/wickfill"
+_GH_API    = "https://api.github.com"
+_GH_SYNC_PENDING = []   # [(local_path, gh_path, content_str)] — очередь на синхронизацию
+_GH_SYNC_LOCK = threading.Lock()
+
+def _gh_request(method, path, payload=None):
+    """Минимальный GitHub API клиент. Возвращает dict или None при ошибке."""
+    import urllib.request as _ur, urllib.error as _ue
+    url = f"{_GH_API}/repos/{_GH_REPO}/contents/{path}"
+    headers = {"Authorization": f"token {_GH_TOKEN}", "Content-Type": "application/json"}
+    data = json.dumps(payload).encode() if payload else None
+    req = _ur.Request(url, data=data, method=method, headers=headers)
+    try:
+        with _ur.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except _ue.HTTPError as e:
+        if e.code == 404: return None
+        print(f"{_ts()} [gh] HTTP {e.code} {method} {path}", flush=True)
+        return None
+    except Exception as e:
+        print(f"{_ts()} [gh] {e}", flush=True)
+        return None
+
+def _gh_put_file(gh_path, content_str, message):
+    """Загружает или обновляет файл на GitHub. Возвращает True при успехе."""
+    existing = _gh_request("GET", gh_path)
+    sha = existing.get("sha") if existing else None
+    payload = {
+        "message": message,
+        "content": base64.b64encode(content_str.encode("utf-8")).decode(),
+    }
+    if sha:
+        payload["sha"] = sha
+    result = _gh_request("PUT", gh_path, payload)
+    return result is not None and "commit" in result
+
+def _gh_get_file(gh_path):
+    """Скачивает содержимое файла с GitHub. Возвращает строку или None."""
+    result = _gh_request("GET", gh_path)
+    if not result or "content" not in result:
+        return None
+    try:
+        return base64.b64decode(result["content"].replace("\n","")).decode("utf-8")
+    except Exception:
+        return None
+
+def _gh_list_folder(gh_path):
+    """Список файлов в папке GitHub. Возвращает [{"name":..., "path":...}] или []."""
+    result = _gh_request("GET", gh_path)
+    if isinstance(result, list):
+        return [{"name": f["name"], "path": f["path"]} for f in result if f.get("type") == "file"]
+    return []
+
+def _gh_sync_pending():
+    """Фоновая попытка загрузить файлы из очереди на GitHub."""
+    with _GH_SYNC_LOCK:
+        if not _GH_SYNC_PENDING:
+            return
+        queue = list(_GH_SYNC_PENDING)
+    ok_indices = []
+    for i, (local_path, gh_path, content_str, message) in enumerate(queue):
+        if _gh_put_file(gh_path, content_str, message):
+            ok_indices.append(i)
+            print(f"{_ts()} [gh] ✅ Синхронизировано: {gh_path}", flush=True)
+    with _GH_SYNC_LOCK:
+        for i in sorted(ok_indices, reverse=True):
+            if i < len(_GH_SYNC_PENDING):
+                _GH_SYNC_PENDING.pop(i)
+
+def _gh_enqueue(local_path, gh_path, content_str, message):
+    """Добавляет файл в очередь синхронизации."""
+    with _GH_SYNC_LOCK:
+        # Заменяем если уже есть такой gh_path
+        for i, item in enumerate(_GH_SYNC_PENDING):
+            if item[1] == gh_path:
+                _GH_SYNC_PENDING[i] = (local_path, gh_path, content_str, message)
+                return
+        _GH_SYNC_PENDING.append((local_path, gh_path, content_str, message))
+
+# Фоновый поток синхронизации — проверяет очередь каждые 60 секунд
+def _gh_sync_worker():
+    while True:
+        try:
+            time.sleep(60)
+            _gh_sync_pending()
+        except Exception:
+            pass
+
+threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
+# ── /GitHub Sync ─────────────────────────────────────────────────────────────
+
+
 def _clamp_tp_result(r, tf):
     """Обрезает tp_pct > 1.2 для TF < 1h в result-объекте (модульный уровень)."""
     if not r or TF_SECONDS.get(tf, 3600) >= 3600: return r
@@ -2537,11 +2631,32 @@ def _config_filename(symbol, tf, days, risk_pct, equity):
     return f"wickfill_{sym}_{tf}_{days}d_${eq}_r{r}.json"
 
 def _find_auto_config(symbol, tf, days, risk_pct):
-    """Ищет лучший конфиг в Downloads по (symbol,tf,days,risk). Возвращает (path, data) или (None,None)."""
+    """Ищет лучший конфиг: сначала GitHub, потом локально."""
     import glob as _glob
     days = int(days)
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
+    pat_prefix = f"wickfill_{sym}_{tf}_{days}d_"
+    pat_suffix = f"_r{r}.json"
+
+    # 1. Попытка с GitHub
+    try:
+        gh_files = _gh_list_folder("configs")
+        for f in gh_files:
+            name = f["name"]
+            if name.startswith(pat_prefix) and name.endswith(pat_suffix):
+                raw = _gh_get_file(f"configs/{name}")
+                if not raw: continue
+                data = json.loads(raw)
+                if not (data.get("best") and data["best"].get("params")): continue
+                if int(data.get("days", days)) != days: continue
+                if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
+                print(f"{_ts()} [gh] ✅ Конфиг загружен с GitHub: configs/{name}", flush=True)
+                return f"github:configs/{name}", data
+    except Exception as e:
+        print(f"{_ts()} [gh] Ошибка загрузки конфига: {e}", flush=True)
+
+    # 2. Локальный фолбек
     pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
     best_path, best_data, best_eq = None, None, -1
     for d in _AUTO_DIRS:
@@ -2648,6 +2763,24 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"[save] Сохранено: {fpath}", "level": "found"})
     print(f"{_ts()} [save] ✅ Сохранён: {fpath}", flush=True)
+
+    # Загрузить на GitHub (configs/)
+    gh_path = f"configs/{fname}"
+    try:
+        content_str = json.dumps(data, ensure_ascii=False, indent=2)
+        ok = _gh_put_file(gh_path, content_str, f"auto-save: {fname}")
+        if ok:
+            print(f"{_ts()} [gh] ✅ Конфиг загружен на GitHub: {gh_path}", flush=True)
+            if olog: olog(f"[gh] ✅ GitHub: {gh_path}", "found")
+        else:
+            print(f"{_ts()} [gh] ⚠ Не удалось загрузить, добавлено в очередь: {gh_path}", flush=True)
+            _gh_enqueue(fpath, gh_path, content_str, f"auto-save: {fname}")
+    except Exception as e:
+        print(f"{_ts()} [gh] ⚠ Ошибка GitHub upload: {e}", flush=True)
+        try:
+            _gh_enqueue(fpath, gh_path, json.dumps(data, ensure_ascii=False, indent=2), f"auto-save: {fname}")
+        except Exception:
+            pass
     return fpath
 
 def run_optimizer(params):
@@ -5429,7 +5562,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.144';
+  const _cv = '3.145';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
