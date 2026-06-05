@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.169
+WickFill Optimizer v3.173
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
+- v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 """
 
 import json, time, threading, random, math, os, base64
@@ -27,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.172"
+APP_VERSION = "3.173"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1654,10 +1655,27 @@ function render(){{
     ctx.strokeStyle=isLong?'#A3BF6F':'#FF8234';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
   }}
   // TP/SL dashed lines and labels for active open trade — always drawn regardless of viewport
+  // Таймер до закрытия свечи
+  const _now=Date.now()/1000;
+  const _liveC=CANDLES[CANDLES.length-1];
+  let _candleTimer='';
+  if(_liveC){{
+    const _candleEnd=_liveC.t+TF_SEC;
+    const _rem=Math.max(0,Math.ceil(_candleEnd-_now));
+    const _mm=Math.floor(_rem/60),_ss=_rem%60;
+    _candleTimer=_mm+'m '+_ss.toString().padStart(2,'0')+'s';
+  }}
+  // Антиперекрытие правых лейблов: собираем Y-зоны занятых лейблов
+  const _usedRightY=[];
+  function _fitRightLabel(y, h){{
+    const half=h/2+1;
+    for(const [a,b] of _usedRightY){{ if(y+half>a && y-half<b) return false; }}
+    _usedRightY.push([y-half, y+half]);
+    return true;
+  }}
   if(activeSig){{
     const isLong=activeSig.dir===1;
     const tpY=py(activeSig.tp),slY=py(activeSig.sl);
-    // x-range: from signal bar to right edge of visible area
     const aViC=Math.max(0,activeSig.bar_i-viewStart);
     const ax1=PAD_L+aViC*cw, ax2=W-PAD_R;
     ctx.setLineDash([4,3]);
@@ -1667,15 +1685,25 @@ function render(){{
     ctx.beginPath();ctx.moveTo(ax1,slY);ctx.lineTo(ax2,slY);ctx.stroke();
     ctx.setLineDash([]);
     ctx.font='bold 9px system-ui';ctx.textAlign='left';
-    ctx.fillStyle=isLong?'rgba(163,191,111,0.9)':'rgba(255,130,52,0.9)';
-    ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
-    ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY+3);
-    ctx.fillStyle='rgba(140,120,100,0.75)';
-    ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-7,PAD_R-2,14,3);ctx.fill();
-    ctx.fillStyle='#fff';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY+3);
+    // TP label + timer
+    const tpLblH=_candleTimer?26:14;
+    if(_fitRightLabel(tpY, tpLblH)){{
+      ctx.fillStyle=isLong?'rgba(163,191,111,0.9)':'rgba(255,130,52,0.9)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-tpLblH/2,PAD_R-2,tpLblH,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,tpY+10);ctx.font='bold 9px system-ui';}}
+    }}
+    // SL label + timer
+    const slLblH=_candleTimer?26:14;
+    if(_fitRightLabel(slY, slLblH)){{
+      ctx.fillStyle='rgba(140,120,100,0.75)';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-slLblH/2,PAD_R-2,slLblH,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,slY+10);ctx.font='bold 9px system-ui';}}
+    }}
     ctx.font='10px system-ui';
   }}
-  // Current price label — always visible
+  // Current price label — always visible, with anti-overlap
   const lastC=vis[vis.length-1];
   if(lastC){{
     const curPrice=lastC.c,curY=py(curPrice),isUp=lastC.c>=lastC.o;
@@ -1683,18 +1711,23 @@ function render(){{
     ctx.setLineDash([2,3]);ctx.strokeStyle=cpCol+'80';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(PAD_L,curY);ctx.lineTo(W-PAD_R,curY);ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle=cpCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
-    ctx.beginPath();ctx.roundRect(W-PAD_R+1,curY-7,PAD_R-2,14,3);ctx.fill();
-    ctx.fillStyle='#fff';ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY+3);
+    const cpLblH=_candleTimer?26:14;
+    if(_fitRightLabel(curY, cpLblH)){{
+      ctx.fillStyle=cpCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
+      ctx.beginPath();ctx.roundRect(W-PAD_R+1,curY-cpLblH/2,PAD_R-2,cpLblH,3);ctx.fill();
+      ctx.fillStyle='#fff';ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,curY+10);ctx.font='bold 9px system-ui';}}
+    }}
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
     const col=bull?'#A3BF6F':'#FF8234';
     ctx.globalAlpha=isLive?0.55:1.0;
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,cw*0.1);
+    // Live candle: фитиль пунктирный, тело — сплошное
     if(isLive) ctx.setLineDash([3,2]);
     ctx.beginPath();ctx.moveTo(x,py(c.h));ctx.lineTo(x,py(c.l));ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.setLineDash([]); // тело всегда сплошное
     const bTop=py(Math.max(c.o,c.c)),bBot=py(Math.min(c.o,c.c)),bH=Math.max(1,bBot-bTop),bW=Math.max(1,cw-gap*2);
     ctx.fillRect(x-bW/2,bTop,bW,bH);
     ctx.globalAlpha=1.0;
