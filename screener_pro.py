@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.157
+WickFill Optimizer v3.158
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
 """
 
-import json, time, threading, random, math, os
+import json, time, threading, random, math, os, base64
 import math as _math  # используется в fitness внутри _simulate
 import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.157"
+APP_VERSION = "3.158"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
