@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.161
+WickFill Optimizer v3.162
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.161"
+APP_VERSION = "3.162"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2571,6 +2571,17 @@ def _gh_get_file(gh_path):
         return base64.b64decode(result["content"].replace("\n","")).decode("utf-8")
     except Exception:
         return None
+
+def _gh_delete_file(gh_path, message="delete"):
+    """Удаляет файл с GitHub. Возвращает True при успехе."""
+    try:
+        meta = _gh_request("GET", gh_path)
+        if not meta or "sha" not in meta:
+            return False
+        result = _gh_request("DELETE", gh_path, {"message": message, "sha": meta["sha"]})
+        return result is not None
+    except Exception:
+        return False
 
 def _gh_list_folder(gh_path):
     """Список файлов в папке GitHub. Возвращает [{"name":..., "path":...}] или []."""
@@ -5527,24 +5538,45 @@ function _loadRecentConfigs(){
     d.configs.forEach(c=>{
       const sym=(c.symbol||'').replace('_USDT','').replace('USDT','').toUpperCase();
       const eq=c.equity?'$'+c.equity:'';
-      const btn=document.createElement('div');
-      btn.style.cssText='display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;transition:background .15s';
-      btn.onmouseenter=function(){this.style.background='var(--cream2)'};
-      btn.onmouseleave=function(){this.style.background='var(--glass2)'};
-      btn.innerHTML=`
-        <span style="font-size:.82rem;font-weight:600;color:var(--bark);min-width:52px">${sym}</span>
-        <span style="font-size:.75rem;color:var(--text2);background:var(--cream3);padding:2px 6px;border-radius:5px">${c.tf}</span>
-        <span style="font-size:.75rem;color:var(--text3)">${c.days}д</span>
-        <span style="flex:1"></span>
-        <span style="font-size:.72rem;color:var(--text3);font-family:'DM Mono',monospace">${eq}</span>`;
-      btn.onclick=function(){
+      const row=document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;transition:background .15s,opacity .25s,max-height .3s,padding .3s,margin .3s;overflow:hidden;max-height:60px';
+      row.onmouseenter=function(){this.style.background='var(--cream2)'};
+      row.onmouseleave=function(){this.style.background='var(--glass2)'};
+      const info=document.createElement('div');
+      info.style.cssText='display:flex;align-items:center;gap:8px;flex:1;min-width:0';
+      info.innerHTML=`<span style="font-size:.82rem;font-weight:600;color:var(--bark);min-width:42px">${sym}</span><span style="font-size:.75rem;color:var(--text2);background:var(--cream3);padding:2px 6px;border-radius:5px">${c.tf}</span><span style="font-size:.75rem;color:var(--text3)">${c.days}д</span><span style="flex:1"></span><span style="font-size:.72rem;color:var(--text3);font-family:'DM Mono',monospace">${eq}</span>`;
+      info.onclick=function(){
         const rawSym=(c.symbol||'').replace(/_?USDT$/i,'').toUpperCase();
         document.getElementById('wf_symbol').value=rawSym;
         const sel=document.getElementById('wf_tf_sel');
         for(let i=0;i<sel.options.length;i++) if(sel.options[i].value===c.tf){sel.selectedIndex=i;break;}
         document.getElementById('wf_days').value=c.days;
       };
-      list.appendChild(btn);
+      const del=document.createElement('button');
+      del.textContent='×';
+      del.title='Удалить конфиг';
+      del.style.cssText='flex-shrink:0;border:none;background:none;color:var(--text3);font-size:1rem;line-height:1;cursor:pointer;padding:2px 4px;border-radius:4px;transition:color .15s,background .15s;margin-left:4px';
+      del.onmouseenter=function(){this.style.color='#c0514a';this.style.background='rgba(192,81,74,0.1)'};
+      del.onmouseleave=function(){this.style.color='var(--text3)';this.style.background='none'};
+      del.onclick=function(e){
+        e.stopPropagation();
+        const fname=c.fname||'';
+        if(!fname) return;
+        row.style.opacity='0';
+        row.style.maxHeight='0';
+        row.style.padding='0 10px';
+        row.style.marginBottom='0';
+        setTimeout(()=>{
+          row.remove();
+          const remaining=list.querySelectorAll('div[data-cfg]');
+          if(!remaining.length) panel.style.display='none';
+        }, 300);
+        fetch('/delete_config?fname='+encodeURIComponent(fname)).catch(()=>{});
+      };
+      row.dataset.cfg=c.fname||'';
+      row.appendChild(info);
+      row.appendChild(del);
+      list.appendChild(row);
     });
     panel.dataset.hasConfigs='1';
     panel.style.display='block';
@@ -5859,27 +5891,81 @@ class Handler(BaseHTTPRequestHandler):
                     opt_states[s]["running"] = False
             self._json({"ok":True})
         elif parsed.path == "/recent_configs":
-            import glob as _glob
-            seen = {}
-            for d in _AUTO_DIRS:
-                if not os.path.isdir(d): continue
-                for fp in _glob.glob(os.path.join(d, "wickfill_*.json")):
-                    fname = os.path.basename(fp)
-                    if fname in seen: continue
+            # Читаем список конфигов с GitHub (configs/), локалка — только fallback
+            items = []
+            gh_ok = False
+            try:
+                import urllib.request as _ur
+                _api = f"https://api.github.com/repos/{_GH_REPO}/contents/configs"
+                _req = _ur.Request(_api, headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"})
+                with _ur.urlopen(_req, timeout=8) as _r:
+                    _files = json.loads(_r.read())
+                seen = {}
+                for _fi in _files:
+                    _fn = _fi.get("name","")
+                    if not _fn.startswith("wickfill_") or not _fn.endswith(".json"): continue
                     try:
-                        with open(fp, encoding="utf-8") as _f:
-                            _d = json.load(_f)
-                        seen[fname] = {
+                        _req2 = _ur.Request(_fi["download_url"], headers={"Authorization": f"token {_GH_TOKEN}"})
+                        with _ur.urlopen(_req2, timeout=8) as _r2:
+                            _d = json.loads(_r2.read())
+                        seen[_fn] = {
+                            "fname":    _fn,
                             "symbol":   _d.get("symbol", ""),
                             "tf":       _d.get("tf", ""),
                             "days":     _d.get("days", 0),
                             "risk_pct": _d.get("risk_pct", 20),
                             "equity":   round(_d.get("best", {}).get("equity", 0)),
                             "saved_at": _d.get("saved_at", ""),
+                            "source":   "github",
                         }
                     except: pass
-            items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
-            self._json({"ok": True, "configs": items})
+                items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
+                gh_ok = True
+            except Exception as _e:
+                print(f"{_ts()} [recent_configs] GitHub недоступен: {_e}, читаю локально", flush=True)
+            if not gh_ok:
+                import glob as _glob
+                seen = {}
+                for d in _AUTO_DIRS:
+                    if not os.path.isdir(d): continue
+                    for fp in _glob.glob(os.path.join(d, "wickfill_*.json")):
+                        _fn = os.path.basename(fp)
+                        if _fn in seen: continue
+                        try:
+                            with open(fp, encoding="utf-8") as _f:
+                                _d = json.load(_f)
+                            seen[_fn] = {
+                                "fname":    _fn,
+                                "symbol":   _d.get("symbol", ""),
+                                "tf":       _d.get("tf", ""),
+                                "days":     _d.get("days", 0),
+                                "risk_pct": _d.get("risk_pct", 20),
+                                "equity":   round(_d.get("best", {}).get("equity", 0)),
+                                "saved_at": _d.get("saved_at", ""),
+                                "source":   "local",
+                            }
+                        except: pass
+                items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
+            self._json({"ok": True, "configs": items, "source": "github" if gh_ok else "local"})
+        elif parsed.path == "/delete_config":
+            qs = parse_qs(parsed.query)
+            fname = qs.get("fname", [""])[0]
+            if not fname or "/" in fname or "\\" in fname or not fname.endswith(".json"):
+                self._json({"ok": False, "msg": "Недопустимое имя файла"}); return
+            # Удаляем с GitHub
+            gh_del = False
+            try:
+                gh_del = _gh_delete_file(f"configs/{fname}", f"delete config: {fname}")
+            except Exception as _e:
+                print(f"{_ts()} [delete_config] GitHub: {_e}", flush=True)
+            # Удаляем локально тоже (если есть)
+            for d in _AUTO_DIRS:
+                fp = os.path.join(d, fname)
+                if os.path.isfile(fp):
+                    try: os.remove(fp)
+                    except: pass
+            if gh_del: self._json({"ok": True, "source": "github"})
+            else: self._json({"ok": True, "source": "local"})
         elif parsed.path == "/sw_stop":
             with opt_lock: opt_state["sw_running"]=False
             self._json({"ok":True})
