@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.143
+WickFill Optimizer v3.144
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.143"
+APP_VERSION = "3.144"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3869,6 +3869,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Action buttons row */
 .action-row{display:flex;gap:7px}
 .action-row .btn-ghost{flex:1}
+#updateBtnMob,#restartBtnMob{display:none}
 
 /* Progress */
 .prog-wrap{display:flex;flex-direction:column;gap:5px}
@@ -4142,6 +4143,7 @@ details summary::-webkit-details-marker{display:none}
   .btn-primary{padding:12px 14px;font-size:.92rem}
   .btn-ghost{padding:10px 10px;font-size:.82rem}
   .action-row{gap:5px}
+  #updateBtnMob,#restartBtnMob{display:flex !important}
   #swStopBtn{display:none !important}
 
   /* Скрываем не нужные элементы */
@@ -4294,8 +4296,8 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
       </button>
-      <button class="btn-ghost mob-only" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
-      <button class="btn-ghost mob-only success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
+      <button class="btn-ghost" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
+      <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
     </div>
 
     <!-- Best result (desktop) -->
@@ -5427,7 +5429,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.143';
+  const _cv = '3.144';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
