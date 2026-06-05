@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.145
+WickFill Optimizer v3.146
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.145"
+APP_VERSION = "3.146"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2296,6 +2296,17 @@ def _perf_save(symbol, tf):
         if dt > 30:  flag = f"  🔴 +{dt:.1f}s ЗАТЫК"
         lines.append(f"{t:>8.1f}s  {ev:<28}  {details}{flag}\n")
     txt = "".join(lines)
+    # 1. GitHub first (logs/)
+    gh_path = f"logs/{fname}"
+    try:
+        gh_ok = _gh_put_file(gh_path, txt, f"perf-log: {fname}")
+        if gh_ok:
+            print(f"[perf] ✅ Загружен на GitHub: {gh_path}", flush=True)
+            return
+    except Exception as e:
+        print(f"[perf] ⚠ GitHub недоступен: {e}", flush=True)
+
+    # 2. Локальный фолбек + очередь
     saved = False
     for d in _AUTO_DIRS:
         if not os.path.isdir(d): continue
@@ -2303,7 +2314,8 @@ def _perf_save(symbol, tf):
             fpath = os.path.join(d, fname)
             with open(fpath, "w", encoding="utf-8") as f:
                 f.write(txt)
-            print(f"[perf] Сохранён: {fpath}", flush=True)
+            print(f"[perf] Сохранён локально: {fpath}", flush=True)
+            _gh_enqueue(fpath, gh_path, txt, f"perf-log: {fname}")
             saved = True
             break
         except Exception as e:
@@ -2721,66 +2733,56 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         "days": days, "risk_pct": risk_pct,
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-
-    # Атомарная запись: пишем во временный файл рядом, потом os.replace()
-    tmp_path = None
-    try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, fpath)
-    except Exception as e:
-        _log(f"⚠ Сохранение не удалось: {save_dir} → {e}", "warn")
-        _log(f"  Проверенные папки: {', '.join(tried)}", "warn")
-        print(f"{_ts()} [save] ❌ Ошибка записи в {save_dir}: {e}", flush=True)
-        if tmp_path:
-            try: os.remove(tmp_path)
-            except Exception: pass
-        return None
-
-    # Удалить ВСЕ старые файлы того же набора параметров (кроме только что сохранённого)
-    for d in _AUTO_DIRS:
-        if not os.path.isdir(d): continue
-        for old_f in _glob.glob(os.path.join(d, pat)):
-            if os.path.abspath(old_f) == os.path.abspath(fpath):
-                continue  # это наш новый файл — не трогаем
-            try:
-                os.remove(old_f)
-                print(f"{_ts()} [save] 🗑 Удалён старый файл: {old_f}", flush=True)
-            except Exception as e:
-                print(f"{_ts()} [save] ⚠ Не удалось удалить {old_f}: {e}", flush=True)
-
-    # Обновляем MediaStore на Android чтобы файл появился в файловых менеджерах
-    try:
-        import subprocess
-        subprocess.Popen(["termux-media-scan", fpath],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-    if olog: olog(f"[save] Сохранено: {fpath}", "found")
-    else:
-        with opt_lock:
-            opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"[save] Сохранено: {fpath}", "level": "found"})
-    print(f"{_ts()} [save] ✅ Сохранён: {fpath}", flush=True)
-
-    # Загрузить на GitHub (configs/)
+    content_str = json.dumps(data, ensure_ascii=False, indent=2)
     gh_path = f"configs/{fname}"
+
+    # 1. Попытка сохранить на GitHub
+    gh_ok = False
     try:
-        content_str = json.dumps(data, ensure_ascii=False, indent=2)
-        ok = _gh_put_file(gh_path, content_str, f"auto-save: {fname}")
-        if ok:
-            print(f"{_ts()} [gh] ✅ Конфиг загружен на GitHub: {gh_path}", flush=True)
-            if olog: olog(f"[gh] ✅ GitHub: {gh_path}", "found")
-        else:
-            print(f"{_ts()} [gh] ⚠ Не удалось загрузить, добавлено в очередь: {gh_path}", flush=True)
-            _gh_enqueue(fpath, gh_path, content_str, f"auto-save: {fname}")
+        gh_ok = _gh_put_file(gh_path, content_str, f"auto-save: {fname}")
+        if gh_ok:
+            print(f"{_ts()} [gh] ✅ Конфиг сохранён на GitHub: {gh_path}", flush=True)
+            if olog: olog(f"✅ Сохранено на GitHub: {fname}", "found")
+            else:
+                with opt_lock:
+                    opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"✅ GitHub: {fname}", "level": "found"})
     except Exception as e:
-        print(f"{_ts()} [gh] ⚠ Ошибка GitHub upload: {e}", flush=True)
+        print(f"{_ts()} [gh] ⚠ GitHub недоступен: {e}", flush=True)
+
+    # 2. Если GitHub недоступен — сохранить локально и поставить в очередь
+    if not gh_ok:
+        tmp_path = None
         try:
-            _gh_enqueue(fpath, gh_path, json.dumps(data, ensure_ascii=False, indent=2), f"auto-save: {fname}")
-        except Exception:
-            pass
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(content_str)
+            os.replace(tmp_path, fpath)
+            # Удалить старые файлы того же набора параметров
+            for d in _AUTO_DIRS:
+                if not os.path.isdir(d): continue
+                for old_f in _glob.glob(os.path.join(d, pat)):
+                    if os.path.abspath(old_f) == os.path.abspath(fpath): continue
+                    try: os.remove(old_f)
+                    except Exception: pass
+            try:
+                import subprocess
+                subprocess.Popen(["termux-media-scan", fpath],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception: pass
+            print(f"{_ts()} [save] ✅ Сохранён локально (нет сети): {fpath}", flush=True)
+            if olog: olog(f"⚠ Сохранено локально (нет сети): {fname}", "warn")
+            else:
+                with opt_lock:
+                    opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"⚠ Локально (нет сети): {fname}", "level": "warn"})
+            # Добавить в очередь синхронизации
+            _gh_enqueue(fpath, gh_path, content_str, f"auto-save: {fname}")
+        except Exception as e:
+            _log(f"⚠ Сохранение не удалось: {save_dir} → {e}", "warn")
+            print(f"{_ts()} [save] ❌ Ошибка записи: {e}", flush=True)
+            if tmp_path:
+                try: os.remove(tmp_path)
+                except Exception: pass
+            return None
     return fpath
 
 def run_optimizer(params):
@@ -5562,7 +5564,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.145';
+  const _cv = '3.146';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
