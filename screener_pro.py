@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.177"
+APP_VERSION = "3.178"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -6029,11 +6029,6 @@ class Handler(BaseHTTPRequestHandler):
                         cc = list(opt_state.get("chart_candles", []))
                         cs = list(opt_state.get("chart_signals", []))
             self._json({"ok": True, "candles": cc, "signals": cs})
-        elif parsed.path == "/test_ntfy":
-            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
-            cfg = {"ntfy_topic": body.get("ntfy_topic","")}
-            ok = _send_ntfy(cfg, "🔔 <b>WickFill</b> — тест ntfy.sh")
-            self._json({"ok": ok, "error": "" if ok else "не удалось отправить"})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
@@ -6310,6 +6305,14 @@ class Handler(BaseHTTPRequestHandler):
             ok = _send_telegram(cfg, "✅ WickFill — тест алерта работает!")
             if ok: self._json({"ok":True})
             else: self._json({"ok":False,"msg":opt_state.get("error","Ошибка Telegram")})
+            return
+
+        if parsed.path == "/test_ntfy":
+            try: params=json.loads(body)
+            except: self._json({"ok":False,"msg":"bad JSON"}); return
+            cfg={"ntfy_topic": params.get("ntfy_topic","")}
+            ok = _send_ntfy(cfg, "🔔 WickFill — тест ntfy.sh")
+            self._json({"ok": ok, "error": "" if ok else "не удалось отправить"})
             return
 
         if parsed.path == "/gate_test":
