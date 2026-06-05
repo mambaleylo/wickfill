@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.142
+WickFill Optimizer v3.143
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.142"
+APP_VERSION = "3.143"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -44,7 +44,7 @@ PARAM_SPACE = {
     "tp_pct":             {"min": 0.5,  "max": 2,  "step": 0.05, "type": "float", "label": "Тейк-профит (%)"},
     "min_wick_pct":       {"min": 30.0, "max": 90.0, "step": 5.0,  "type": "float", "label": "Мин. фитиль (% диапазона)"},
     "min_wick_pct_price": {"min": 0.05, "max": 0.5,  "step": 0.05, "type": "float", "label": "Мин. фитиль (% цены)"},
-    "wick_dir":           {"values": ["bounce"], "type": "cat",  "label": "Направление фитиля"},
+    "wick_dir":           {"values": ["both", "upper", "lower", "bounce"], "type": "cat",  "label": "Направление фитиля"},
     "filter_body_rat":    {"values": [True, False], "type": "bool", "label": "Фильтр: тело < фитиль"},
     "filter_consec":      {"values": [False, True], "type": "bool", "label": "Фильтр: не 2 сигнала подряд"},
     "use_confirm_candle": {"values": [True, False], "type": "bool", "label": "Подтверждающая свеча"},
@@ -4294,12 +4294,8 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
       </button>
-      <button class="btn-ghost" onclick="listConfigs()">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/><line x1="3" y1="4" x2="9" y2="4"/><line x1="3" y1="6.5" x2="9" y2="6.5"/><line x1="3" y1="9" x2="7" y2="9"/></svg> Конфиги
-      </button>
-      <button class="btn-ghost" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
-      <button class="btn-ghost" onclick="renameDownload()">✏ Rename</button>
-      <button class="btn-ghost success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
+      <button class="btn-ghost mob-only" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
+      <button class="btn-ghost mob-only success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
     </div>
 
     <!-- Best result (desktop) -->
@@ -5431,7 +5427,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.142';
+  const _cv = '3.143';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
