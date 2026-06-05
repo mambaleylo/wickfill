@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.151
+WickFill Optimizer v3.152
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.151"
+APP_VERSION = "3.152"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5562,7 +5562,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.151';
+  const _cv = '3.152';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
@@ -5953,7 +5953,7 @@ class Handler(BaseHTTPRequestHandler):
                     f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
                     f.write("sleep 2\n")
                     # Скачать свежий скрипт прямо с GitHub
-                    f.write(f"curl -fsSL '{raw_url}?ts=$(date +%s)' -o '{script_path}' || {{ echo 'curl failed, using existing'; }}\n")
+                    f.write('curl -fsSL "' + raw_url + '?ts=$(date +%s)" -o \'' + script_path + '\' || { echo "curl failed, using existing"; }\n')
                     f.write(f"{sys.executable} '{script_path}'\n")
                 os.chmod(sh, 0o755)
                 subprocess.Popen(["bash", sh],
