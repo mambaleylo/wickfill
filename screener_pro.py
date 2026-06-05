@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.178"
+APP_VERSION = "3.179"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2324,10 +2324,17 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
 
             print(f"[sw:{symbol}] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g}")
 
-            if alert_cfg and prev_signals_for_close:
-                _check_trade_close(prev_signals_for_close, chart_signals_data, alert_cfg, symbol, tf)
-            if alert_cfg:
-                _check_new_candle_signal(new_candles, best_p, risk_pct, alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
+            # Читаем alert_cfg динамически — пользователь мог заполнить поля после старта
+            _live_alert_cfg = None
+            with opt_lock:
+                _live_alert_cfg = opt_state.get("alert_cfg") or alert_cfg
+            if is_multi:
+                with opt_states_lock:
+                    _live_alert_cfg = opt_states.get(symbol, {}).get("alert_cfg") or _live_alert_cfg
+            if _live_alert_cfg and prev_signals_for_close:
+                _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf)
+            if _live_alert_cfg:
+                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
         else:
             _set_candles(new_candles)
 
@@ -2940,6 +2947,10 @@ def run_optimizer(params):
 
     _opt_stop_flag.clear()
     _sw_risk = risk_pct
+
+    # Сохраняем alert_cfg в opt_state — SW-тред читает его динамически
+    with opt_lock:
+        opt_state["alert_cfg"] = alert_cfg
 
     # Сбрасываем perf-лог для новой сессии
     global _perf_t0, _perf_log
