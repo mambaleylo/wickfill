@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.173"
+APP_VERSION = "3.174"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1637,8 +1637,11 @@ function render(){{
     ctx.strokeStyle=clrGrid;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
     ctx.fillStyle=clrPriceText;ctx.fillText(price.toPrecision(6),W-PAD_R+4,y+3);
   }}
+  // Индекс live-свечи (глобальный) — не рисуем сигналы на незакрытой свече
+  const _liveBarGlobal = (CANDLES.length > 0 && CANDLES[CANDLES.length-1].live) ? CANDLES.length-1 : -1;
   // Active open trade — find regardless of viewport (labels always visible)
-  const activeSig=SIGNALS.find(s=>s.open_end===true);
+  // Исключаем сигналы на live-свече — до закрытия свечи TP/SL не рисуем
+  const activeSig=SIGNALS.find(s=>s.open_end===true && s.bar_i!==_liveBarGlobal);
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
@@ -1744,6 +1747,8 @@ function render(){{
   }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
+    // Не рисуем сигнал если он на live-свече — она ещё не закрыта
+    if(s.bar_i===_liveBarGlobal) continue;
     const x=cx(vi),isLong=s.dir===1;
     const c_sig=vis[vi];
     const arrowSz=Math.max(4,Math.min(7,cw*0.45));
@@ -1892,13 +1897,10 @@ function fetchLiveCandle() {{
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }} else {{
-        // Первое появление live-свечи: если t совпадает с последней закрытой — заменяем (без роста длины)
-        if (last && !last.live && d.t === last.t) {{
-          CANDLES.pop();
-          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
-          // длина не изменилась — viewport не трогаем
-        }} else {{
-          // t больше — новая live-свеча сверх закрытых
+        // Первое появление live-свечи:
+        // если t совпадает с последней закрытой — НЕ заменяем её (закрытая уже финальная)
+        // добавляем live только если t строго больше
+        if (last && !last.live && d.t > last.t) {{
           CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
@@ -3304,6 +3306,7 @@ def run_optimizer(params):
             chart_candles_window = [c for c in chart_candles_src if c.get("t", 0) >= cutoff]
             if len(chart_candles_window) < 10:
                 chart_candles_window = chart_candles_src  # fallback
+            # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
             sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
             chart_signals = sim["_signals"] if sim else []
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
