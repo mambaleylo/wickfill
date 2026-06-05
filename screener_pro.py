@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.146
+WickFill Optimizer v3.147
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.146"
+APP_VERSION = "3.147"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4004,7 +4004,7 @@ input[type=number]{-moz-appearance:textfield}
 /* Action buttons row */
 .action-row{display:flex;gap:7px}
 .action-row .btn-ghost{flex:1}
-#updateBtnMob,#restartBtnMob{display:none}
+#restartBtnMob{display:none}
 
 /* Progress */
 .prog-wrap{display:flex;flex-direction:column;gap:5px}
@@ -4278,7 +4278,7 @@ details summary::-webkit-details-marker{display:none}
   .btn-primary{padding:12px 14px;font-size:.92rem}
   .btn-ghost{padding:10px 10px;font-size:.82rem}
   .action-row{gap:5px}
-  #updateBtnMob,#restartBtnMob{display:flex !important}
+  #restartBtnMob{display:flex !important}
   #swStopBtn{display:none !important}
 
   /* Скрываем не нужные элементы */
@@ -4349,7 +4349,6 @@ details summary::-webkit-details-marker{display:none}
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
     <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
-    <button class="icon-btn" id="updateBtn" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
     <button class="icon-btn" onclick="renameDownload()">✏ Rename</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
   </div>
@@ -4431,7 +4430,6 @@ details summary::-webkit-details-marker{display:none}
       <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
       </button>
-      <button class="btn-ghost" id="updateBtnMob" onclick="updateScript()" title="Скачать последнюю версию скрипта с GitHub">⬇ Download</button>
       <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
     </div>
 
@@ -5564,7 +5562,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.146';
+  const _cv = '3.147';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
@@ -5941,31 +5939,27 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "msg": "Файл screener_pro (*).py не найден в Downloads"})
         elif parsed.path == "/termux_update":
-            import subprocess, sys, shutil
+            import subprocess, sys
             script_name=os.path.basename(os.path.abspath(__file__))
             script_path=os.path.abspath(__file__)
-            candidate_dirs=["/sdcard/Download", os.path.dirname(script_path)]
-            src=next((os.path.join(d,script_name) for d in candidate_dirs if os.path.exists(os.path.join(d,script_name))),None)
-            if not src: self._json({"ok":False,"msg":f"'{script_name}' не найден в downloads"}); return
+            raw_url=f"https://raw.githubusercontent.com/{_GH_REPO}/main/{script_name}"
             try:
-                # Пишем отдельный sh-скрипт — иначе pkill убивает тот же shell
-                # и cp + python никогда не выполняются
                 sh=os.path.expanduser("~/wickfill_update.sh")
                 with open(sh,"w") as f:
                     f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
                     f.write("termux-wake-lock\n")
-                    # Убиваем главный процесс и все его дочерние (multiprocessing workers)
                     f.write(f"pkill -9 -f {script_name}\n")
                     f.write("pkill -9 -f 'multiprocessing.spawn'\n")
                     f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
                     f.write("sleep 2\n")
-                    f.write(f"cp '{src}' '{script_path}'\n")
+                    # Скачать свежий скрипт прямо с GitHub
+                    f.write(f"curl -fsSL '{raw_url}?ts=$(date +%s)' -o '{script_path}' || {{ echo 'curl failed, using existing'; }}\n")
                     f.write(f"{sys.executable} '{script_path}'\n")
                 os.chmod(sh, 0o755)
                 subprocess.Popen(["bash", sh],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     start_new_session=True)
-                self._json({"ok":True,"msg":"⏳ Перезапуск..."})
+                self._json({"ok":True,"msg":"⏳ Скачиваю с GitHub и перезапускаю..."})
                 def _die(): time.sleep(0.8); os._exit(0)
                 threading.Thread(target=_die,daemon=True).start()
             except Exception as e: self._json({"ok":False,"msg":str(e)})
