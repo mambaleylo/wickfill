@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.168
+WickFill Optimizer v3.169
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
+- v3.169: в Telegram-сигнал добавлено расчётное плечо из конфига (⚡ Плечо: 25×)
 """
 
 import json, time, threading, random, math, os, base64
@@ -26,7 +27,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.168"
+APP_VERSION = "3.169"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1246,12 +1247,13 @@ def _send_telegram(cfg, text):
                 return False
     return False
 
-def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
+def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leverage=None):
     dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
     # Показываем время ЗАКРЫТИЯ свечи (открытие + интервал), в московском времени (UTC+3)
     close_t = candle_t + TF_SECONDS.get(tf, 3600)
     moscow_offset = 3 * 3600  # UTC+3
     dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
+    lev_str = f"\n⚡ Плечо: <b>{int(leverage)}×</b>" if leverage and int(leverage) > 1 else ""
     text = (
         f"🔔 <b>WickFill Сигнал</b>\n\n"
         f"{dir_str} <b>{symbol}</b> {tf}\n"
@@ -1259,6 +1261,7 @@ def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t):
         f"📥 Вход: <b>{entry:.6g}</b>\n"
         f"✅ Тейк-профит: <b>{tp:.6g}</b>\n"
         f"❌ Стоп-лосс: <b>{sl:.6g}</b>"
+        f"{lev_str}"
     )
     return _send_telegram(cfg, text)
 
@@ -2001,8 +2004,19 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             if candle_t <= last_signal_t:
                 continue  # уже отправляли этот бар
             ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
+            # Читаем плечо из лучшего конфига
+            with opt_lock:
+                _best_for_lev = opt_state.get("all_time_best") or opt_state.get("best") or {}
+            _sig_leverage = (_best_for_lev.get("leverage") or
+                             (_best_for_lev.get("params") or {}).get("leverage") or 1)
+            if symbol and symbol in opt_states:
+                with opt_states_lock:
+                    _sym_best = opt_states[symbol].get("best") or {}
+                _sig_leverage = (_sym_best.get("leverage") or
+                                 (_sym_best.get("params") or {}).get("leverage") or _sig_leverage)
             # 1. Телеграм-уведомление (независимо от Gate)
-            tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t)
+            tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t,
+                                        leverage=_sig_leverage)
             # Сохраняем сигнал — и в глобальный, и в per-symbol стейт
             with opt_lock:
                 opt_state["last_signal_t"] = candle_t
