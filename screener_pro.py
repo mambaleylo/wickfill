@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.154
+WickFill Optimizer v3.155
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.154"
+APP_VERSION = "3.155"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5183,13 +5183,7 @@ function addLogLine(msg,level,ts){
   if(act&&act!==wfLog.firstChild) wfLog.insertBefore(act,wfLog.firstChild);
 }
 
-function _setActivity(text){
-  const wl=document.getElementById('wfLog');
-  let el=document.getElementById('ccActivity');
-  if(!el){el=document.createElement('div');el.id='ccActivity';el.className='activity-line';}
-  el.innerHTML=`<span class="spin" style="font-size:.8rem">⟳</span><span>${text}</span>`;
-  if(wl&&el!==wl.firstChild) wl.insertBefore(el,wl.firstChild);
-}
+function _setActivity(text){ /* activity line hidden */ }
 function _clearActivity(){const el=document.getElementById('ccActivity');if(el)el.remove();}
 
 function _cycleCard(n,eq,wr,dd,elapsed,done,trades,isNewRec){
@@ -5562,7 +5556,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.154';
+  const _cv = '3.155';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
