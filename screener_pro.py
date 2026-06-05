@@ -6,7 +6,7 @@ WickFill Optimizer v3.169
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
-- v3.169: в Telegram-сигнал добавлено расчётное плечо из конфига (⚡ Плечо: 25×)
+- v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 """
 
 import json, time, threading, random, math, os, base64
@@ -27,7 +27,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.169"
+APP_VERSION = "3.170"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4791,6 +4791,23 @@ window.addEventListener('DOMContentLoaded', function(){
     const el=document.getElementById(id);
     if(el) el.addEventListener('input', () => localStorage.setItem('wf_'+id, el.value));
   });
+
+  // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
+  const _runFields = ['wf_symbol','wf_days'];
+  _runFields.forEach(id => {
+    const saved = localStorage.getItem('wf_last_'+id);
+    if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
+  });
+  const savedTf = localStorage.getItem('wf_last_wf_tf_sel');
+  if(savedTf) { const el=document.getElementById('wf_tf_sel'); if(el) el.value=savedTf; }
+
+  // Авто-сохранение параметров запуска при изменении
+  _runFields.forEach(id => {
+    const el=document.getElementById(id);
+    if(el) el.addEventListener('input', () => localStorage.setItem('wf_last_'+id, el.value));
+  });
+  const tfEl=document.getElementById('wf_tf_sel');
+  if(tfEl) tfEl.addEventListener('change', () => localStorage.setItem('wf_last_wf_tf_sel', tfEl.value));
 });
 
 function getAlertCfg(){
@@ -4952,6 +4969,10 @@ function startOpt(){
   const tf=document.getElementById('wf_tf_sel').value;
   const days=document.getElementById('wf_days').value;
   const risk=document.getElementById('wf_risk').value;
+  // Сохраняем параметры запуска в localStorage
+  localStorage.setItem('wf_last_wf_symbol', rawSym);
+  localStorage.setItem('wf_last_wf_tf_sel', tf);
+  localStorage.setItem('wf_last_wf_days', days);
   const alertCfg=getAlertCfg();
   // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
   const _rawSeed=window._loadedSeed||null;
