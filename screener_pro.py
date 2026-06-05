@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.159
+WickFill Optimizer v3.160
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.159"
+APP_VERSION = "3.160"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5559,16 +5559,10 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '{APP_VERSION}';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
   }).catch(()=>{});
-  setInterval(function(){
-    fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
-      if(d.version && d.version !== _cv){ location.reload(true); }
-    }).catch(()=>{});
-  }, 15000);
 })();
 </script></body></html>"""
 
