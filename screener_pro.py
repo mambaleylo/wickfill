@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.155
+WickFill Optimizer v3.156
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.155"
+APP_VERSION = "3.156"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2304,7 +2304,7 @@ def _perf_save(symbol, tf):
             print(f"[perf] ✅ Загружен на GitHub: {gh_path}", flush=True)
             return
     except Exception as e:
-        print(f"[perf] ⚠ GitHub недоступен: {e}", flush=True)
+        print(f"[perf] ⚠ GitHub ошибка: {type(e).__name__}: {e}", flush=True)
 
     # 2. Локальный фолбек + очередь
     saved = False
@@ -2747,7 +2747,8 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                 with opt_lock:
                     opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"✅ GitHub: {fname}", "level": "found"})
     except Exception as e:
-        print(f"{_ts()} [gh] ⚠ GitHub недоступен: {e}", flush=True)
+        print(f"{_ts()} [gh] ⚠ GitHub ошибка: {type(e).__name__}: {e}", flush=True)
+        if olog: olog(f"⚠ GitHub: {type(e).__name__}: {e}", "warn")
 
     # 2. Если GitHub недоступен — сохранить локально и поставить в очередь
     if not gh_ok:
@@ -5556,7 +5557,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.155';
+  const _cv = '3.156';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
