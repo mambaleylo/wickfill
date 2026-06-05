@@ -2328,11 +2328,11 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
-    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.2%
+    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.4%
     _small_tf = TF_SECONDS.get(tf, 3600) < 3600
     _grids_local = dict(_GRIDS)
     if _small_tf:
-        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
+        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.4]
 
     def pmap(candidates):
         if not candidates:
