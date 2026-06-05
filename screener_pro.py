@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.167
+WickFill Optimizer v3.168
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 """
 
 import json, time, threading, random, math, os, base64
@@ -25,7 +26,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.167"
+APP_VERSION = "3.168"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2324,7 +2325,8 @@ def _perf_save(symbol, tf):
         print(f"[perf] Не удалось сохранить лог\n{txt[:2000]}", flush=True)
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
-                   prev_best_params=None, prev_top20=None, pool=None, n_workers=1):
+                   prev_best_params=None, prev_top20=None, pool=None, n_workers=1,
+                   shake=False):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
@@ -2373,19 +2375,47 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     _seed_floor = top20_global[0] if top20_global else None
     _seed_floor_fit = (_seed_floor.get("validated_fitness") or _seed_floor["fitness"]) if _seed_floor else -1e18
 
+    # ── При встряске расширяем BH ────────────────────────────────────────────
+    # shake=True: больше итераций, шире шаг мутации, обязательно рескрамблим
+    # bool/cat и stop/tp в стартовых точках чтобы дать шанс "заблокированным" параметрам
+    _BH_MAX_eff     = 20 if shake else 12
+    _BH_PATIENCE_eff = 8 if shake else 4
+    _BH_STEP_FRAC   = 0.6 if shake else 0.25   # max шаг = fraction * len(grid)
+    _PERTURB_FRAC   = 0.55 if shake else 0.35  # доля ключей под perturbation
+
+    _SHAKE_KEYS_BOOL_CAT = [k for k, s in PARAM_SPACE.items() if s["type"] in ("bool", "cat")]
+    _SHAKE_KEYS_NUMERIC  = ["stop_pct", "tp_pct"]  # параметры с сильным lock-in эффектом
+
+    def _shake_individual(ind):
+        """Форсированно рескрамблим stop/tp + все bool/cat; остальное не трогаем."""
+        ind2 = dict(ind)
+        for k in _SHAKE_KEYS_BOOL_CAT + _SHAKE_KEYS_NUMERIC:
+            if k not in PARAM_SPACE: continue
+            spec = PARAM_SPACE[k]; grid = _grids_local[k]
+            ind2[k] = random.choice(grid)  # random.choice работает и для bool/cat и для числовых
+        return ind2
+    # ────────────────────────────────────────────────────────────────────────
+
     # Фаза 1: многоточечный старт
     if prev_best_params:
-        start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
-        olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
+        if shake:
+            # При встряске: лучший как база, но с рескрамблем stop/tp/bool/cat,
+            # плюс увеличиваем число рестартов на 2 чтобы шире покрыть пространство
+            shaken_base = _shake_individual(_clamp_tp(prev_best_params))
+            start_points = [_clamp_tp(prev_best_params), shaken_base] + [_rand_ind() for _ in range(n_restarts - 1)]
+            olog(f"━━ ФАЗА 1 [ВСТРЯСКА]: база + shake(stop/tp/bool) + {n_restarts-1} случайных ━", "ok")
+        else:
+            start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
+            olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
     else:
         start_points = [_default_individual()] + [_rand_ind() for _ in range(n_restarts - 1)]
         olog(f"━━ ФАЗА 1: {n_restarts} стартов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "ok")
 
     local_bests = []
-    BH_MAX = 12; BH_PATIENCE = 4
+    # BH_MAX / BH_PATIENCE определены выше через _BH_MAX_eff / _BH_PATIENCE_eff (shake-aware)
     with opt_lock:
         opt_state["cycle_step"] = 0
-        opt_state["cycle_total"] = len(start_points) + BH_MAX
+        opt_state["cycle_total"] = len(start_points) + _BH_MAX_eff
     for i, start_ind in enumerate(start_points):
         if stop_flag(): break
         label = "Старт #1 (предыдущий лучший)" if (i==0 and prev_best_params) else f"Старт #{i+1}"
@@ -2412,8 +2442,9 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     best_f, best_r1, best_p1 = local_bests[0]
 
     # Фаза 2: Basin Hopping от лучшей точки
-    # OPT: early-stop после 4 итераций подряд без улучшения (экономит ~60% времени BH)
-    olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}) ━━━━━━━━", "ok")
+    # OPT: early-stop после N итераций подряд без улучшения (экономит ~60% времени BH)
+    BH_MAX = _BH_MAX_eff; BH_PATIENCE = _BH_PATIENCE_eff
+    olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}{', ШАГ×2.4 ВСТРЯСКА' if shake else ''}) ━━━━━━━━", "ok")
     bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
     bh_no_improve = 0  # OPT: счётчик подряд идущих неудач
     try:
@@ -2427,7 +2458,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         # если их родительский use_* = False (симуляция всё равно их игнорирует,
         # но coordinate_descent потом не найдёт улучшения и тратит время впустую)
         perturbed=dict(bh_current)
-        keys_to_perturb = random.sample(_KEYS, max(1, int(len(_KEYS)*0.35)))
+        keys_to_perturb = random.sample(_KEYS, max(1, int(len(_KEYS)*_PERTURB_FRAC)))
         for k in keys_to_perturb:
             # Пропускаем зависимый параметр если его родитель отключён
             parent = FILTER_GROUPS.get(k)
@@ -2437,7 +2468,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
                 idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
-                step=random.randint(1,max(1,len(grid)//4))
+                step=random.randint(1,max(1,int(len(grid)*_BH_STEP_FRAC)))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/{BH_MAX}"
         _plog("bh_start", bh=bh_i+1)
@@ -2929,6 +2960,11 @@ def run_optimizer(params):
     prev_top20       = []     # накопленный top20 всех циклов
     _last_autosave_vfit = 0.0  # validated_fitness последнего автосохранения
     _global_best_ever = None  # лучший за все циклы — никогда не откатывается назад
+    # ── Межцикловая стагнация ───────────────────────────────────────────────
+    _stagnation_cycles  = 0   # сколько циклов подряд нет улучшения глобального рекорда
+    _STAGNATION_THRESH  = 15  # порог: столько циклов без улучшения → встряска
+    _last_shake_vfit    = -1e18  # validated_fitness на момент последнего рескрамбла
+    # ────────────────────────────────────────────────────────────────────────
     # Автоперезагрузка свечей: каждые 4 интервала TF
     _reload_interval_sec = TF_SECONDS.get(tf, 3600) * 1
     _last_candle_reload  = time.time()
@@ -3043,11 +3079,22 @@ def run_optimizer(params):
 
         _plog("cycle_start", cycle=cycle, n_candles=len(current_candles))
         cycle_t0 = time.time()
+
+        # ── Встряска при стагнации ──────────────────────────────────────────
+        _shake_now = False
+        if infinite and _stagnation_cycles >= _STAGNATION_THRESH:
+            _shake_now = True
+            _stagnation_cycles = 0  # сбрасываем счётчик после встряски
+            _last_shake_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0) if _global_best_ever else -1e18
+            olog(f"⚡ ВСТРЯСКА (stagnation={_STAGNATION_THRESH} циклов): рескрамбл stop/tp/bool → расширенный BH", "warn")
+        # ────────────────────────────────────────────────────────────────────
+
         final_result, final_params, top20 = _run_one_cycle(
             current_candles, days, risk_pct, olog, t0, tf,
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None,
-            pool=_shared_pool, n_workers=_n_workers)
+            pool=_shared_pool, n_workers=_n_workers,
+            shake=_shake_now)
         _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
@@ -3083,6 +3130,9 @@ def run_optimizer(params):
             _gb_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0) if _global_best_ever else -1e18
             if _global_best_ever is None or _cb_vfit > _gb_vfit:
                 _global_best_ever = cycle_best
+                _stagnation_cycles = 0  # рекорд улучшился — сбрасываем
+            else:
+                _stagnation_cycles += 1  # нет улучшения — наращиваем
             all_time_best = _global_best_ever
             prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
@@ -3090,7 +3140,8 @@ def run_optimizer(params):
             is_new_rec = all_time_best.get("equity", 0) > _prev_best_eq
             run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
             rec_flag = "🆕" if is_new_rec else "→"
-            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%", "found" if is_new_rec else "ok")
+            _stag_str = f" | stagnation={_stagnation_cycles}/{_STAGNATION_THRESH}" if _stagnation_cycles > 0 else ""
+            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%{_stag_str}", "found" if is_new_rec else "ok")
 
             all_time_params = dict(all_time_best["params"])
             with opt_lock:
