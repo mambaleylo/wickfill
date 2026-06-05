@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.174"
+APP_VERSION = "3.175"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1897,10 +1897,15 @@ function fetchLiveCandle() {{
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }} else {{
-        // Первое появление live-свечи:
-        // если t совпадает с последней закрытой — НЕ заменяем её (закрытая уже финальная)
-        // добавляем live только если t строго больше
-        if (last && !last.live && d.t > last.t) {{
+        // Первое появление live-свечи
+        if (last && !last.live && d.t === last.t) {{
+          // t совпадает с последней закрытой — помечаем её live и обновляем OHLC
+          // (свеча ещё не закрылась, бэкенд просто не знает что она текущая)
+          last.live = true;
+          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c;
+          // длина не изменилась — viewport не трогаем
+        }} else if (last && !last.live && d.t > last.t) {{
+          // t больше — новая live-свеча сверх закрытых
           CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
