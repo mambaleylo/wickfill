@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.164
+WickFill Optimizer v3.165
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.164"
+APP_VERSION = "3.165"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2750,7 +2750,22 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     gh_path = f"configs/{fname}"
 
     # 1. Попытка сохранить на GitHub
+    # Удаляем старые конфиги с тем же sym/tf/days/risk но другим equity
     gh_ok = False
+    try:
+        import re as _re
+        sym_key = symbol.replace("_","").replace("/","").lower()
+        r_key   = int(round(risk_pct))
+        _pat    = _re.compile(rf"^wickfill_{_re.escape(sym_key)}_{_re.escape(tf)}_{days}d_\$\d+_r{r_key}\.json$")
+        existing_files = _gh_list_folder("configs")
+        for _ef in existing_files:
+            if _pat.match(_ef["name"]) and _ef["name"] != fname:
+                try:
+                    _gh_delete_file(_ef["path"], f"replace: {_ef['name']} -> {fname}")
+                    print(f"{_ts()} [gh] 🗑 Удалён старый конфиг: {_ef['name']}", flush=True)
+                except Exception: pass
+    except Exception as _e:
+        print(f"{_ts()} [gh] ⚠ Ошибка очистки старых конфигов: {_e}", flush=True)
     try:
         gh_ok = _gh_put_file(gh_path, content_str, f"auto-save: {fname}")
         if gh_ok:
