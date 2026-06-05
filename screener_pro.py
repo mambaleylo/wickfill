@@ -27,7 +27,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.170"
+APP_VERSION = "3.171"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2675,17 +2675,17 @@ threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
 
 
 def _clamp_tp_result(r, tf):
-    """Обрезает tp_pct > 1.2 для TF < 1h в result-объекте (модульный уровень)."""
+    """Обрезает tp_pct > 1.5 для TF < 1h в result-объекте (модульный уровень)."""
     if not r or TF_SECONDS.get(tf, 3600) >= 3600: return r
-    if r.get("params", {}).get("tp_pct", 0) <= 1.2: return r
-    r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.2
+    if r.get("params", {}).get("tp_pct", 0) <= 1.5: return r
+    r2 = dict(r); r2["params"] = dict(r["params"]); r2["params"]["tp_pct"] = 1.5
     return r2
 
 def _clamp_tp_params(p, tf):
-    """Обрезает tp_pct > 1.2 для TF < 1h в dict params."""
+    """Обрезает tp_pct > 1.5 для TF < 1h в dict params."""
     if not p or TF_SECONDS.get(tf, 3600) >= 3600: return p
-    if p.get("tp_pct", 0) <= 1.2: return p
-    p2 = dict(p); p2["tp_pct"] = 1.2
+    if p.get("tp_pct", 0) <= 1.5: return p
+    p2 = dict(p); p2["tp_pct"] = 1.5
     return p2
 
 def _config_key(symbol, tf, days, risk_pct):
