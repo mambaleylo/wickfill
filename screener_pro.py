@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.179"
+APP_VERSION = "3.180"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -6056,8 +6056,21 @@ class Handler(BaseHTTPRequestHandler):
                     with _live_candle_lock:
                         _live_candle_cache[key] = c
             if c and "open" in c:
-                self._json({"ok": True, "t": c["t"], "o": c["open"],
-                            "h": c["high"], "l": c["low"], "c": c["close"],
+                # Подменяем open на close предыдущей закрытой свечи — исключаем разрыв по Y
+                # независимо от того что Gate.io вернул в поле "o"
+                live_open = c["open"]
+                with opt_lock:
+                    _cc = opt_state.get("chart_candles", [])
+                    # Ищем последнюю закрытую свечу (не live) с тем же или меньшим t
+                    _prev_closed = next(
+                        (x for x in reversed(_cc)
+                         if not x.get("live") and x["t"] < c["t"]), None
+                    )
+                    if _prev_closed and _prev_closed.get("c"):
+                        live_open = _prev_closed["c"]
+                self._json({"ok": True, "t": c["t"], "o": live_open,
+                            "h": max(c["high"], live_open), "l": min(c["low"], live_open),
+                            "c": c["close"],
                             "age": round(time.time() - c.get("_fetched_at", time.time()))})
             else:
                 self._json({"ok": False, "msg": "нет данных"})
