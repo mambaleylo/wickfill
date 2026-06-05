@@ -4654,12 +4654,12 @@ details summary::-webkit-details-marker{display:none}
       <div style="margin-top:10px" class="tg-grid">
         <div class="field">
           <label>Токен бота</label>
-          <input type="text" id="al_tg_token" placeholder="123456:AAF..." value="8349574010:AAFXZHork2S_yUB51klIeae4GrDChvdyfMA">
+          <input type="text" id="al_tg_token" placeholder="123456:AAF..." value="">
         </div>
         <div class="field">
           <label>Chat ID</label>
           <div class="tg-row">
-            <input type="text" id="al_tg_chat" placeholder="123456789" value="181970023">
+            <input type="text" id="al_tg_chat" placeholder="123456789" value="">
             <button class="btn-tg-test" id="testMailBtn" onclick="sendTestEmail()">Тест</button>
           </div>
         </div>
@@ -4866,7 +4866,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _fields = ['gate_key','gate_secret','gate_pct','gate_auto_enabled','gate_auto_tp_pct','gate_auto_sl_pct'];
+  const _fields = ['gate_key','gate_secret','gate_pct','gate_auto_enabled','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
   _fields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
@@ -6056,21 +6056,8 @@ class Handler(BaseHTTPRequestHandler):
                     with _live_candle_lock:
                         _live_candle_cache[key] = c
             if c and "open" in c:
-                # Подменяем open на close предыдущей закрытой свечи — исключаем разрыв по Y
-                # независимо от того что Gate.io вернул в поле "o"
-                live_open = c["open"]
-                with opt_lock:
-                    _cc = opt_state.get("chart_candles", [])
-                    # Ищем последнюю закрытую свечу (не live) с тем же или меньшим t
-                    _prev_closed = next(
-                        (x for x in reversed(_cc)
-                         if not x.get("live") and x["t"] < c["t"]), None
-                    )
-                    if _prev_closed and _prev_closed.get("c"):
-                        live_open = _prev_closed["c"]
-                self._json({"ok": True, "t": c["t"], "o": live_open,
-                            "h": max(c["high"], live_open), "l": min(c["low"], live_open),
-                            "c": c["close"],
+                self._json({"ok": True, "t": c["t"], "o": c["open"],
+                            "h": c["high"], "l": c["low"], "c": c["close"],
                             "age": round(time.time() - c.get("_fetched_at", time.time()))})
             else:
                 self._json({"ok": False, "msg": "нет данных"})
