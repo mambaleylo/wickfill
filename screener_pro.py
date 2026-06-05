@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.148
+WickFill Optimizer v3.149
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.148"
+APP_VERSION = "3.149"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1537,7 +1537,7 @@ def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.
   --cream:#f7f3ee;--cream2:#ede8e0;--cream3:#e2dbd0;
   --bark:#4a3f34;--text:#1a1310;--text2:#504438;--text3:#7a6e63;
   --border:rgba(92,79,67,.15);--border2:rgba(92,79,67,.08);
-  --green:#3a7d52;--red:#a03030;--yellow:#8a6a1a;
+  --green:#A3BF6F;--red:#FF8234;--yellow:#c8902a;
   --green-light:rgba(58,125,82,.1);--red-light:rgba(160,48,48,.1);
 }}
 html,body{{height:100%;background:#111111;color:#F5F5F5;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column}}
@@ -1647,7 +1647,7 @@ function render(){{
     ctx.beginPath();ctx.moveTo(x1,py(s.tp));ctx.lineTo(x2,py(s.tp));ctx.stroke();
     ctx.strokeStyle=isLong?'rgba(160,48,48,0.45)':'rgba(58,125,82,0.45)';
     ctx.beginPath();ctx.moveTo(x1,py(s.sl));ctx.lineTo(x2,py(s.sl));ctx.stroke();
-    ctx.strokeStyle=isLong?'#4a7fc1':'#c8902a';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
+    ctx.strokeStyle=isLong?'#A3BF6F':'#FF8234';ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x1,py(s.ep));ctx.lineTo(x2,py(s.ep));ctx.stroke();
   }}
   // TP/SL dashed lines and labels for active open trade — always drawn regardless of viewport
   if(activeSig){{
@@ -1657,13 +1657,13 @@ function render(){{
     const aViC=Math.max(0,activeSig.bar_i-viewStart);
     const ax1=PAD_L+aViC*cw, ax2=W-PAD_R;
     ctx.setLineDash([4,3]);
-    ctx.strokeStyle=isLong?'#3a7d52':'#a03030';ctx.lineWidth=1;
+    ctx.strokeStyle=isLong?'#A3BF6F':'#FF8234';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(ax1,tpY);ctx.lineTo(ax2,tpY);ctx.stroke();
     ctx.strokeStyle='#b0a090';
     ctx.beginPath();ctx.moveTo(ax1,slY);ctx.lineTo(ax2,slY);ctx.stroke();
     ctx.setLineDash([]);
     ctx.font='bold 9px system-ui';ctx.textAlign='left';
-    ctx.fillStyle=isLong?'rgba(58,125,82,0.85)':'rgba(160,48,48,0.85)';
+    ctx.fillStyle=isLong?'rgba(163,191,111,0.9)':'rgba(255,130,52,0.9)';
     ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-7,PAD_R-2,14,3);ctx.fill();
     ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY+3);
     ctx.fillStyle='rgba(140,120,100,0.75)';
@@ -1675,7 +1675,7 @@ function render(){{
   const lastC=vis[vis.length-1];
   if(lastC){{
     const curPrice=lastC.c,curY=py(curPrice),isUp=lastC.c>=lastC.o;
-    const cpCol=isUp?'#3a7d52':'#a03030';
+    const cpCol=isUp?'#A3BF6F':'#FF8234';
     ctx.setLineDash([2,3]);ctx.strokeStyle=cpCol+'80';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(PAD_L,curY);ctx.lineTo(W-PAD_R,curY);ctx.stroke();
     ctx.setLineDash([]);
@@ -1685,7 +1685,7 @@ function render(){{
   }}
   for(let i=0;i<vis.length;i++){{
     const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
-    const col=bull?'#3a7d52':'#a03030';
+    const col=bull?'#A3BF6F':'#FF8234';
     ctx.globalAlpha=isLive?0.55:1.0;
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,cw*0.1);
     if(isLive) ctx.setLineDash([3,2]);
@@ -1713,7 +1713,7 @@ function render(){{
     const arrowOff=Math.max(14,Math.min(22,cw*2.2));
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
     ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
-    ctx.strokeStyle=isOpenEnd?'#b0a090':s.win===null?'#b0a090':isWin?'#3a7d52':'#a03030';
+    ctx.strokeStyle=isOpenEnd?'#c0a888':s.win===null?'#c0a888':isWin?'#A3BF6F':'#FF8234';
     ctx.lineWidth=1.5;ctx.beginPath();
     if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
@@ -3670,15 +3670,15 @@ if(window.innerWidth<=700){
   --card-bg:#fff8f3;
   --input-bg:rgba(255,248,243,0.8);
   --cream:#FAE6D8;
-  --cream2:#f5dece;
-  --cream3:#edd8c4;
-  --sand:#d4b89a;
-  --sand2:#a07858;
+  --cream2:#f2ddd0;
+  --cream3:#e8cfc0;
+  --sand:#d4a882;
+  --sand2:#a06040;
   --warm:#7a6050;
-  --bark:#1e1209;
+  --bark:#2a1f12;
   --text:#1e1209;
   --text2:#4a3520;
-  --text3:#9a7d62;
+  --text3:#8a7060;
   --glass:rgba(250,230,216,0.96);
   --glass2:rgba(245,222,206,0.82);
   --blur:saturate(180%) blur(20px);
@@ -3687,10 +3687,12 @@ if(window.innerWidth<=700){
   --radius:18px;
   --radius-sm:14px;
   --accent:#FF8234;
-  --green:#6e8a3e;
-  --green-light:#edf3e0;
-  --red:#c85a18;
+  --green:#7a9e3a;
+  --green-light:#eaf2d8;
+  --red:#FF8234;
   --red-light:#fff0e8;
+  --orange:#FF8234;
+  --accent:#A3BF6F;
   --blue:#2a4e78;
   --blue-light:#d8e6f2;
   --yellow:#7a5a20;
@@ -3717,10 +3719,12 @@ if(window.innerWidth<=700){
   --shadow:0 2px 20px rgba(0,0,0,0.6);
   --shadow2:0 8px 40px rgba(0,0,0,0.7);
   --accent:#8B2508;
-  --green:#7ab84a;
-  --green-light:rgba(122,184,74,0.12);
-  --red:#8B2508;
-  --red-light:rgba(139,37,8,0.2);
+  --green:#A3BF6F;
+  --green-light:rgba(163,191,111,0.15);
+  --red:#FF8234;
+  --red-light:rgba(255,130,52,0.15);
+  --orange:#FF8234;
+  --accent:#A3BF6F;
   --blue:#5a7fa0;
   --blue-light:rgba(90,127,160,0.12);
   --yellow:#b09050;
@@ -3768,19 +3772,19 @@ if(window.innerWidth<=700){
 [data-theme="dark"] .toggle{ background:#8B2508 !important; }
 [data-theme="dark"] .dot-live,
 [data-theme="dark"] .topbar-logo .dot-live{
-  background:#7ab84a !important;
+  background:#A3BF6F !important;
   box-shadow:0 0 0 2px rgba(122,184,74,0.25) !important;
 }
 [data-theme="dark"] .stat-cell.good{
   background:rgba(122,184,74,0.1) !important;
   border-color:rgba(122,184,74,0.2) !important;
 }
-[data-theme="dark"] .stat-cell.good .stat-v{ color:#7ab84a !important; }
+[data-theme="dark"] .stat-cell.good .stat-v{ color:#A3BF6F !important; }
 [data-theme="dark"] .sym-card.active{ border-color:#8B2508 !important; }
 [data-theme="dark"] .api-pill,
 [data-theme="dark"] .pill.green{
   background:rgba(122,184,74,0.12) !important;
-  color:#7ab84a !important;
+  color:#A3BF6F !important;
   border-color:rgba(122,184,74,0.2) !important;
 }
 
@@ -5558,7 +5562,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.148';
+  const _cv = '3.149';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
