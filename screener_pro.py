@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.165
+WickFill Optimizer v3.166
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.165"
+APP_VERSION = "3.166"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2328,11 +2328,11 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
-    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.4%
+    # Для таймфреймов < 1h ограничиваем максимальный TP до 1.2%
     _small_tf = TF_SECONDS.get(tf, 3600) < 3600
     _grids_local = dict(_GRIDS)
     if _small_tf:
-        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.4]
+        _grids_local["tp_pct"] = [v for v in _GRIDS["tp_pct"] if v <= 1.2]
 
     def pmap(candidates):
         if not candidates:
@@ -3863,31 +3863,34 @@ body>*{position:relative;z-index:1}
 .topbar-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
 /* Pill badge */
-/* ── Shared topbar chip style ── */
-.pill,.icon-btn{
-  box-sizing:border-box;
-  display:inline-flex;align-items:center;justify-content:center;gap:4px;
-  height:28px;padding:0 10px;border-radius:7px;
-  font-size:.71rem;font-weight:500;letter-spacing:.01em;line-height:1;
-  border:1px solid var(--border);
-  background:var(--glass2);
-  color:var(--text2);
-  white-space:nowrap;
-  cursor:pointer;
-  font-family:inherit;
+/* ── Topbar chips — single source of truth ── */
+.tb{
+  box-sizing:border-box!important;
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:4px!important;
+  height:28px!important;padding:0 10px!important;border-radius:7px!important;
+  font-size:.71rem!important;font-weight:500!important;letter-spacing:.01em!important;line-height:28px!important;
+  border:1px solid var(--border)!important;
+  background:var(--glass2)!important;
+  color:var(--text2)!important;
+  white-space:nowrap!important;
+  cursor:default;
+  font-family:inherit!important;
+  vertical-align:middle;
+  -webkit-appearance:none!important;appearance:none!important;
   transition:background .15s,border-color .15s,color .15s;
-  -webkit-appearance:none;appearance:none;
+  margin:0!important;
 }
-.pill{cursor:default}
-.pill.green,.icon-btn.success{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
-.pill.blue{background:var(--blue-light);border-color:rgba(74,101,128,.2);color:var(--blue)}
-.pill.pulse{}
-.icon-btn svg,.pill svg{flex-shrink:0;opacity:.7}
-.icon-btn:hover,.pill[onclick]:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
-.icon-btn:hover svg,.pill[onclick]:hover svg{opacity:1}
-.icon-btn.success:hover{background:var(--green-light);filter:brightness(.95)}
-.icon-btn.danger{color:var(--red)}
-.icon-btn.danger:hover{background:var(--red-light);border-color:rgba(139,58,58,.25)}
+.tb.btn{cursor:pointer}
+.tb svg{flex-shrink:0;opacity:.7;display:block}
+.tb.green{background:var(--green-light)!important;border-color:rgba(74,124,89,.2)!important;color:var(--green)!important}
+.tb.btn:hover{background:var(--cream2)!important;border-color:var(--sand)!important;color:var(--bark)!important}
+.tb.btn:hover svg{opacity:1}
+.tb.success{background:var(--green-light)!important;border-color:rgba(74,124,89,.2)!important;color:var(--green)!important}
+.tb.success:hover{filter:brightness(.93)}
+.tb.danger{color:var(--red)!important}
+.tb.danger:hover{background:var(--red-light)!important;border-color:rgba(139,58,58,.25)!important}
+/* legacy aliases */
+.pill,.icon-btn{box-sizing:border-box}
 
 /* ── Main 2-col grid ── */
 .main{display:flex;flex:1;min-height:0;gap:0}
@@ -4373,22 +4376,25 @@ details summary::-webkit-details-marker{display:none}
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
-    <span class="pill" id="speedPill" style="display:none">
-      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" fill="currentColor" opacity=".7"/></svg>
+    <span class="tb" id="speedPill" style="display:none">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" opacity=".75"/></svg>
       <span id="speedPillText">—</span>
     </span>
     <span id="statusBadge2"></span>
-    <span id="swBadge"></span>
-    <span class="pill" id="latencyPill" onclick="checkApi()" style="cursor:pointer" title="Задержка API Gate.io">
+    <span class="tb green" id="swBadge" style="display:none">
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 009.5 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 7a5 5 0 019.5-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      SW
+    </span>
+    <span class="tb btn" id="latencyPill" onclick="checkApi()" title="Задержка API Gate.io">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       <span id="latencyText">— мс</span>
     </span>
-    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Тема">
-      <svg id="themeIcon" width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path id="themeIconPath" d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 1.5A4.5 4.5 0 117 11V2.5z"/></svg>
-      <span id="themeBtnLabel">Тема</span>
+    <button class="tb btn" id="themeBtn" onclick="toggleTheme()" title="Тема">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 1.5A4.5 4.5 0 117 11V2.5z"/></svg>
+      Тема
     </button>
-    <button class="icon-btn success" onclick="termuxUpdate()" title="Перезапустить скрипт с GitHub">
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 009.5-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 2l-.5 3-3-.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <button class="tb btn success" onclick="termuxUpdate()" title="Перезапустить скрипт с GitHub">
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 009.5-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 2l-.5 3-3-.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Restart
     </button>
   </div>
@@ -5164,8 +5170,7 @@ function poll(){
         sp.style.display='none';
       }
     }
-    if(d.sw_running) swb.innerHTML='<span class="pill green">🔄 SW</span>';
-    else swb.innerHTML='';
+    swb.style.display=d.sw_running?'inline-flex':'none';
     if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='flex';
     if(!d.sw_running) document.getElementById('swStopBtn').style.display='none';
 
