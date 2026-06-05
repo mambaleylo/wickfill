@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.163
+WickFill Optimizer v3.164
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.163"
+APP_VERSION = "3.164"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3848,36 +3848,31 @@ body>*{position:relative;z-index:1}
 .topbar-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
 /* Pill badge */
-.pill{
-  display:inline-flex;align-items:center;gap:4px;
-  height:30px;padding:0 10px;border-radius:8px;
-  font-size:.72rem;font-weight:500;letter-spacing:.01em;
+/* ── Shared topbar chip style ── */
+.pill,.icon-btn{
+  box-sizing:border-box;
+  display:inline-flex;align-items:center;justify-content:center;gap:4px;
+  height:28px;padding:0 10px;border-radius:7px;
+  font-size:.71rem;font-weight:500;letter-spacing:.01em;line-height:1;
   border:1px solid var(--border);
   background:var(--glass2);
   color:var(--text2);
   white-space:nowrap;
+  cursor:pointer;
+  font-family:inherit;
+  transition:background .15s,border-color .15s,color .15s;
+  -webkit-appearance:none;appearance:none;
 }
-.pill.green{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
+.pill{cursor:default}
+.pill.green,.icon-btn.success{background:var(--green-light);border-color:rgba(74,124,89,.2);color:var(--green)}
 .pill.blue{background:var(--blue-light);border-color:rgba(74,101,128,.2);color:var(--blue)}
 .pill.pulse{}
-
-/* ── Icon Buttons (topbar) ── */
-.icon-btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:5px;
-  height:30px;padding:0 11px;border-radius:8px;
-  background:var(--glass2);
-  border:1px solid var(--border);
-  color:var(--text2);font-size:.72rem;font-weight:500;letter-spacing:.01em;
-  cursor:pointer;transition:background .15s,border-color .15s,color .15s;
-  white-space:nowrap;
-}
-.icon-btn svg{flex-shrink:0;opacity:.75}
-.icon-btn:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
-.icon-btn:hover svg{opacity:1}
+.icon-btn svg,.pill svg{flex-shrink:0;opacity:.7}
+.icon-btn:hover,.pill[onclick]:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
+.icon-btn:hover svg,.pill[onclick]:hover svg{opacity:1}
+.icon-btn.success:hover{background:var(--green-light);filter:brightness(.95)}
 .icon-btn.danger{color:var(--red)}
 .icon-btn.danger:hover{background:var(--red-light);border-color:rgba(139,58,58,.25)}
-.icon-btn.success{color:var(--green)}
-.icon-btn.success:hover{background:var(--green-light);border-color:rgba(74,124,89,.25)}
 
 /* ── Main 2-col grid ── */
 .main{display:flex;flex:1;min-height:0;gap:0}
