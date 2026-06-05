@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.156
+WickFill Optimizer v3.157
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.156"
+APP_VERSION = "3.157"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2541,7 +2541,9 @@ def _gh_request(method, path, payload=None):
             return json.load(r)
     except _ue.HTTPError as e:
         if e.code == 404: return None
-        print(f"{_ts()} [gh] HTTP {e.code} {method} {path}", flush=True)
+        try: body = e.read().decode()[:300]
+        except: body = ""
+        print(f"{_ts()} [gh] HTTP {e.code} {method} {path}: {body}", flush=True)
         return None
     except Exception as e:
         print(f"{_ts()} [gh] {e}", flush=True)
@@ -5557,7 +5559,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.156';
+  const _cv = '3.157';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
