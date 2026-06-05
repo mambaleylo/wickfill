@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.147
+WickFill Optimizer v3.148
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.147"
+APP_VERSION = "3.148"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4349,7 +4349,6 @@ details summary::-webkit-details-marker{display:none}
     <button class="icon-btn" onclick="checkApi()">⟳ API</button>
     <span class="pill" id="latencyPill">— мс</span>
     <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
-    <button class="icon-btn" onclick="renameDownload()">✏ Rename</button>
     <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
   </div>
 </header>
@@ -4552,10 +4551,7 @@ details summary::-webkit-details-marker{display:none}
       <div class="cycles-col">
         <div class="cycles-col-header">
           <span class="cycles-label" id="ccLabel">Циклы</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
-            <button class="icon-btn" style="font-size:.65rem;padding:3px 7px" onclick="_resetLog()">очистить</button>
-          </div>
+          <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
         </div>
         <div class="cc-strip" id="ccStrip"></div>
       </div>
@@ -5562,7 +5558,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.147';
+  const _cv = '3.148';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
