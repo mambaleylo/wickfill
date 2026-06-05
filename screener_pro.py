@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.175"
+APP_VERSION = "3.176"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1887,8 +1887,8 @@ function fetchLiveCandle() {{
       const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
       if (last && last.live) {{
         if (d.t === last.t) {{
-          // Та же свеча — просто обновляем OHLC, viewport не трогаем
-          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c;
+          // Та же свеча — обновляем HLC, open не трогаем (чтобы не было разрыва)
+          last.h = Math.max(last.h, d.h); last.l = Math.min(last.l, d.l); last.c = d.c;
         }} else if (d.t > last.t) {{
           // Новый интервал: закрываем старую live, добавляем новую.
           // viewStart сдвигаем ровно на 1 — чтобы viewLen остался постоянным и не было разрыва.
@@ -1899,10 +1899,10 @@ function fetchLiveCandle() {{
       }} else {{
         // Первое появление live-свечи
         if (last && !last.live && d.t === last.t) {{
-          // t совпадает с последней закрытой — помечаем её live и обновляем OHLC
-          // (свеча ещё не закрылась, бэкенд просто не знает что она текущая)
+          // t совпадает с последней закрытой — помечаем её live, обновляем HLC
+          // open НЕ трогаем — он должен совпадать с close предыдущей свечи (нет разрыва)
           last.live = true;
-          last.o = d.o; last.h = d.h; last.l = d.l; last.c = d.c;
+          last.h = Math.max(last.h, d.h); last.l = Math.min(last.l, d.l); last.c = d.c;
           // длина не изменилась — viewport не трогаем
         }} else if (last && !last.live && d.t > last.t) {{
           // t больше — новая live-свеча сверх закрытых
