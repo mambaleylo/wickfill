@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.162
+WickFill Optimizer v3.163
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.162"
+APP_VERSION = "3.163"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3849,9 +3849,9 @@ body>*{position:relative;z-index:1}
 
 /* Pill badge */
 .pill{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:4px 10px;border-radius:20px;
-  font-size:.72rem;font-weight:500;
+  display:inline-flex;align-items:center;gap:4px;
+  height:30px;padding:0 10px;border-radius:8px;
+  font-size:.72rem;font-weight:500;letter-spacing:.01em;
   border:1px solid var(--border);
   background:var(--glass2);
   color:var(--text2);
@@ -3864,14 +3864,16 @@ body>*{position:relative;z-index:1}
 /* ── Icon Buttons (topbar) ── */
 .icon-btn{
   display:inline-flex;align-items:center;justify-content:center;gap:5px;
-  padding:6px 12px;border-radius:10px;
+  height:30px;padding:0 11px;border-radius:8px;
   background:var(--glass2);
   border:1px solid var(--border);
-  color:var(--text2);font-size:.75rem;font-weight:500;
-  cursor:pointer;transition:all .18s ease;
+  color:var(--text2);font-size:.72rem;font-weight:500;letter-spacing:.01em;
+  cursor:pointer;transition:background .15s,border-color .15s,color .15s;
   white-space:nowrap;
 }
+.icon-btn svg{flex-shrink:0;opacity:.75}
 .icon-btn:hover{background:var(--cream2);border-color:var(--sand);color:var(--bark)}
+.icon-btn:hover svg{opacity:1}
 .icon-btn.danger{color:var(--red)}
 .icon-btn.danger:hover{background:var(--red-light);border-color:rgba(139,58,58,.25)}
 .icon-btn.success{color:var(--green)}
@@ -4361,13 +4363,24 @@ details summary::-webkit-details-marker{display:none}
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-meta">
-    <span class="pill" id="speedPill" style="display:none">⚡ —</span>
+    <span class="pill" id="speedPill" style="display:none">
+      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" fill="currentColor" opacity=".7"/></svg>
+      <span id="speedPillText">—</span>
+    </span>
     <span id="statusBadge2"></span>
     <span id="swBadge"></span>
-    <button class="icon-btn" onclick="checkApi()">⟳ API</button>
-    <span class="pill" id="latencyPill">— мс</span>
-    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Переключить тему">☀</button>
-    <button class="icon-btn success" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
+    <span class="pill" id="latencyPill" onclick="checkApi()" style="cursor:pointer" title="Задержка API Gate.io">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <span id="latencyText">— мс</span>
+    </span>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Тема">
+      <svg id="themeIcon" width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path id="themeIconPath" d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 1.5A4.5 4.5 0 117 11V2.5z"/></svg>
+      <span id="themeBtnLabel">Тема</span>
+    </button>
+    <button class="icon-btn success" onclick="termuxUpdate()" title="Перезапустить скрипт с GitHub">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 009.5-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 2l-.5 3-3-.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Restart
+    </button>
   </div>
 </header>
 
@@ -4620,11 +4633,13 @@ function toggleInfinite(){} // режим всегда бесконечный
 /* ── API check ── */
 function checkApi(){
   const pill=document.getElementById('latencyPill');
-  pill.textContent='...';pill.className='pill';
+  const txt=document.getElementById('latencyText');
+  if(txt) txt.textContent='...'; else if(pill) pill.textContent='...';
+  pill&&(pill.className='pill');
   fetch('/ping').then(r=>r.json()).then(d=>{
-    if(d.ok){pill.textContent=d.ms+'мс';pill.className='pill green';}
-    else{pill.textContent=d.error||'err';pill.className='pill';}
-  }).catch(()=>{pill.textContent='офлайн';pill.className='pill';});
+    if(d.ok){if(txt)txt.textContent=d.ms+'мс';else if(pill)pill.textContent=d.ms+'мс';pill&&(pill.className='pill green');}
+    else{if(txt)txt.textContent=d.error||'err';else if(pill)pill.textContent=d.error||'err';pill&&(pill.className='pill');}
+  }).catch(()=>{if(txt)txt.textContent='офлайн';else if(pill)pill.textContent='офлайн';pill&&(pill.className='pill');});
 }
 checkApi();setInterval(checkApi,60000);
 // Каждую секунду обновляем текст "нет соединения Xs"
@@ -5130,7 +5145,9 @@ function poll(){
         sp.style.display='';
         const mins=Math.floor(d.avg_cycle_s/60);
         const secs=Math.round(d.avg_cycle_s%60);
-        sp.textContent='⚡ '+(mins>0?mins+'м ':'')+secs+'с/цикл';
+        const spTxt=document.getElementById('speedPillText');
+        const spLabel=(mins>0?mins+'м ':'')+secs+'с/цикл';
+        if(spTxt)spTxt.textContent=spLabel; else sp.textContent='⚡ '+spLabel;
         sp.title='Среднее время одного цикла оптимизации';
         sp._lastShown=Date.now();
       } else if(!sp._lastShown||(Date.now()-sp._lastShown)>8000){
@@ -5519,7 +5536,7 @@ function toggleTheme(){
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   const next=isDark?'light':'dark';
   document.documentElement.setAttribute('data-theme',next);
-  document.getElementById('themeBtn').textContent=next==='dark'?'🌙':'☀';
+  const _tbl=document.getElementById('themeBtnLabel');if(_tbl)_tbl.textContent=next==='dark'?'Тема':'Тема';
   localStorage.setItem('wf_theme',next);
   // Reload chart iframe with new theme — полная перезагрузка нужна для смены цветов
   const frame=document.getElementById('chartFrame');
@@ -5585,7 +5602,7 @@ function _loadRecentConfigs(){
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
   const t=document.documentElement.getAttribute('data-theme')||'light';
-  if(btn) btn.textContent=t==='dark'?'🌙':'☀';
+  // theme icon is SVG, no text update needed
   _loadRecentConfigs();
 });
 
