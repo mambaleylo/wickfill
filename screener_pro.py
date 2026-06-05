@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.153
+WickFill Optimizer v3.154
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -25,7 +25,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.153"
+APP_VERSION = "3.154"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5562,7 +5562,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </script>
 <script>
 (function(){
-  const _cv = '3.153';
+  const _cv = '3.154';
   fetch('/version',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     const sp=document.getElementById('versionSpan');
     if(sp && d.version) sp.textContent='v'+d.version;
@@ -6063,8 +6063,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/update_script":
             try:
                 import urllib.request as _ur
-                _raw_url = "https://raw.githubusercontent.com/mambaleylo/wickfill/main/screener_pro.py"
-                _headers = {"Authorization": "token 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",
+                _raw_url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/screener_pro.py"
+                _headers = {"Authorization": f"token {_GH_TOKEN}",
                             "User-Agent": "WickFill-updater"}
                 _req = _ur.Request(_raw_url, headers=_headers)
                 with _ur.urlopen(_req, timeout=30) as _resp:
