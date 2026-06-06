@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.182"
+APP_VERSION = "3.183"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4569,7 +4569,7 @@ details summary::-webkit-details-marker{display:none}
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:260px;overflow-y:auto;transition:max-height .25s ease;padding:0 6px 6px">
+      <div id="recentBody" style="max-height:600px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -5117,8 +5117,8 @@ function startOpt(){
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
       const _rp=document.getElementById('recentPanel');if(_rp){_rp.style.display='none';
-        const _rb=document.getElementById('recentBody');if(_rb)_rb.style.maxHeight='0px';
-        const _ra=document.getElementById('recentArrow');if(_ra)_ra.style.transform='rotate(0deg)';}
+        const _rb2=document.getElementById('recentBody');if(_rb2)_rb2.style.maxHeight='0px';
+        const _ra2=document.getElementById('recentArrow');if(_ra2)_ra2.style.transform='rotate(0deg)';}
       const _cf=document.getElementById('chartFrame');
       const _cp=document.getElementById('chartPlaceholder');
       if(_cf){_cf.style.display='none';_cf.src='about:blank';_chartFrameLoaded=false;}
@@ -5393,11 +5393,7 @@ function poll(){
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
       document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
-      const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs){
-        _rp.style.display='block';
-        const _rb=document.getElementById('recentBody');if(_rb)_rb.style.maxHeight='260px';
-        const _ra=document.getElementById('recentArrow');if(_ra)_ra.style.transform='rotate(180deg)';
-      }
+      _loadRecentConfigs();
     }
   }).catch(()=>{
     if (!_connLost) {
@@ -5814,6 +5810,11 @@ function _loadRecentConfigs(){
     });
     panel.dataset.hasConfigs='1';
     panel.style.display='block';
+    // Всегда раскрываем при загрузке
+    const rb=document.getElementById('recentBody');
+    const ra=document.getElementById('recentArrow');
+    if(rb) rb.style.maxHeight='600px';
+    if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
 document.addEventListener('DOMContentLoaded',function(){
