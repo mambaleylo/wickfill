@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.184"
+APP_VERSION = "3.185"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2059,81 +2059,73 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
 
     if not sigs: return
 
-    last_bar = len(candles) - 1
+    # Ищем сигнал по времени последней свечи — bar_i из разных _simulate может не совпадать
+    # (SW-окно и окно оптимизатора могут быть разной длины)
+    last_candle_t = candles[-1]["t"]
     nb = bool(best_params.get("use_next_bar", False))
 
-    # use_next_bar=False: сигнал и вход на одной свече — ждём закрытия сигнальной (last_bar)
-    # use_next_bar=True:  вход на свече после сигнала — bar_i = signal+1, т.е. last_bar
-    # В обоих случаях ищем bar_i == last_bar
-    check_bars = {last_bar}
     for s in sigs:
-        if s["bar_i"] in check_bars:
-            candle_t = candles[s["bar_i"]]["t"]
-            if candle_t <= last_signal_t:
-                continue  # уже отправляли этот бар
-            ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
-            # Читаем плечо из лучшего конфига
-            with opt_lock:
-                _best_for_lev = opt_state.get("all_time_best") or opt_state.get("best") or {}
-            _sig_leverage = (_best_for_lev.get("leverage") or
-                             (_best_for_lev.get("params") or {}).get("leverage") or 1)
-            if symbol and symbol in opt_states:
-                with opt_states_lock:
-                    _sym_best = opt_states[symbol].get("best") or {}
-                _sig_leverage = (_sym_best.get("leverage") or
-                                 (_sym_best.get("params") or {}).get("leverage") or _sig_leverage)
-            # 1. Телеграм-уведомление (независимо от Gate)
-            tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t,
-                                        leverage=_sig_leverage)
-            # Сохраняем сигнал — и в глобальный, и в per-symbol стейт
-            with opt_lock:
-                opt_state["last_signal_t"] = candle_t
-            if symbol and symbol in opt_states:
-                with opt_states_lock:
-                    if symbol in opt_states:
-                        opt_states[symbol]["last_signal_t"] = candle_t
-            with alert_lock:
-                alert_state["sent"] += 1
-                alert_state["signals"].insert(0, {
-                    "symbol": symbol, "tf": tf, "dir": direction,
-                    "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
-                    "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
-                })
-                alert_state["signals"] = alert_state["signals"][:50]
-            print(f"[alert] Сигнал: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tg={'✓' if tg_ok else '✕'}")
+        candle_t = s.get("t") or 0
+        if candle_t != last_candle_t:
+            continue  # не последняя свеча
+        if candle_t <= last_signal_t:
+            continue  # уже отправляли
+        ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
+        # Читаем плечо из лучшего конфига
+        with opt_lock:
+            _best_for_lev = opt_state.get("all_time_best") or opt_state.get("best") or {}
+        _sig_leverage = (_best_for_lev.get("leverage") or
+                         (_best_for_lev.get("params") or {}).get("leverage") or 1)
+        if symbol and symbol in opt_states:
+            with opt_states_lock:
+                _sym_best = opt_states[symbol].get("best") or {}
+            _sig_leverage = (_sym_best.get("leverage") or
+                             (_sym_best.get("params") or {}).get("leverage") or _sig_leverage)
+        # 1. Телеграм/ntfy уведомление
+        tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t,
+                                    leverage=_sig_leverage)
+        # Сохраняем сигнал
+        with opt_lock:
+            opt_state["last_signal_t"] = candle_t
+        if symbol and symbol in opt_states:
+            with opt_states_lock:
+                if symbol in opt_states:
+                    opt_states[symbol]["last_signal_t"] = candle_t
+        with alert_lock:
+            alert_state["sent"] += 1
+            alert_state["signals"].insert(0, {
+                "symbol": symbol, "tf": tf, "dir": direction,
+                "ep": ep, "tp": tp, "sl": sl, "t": candle_t,
+                "ts": time.strftime("%H:%M:%S", time.gmtime(candle_t + TF_SECONDS.get(tf, 3600) + 3*3600))
+            })
+            alert_state["signals"] = alert_state["signals"][:50]
+        print(f"[alert] Сигнал: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tg={'✓' if tg_ok else '✕'}")
 
-            # 2. Автоторговля Gate.io (независимо от успеха телеграма)
-            gate_key    = alert_cfg.get("gate_key", "")
-            gate_secret = alert_cfg.get("gate_secret", "")
-            gate_pct    = float(alert_cfg.get("gate_pct", 0))
-            gate_auto_on = alert_cfg.get("gate_auto_enabled", False)
-            if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
-                with opt_lock:
-                    best = opt_state.get("all_time_best") or opt_state.get("best") or {}
-                leverage = best.get("leverage", 1) or 1
-                # TP/SL: если заданы проценты — считаем от ep, иначе берём из сигнала
-                auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
-                auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
-                if auto_tp_pct > 0:
-                    trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6)
-                else:
-                    trade_tp = tp  # из сигнала (ценовая шкала)
-                if auto_sl_pct > 0:
-                    trade_sl = round(ep * (1 - auto_sl_pct/100) if direction==1 else ep * (1 + auto_sl_pct/100), 6)
-                else:
-                    trade_sl = sl  # из сигнала (ценовая шкала)
-                ok_trade, trade_log = _gate_execute_signal(
-                    alert_cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct
-                )
-                status = "✓" if ok_trade else "✕"
-                print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
-                with opt_lock:
-                    opt_state.setdefault("logs", []).append({
-                        "ts": time.strftime("%H:%M:%S"),
-                        "msg": f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'} × {int(leverage)} — {trade_log.splitlines()[-1]}",
-                        "level": "ok" if ok_trade else "error"
-                    })
-            break
+        # 2. Автоторговля Gate.io
+        gate_key    = alert_cfg.get("gate_key", "")
+        gate_secret = alert_cfg.get("gate_secret", "")
+        gate_pct    = float(alert_cfg.get("gate_pct", 0))
+        gate_auto_on = alert_cfg.get("gate_auto_enabled", False)
+        if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
+            with opt_lock:
+                best = opt_state.get("all_time_best") or opt_state.get("best") or {}
+            leverage = best.get("leverage", 1) or 1
+            auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
+            auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
+            trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
+            trade_sl = round(ep * (1 - auto_sl_pct/100) if direction==1 else ep * (1 + auto_sl_pct/100), 6) if auto_sl_pct > 0 else sl
+            ok_trade, trade_log = _gate_execute_signal(
+                alert_cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct
+            )
+            status = "✓" if ok_trade else "✕"
+            print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
+            with opt_lock:
+                opt_state.setdefault("logs", []).append({
+                    "ts": time.strftime("%H:%M:%S"),
+                    "msg": f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'} × {int(leverage)} — {trade_log.splitlines()[-1]}",
+                    "level": "ok" if ok_trade else "error"
+                })
+        break
 
 # ═══════════════════════════════════════════════════════════════
 # SLIDING WINDOW THREAD — обновляет свечи каждые N секунд
