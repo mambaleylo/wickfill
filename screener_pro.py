@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.181"
+APP_VERSION = "3.182"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5116,7 +5116,9 @@ function startOpt(){
       document.getElementById('wfBtn').style.display='none';
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
-      const _rp=document.getElementById('recentPanel');if(_rp)_rp.style.display='none';
+      const _rp=document.getElementById('recentPanel');if(_rp){_rp.style.display='none';
+        const _rb=document.getElementById('recentBody');if(_rb)_rb.style.maxHeight='0px';
+        const _ra=document.getElementById('recentArrow');if(_ra)_ra.style.transform='rotate(0deg)';}
       const _cf=document.getElementById('chartFrame');
       const _cp=document.getElementById('chartPlaceholder');
       if(_cf){_cf.style.display='none';_cf.src='about:blank';_chartFrameLoaded=false;}
@@ -5391,7 +5393,11 @@ function poll(){
       document.getElementById('wfBtn').disabled=false;
       document.getElementById('wfStopBtn').style.display='none';
       document.getElementById('progLabel').textContent='✓ Готово за '+d.elapsed+'с';
-      const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs)_rp.style.display='block';
+      const _rp=document.getElementById('recentPanel');if(_rp&&_rp.dataset.hasConfigs){
+        _rp.style.display='block';
+        const _rb=document.getElementById('recentBody');if(_rb)_rb.style.maxHeight='260px';
+        const _ra=document.getElementById('recentArrow');if(_ra)_ra.style.transform='rotate(180deg)';
+      }
     }
   }).catch(()=>{
     if (!_connLost) {
