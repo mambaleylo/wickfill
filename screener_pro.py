@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.183"
+APP_VERSION = "3.184"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2106,7 +2106,8 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             gate_key    = alert_cfg.get("gate_key", "")
             gate_secret = alert_cfg.get("gate_secret", "")
             gate_pct    = float(alert_cfg.get("gate_pct", 0))
-            if gate_key and gate_secret and gate_pct > 0:
+            gate_auto_on = alert_cfg.get("gate_auto_enabled", False)
+            if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
                 with opt_lock:
                     best = opt_state.get("all_time_best") or opt_state.get("best") or {}
                 leverage = best.get("leverage", 1) or 1
@@ -4878,16 +4879,25 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _fields = ['gate_key','gate_secret','gate_pct','gate_auto_enabled','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
-  _fields.forEach(id => {
+  const _textFields = ['gate_key','gate_secret','gate_pct','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
+  const _checkFields = ['gate_auto_enabled'];
+  _textFields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
   });
+  _checkFields.forEach(id => {
+    const saved = localStorage.getItem('wf_'+id);
+    if(saved !== null) { const el=document.getElementById(id); if(el) el.checked=(saved==='true'); }
+  });
 
   // Авто-сохранение при изменении
-  _fields.forEach(id => {
+  _textFields.forEach(id => {
     const el=document.getElementById(id);
     if(el) el.addEventListener('input', () => localStorage.setItem('wf_'+id, el.value));
+  });
+  _checkFields.forEach(id => {
+    const el=document.getElementById(id);
+    if(el) el.addEventListener('change', () => localStorage.setItem('wf_'+id, el.checked));
   });
 
   // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
@@ -4922,7 +4932,8 @@ function getAlertCfg(){
   const gsl=parseFloat(document.getElementById('gate_auto_sl_pct')?.value)||0;
   // BUG FIX: Gate работает независимо от заполненности Telegram-полей
   // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
-  if(gk&&gs&&gp>0&&gauto) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  // Всегда передаём gate ключи в cfg — исполнение контролируется флагом gate_auto_enabled
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl,gate_auto_enabled:gauto});
   // Обновляем статус галочки
   const st=document.getElementById('gate_auto_status');
   if(st) st.textContent=gauto&&gk&&gs&&gp>0?'🟢 вкл':'⚪ выкл';
