@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.180"
+APP_VERSION = "3.181"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2334,7 +2334,19 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             if _live_alert_cfg and prev_signals_for_close:
                 _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf)
             if _live_alert_cfg:
-                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
+                # Берём сигналы из opt_state — то что видит JS на графике
+                # SW-тред и основной оптимизатор могут иметь разные параметры
+                _alert_sigs = None
+                if is_multi:
+                    with opt_states_lock:
+                        _alert_sigs = list(opt_states.get(symbol, {}).get("chart_signals") or [])
+                if not _alert_sigs:
+                    with opt_lock:
+                        _alert_sigs = list(opt_state.get("chart_signals") or [])
+                # Fallback на SW-сигналы если opt_state ещё не обновился
+                if not _alert_sigs:
+                    _alert_sigs = chart_signals_data
+                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=_alert_sigs)
         else:
             _set_candles(new_candles)
 
