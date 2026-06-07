@@ -991,8 +991,7 @@ def _fetch_candles(symbol, tf, days):
     print(f"{_ts()} [fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
-        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="
-", flush=True)
+        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
         try:
             with opt_lock:
                 opt_state["fetch_pct"] = pct
