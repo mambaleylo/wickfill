@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.186"
+APP_VERSION = "3.187"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4571,17 +4571,15 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
-      <div class="field-row" style="margin-bottom:6px">
-        <div class="field-inset" style="flex:3">
+      <div style="display:grid;grid-template-columns:3fr 1fr;gap:6px;margin-bottom:0">
+        <div class="field-inset">
           <label>Символы (через запятую)</label>
           <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
         </div>
-        <div class="field-inset" style="flex:1">
+        <div class="field-inset">
           <label>Мин. стоп (%)</label>
           <input type="number" id="wf_sl_min" min="0.1" max="5" step="0.1" value="0.4" style="width:100%">
         </div>
-      </div>
-      <div class="field-row" style="margin-bottom:0">
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
