@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.192"
+APP_VERSION = "3.193"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -330,7 +330,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     umsf=p["use_ms_filter"]; ms_lb=p["ms_lookback"]
     uemaf=p.get("use_ema_filter", False); ema_per=p.get("ema_period", 50)
 
-    if not candles_list or len(candles_list) < max(ll, gl, rl, q_atr, sw_len, ms_lb, ema_per) + 10:
+    if not candles_list or len(candles_list) < max(ll, gl, rl, q_atr, sw_len, ms_lb, ema_per if uemaf else 0) + 10:
         return None
     if days_limit > 0:
         cutoff = time.time() - days_limit * 86400
@@ -514,7 +514,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     pending_sig=0; sig_bar=-1; last_sig=0
     _csigs=[]
 
-    start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ema_per,ret_lb,rep_lb,clu_lb)+2
+    start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ema_per if uemaf else 0,ret_lb,rep_lb,clu_lb)+2
     start_i=min(start_i,n-1)
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
