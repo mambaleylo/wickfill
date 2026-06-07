@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.188"
+APP_VERSION = "3.189"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2773,12 +2773,14 @@ def _config_key(symbol, tf, days, risk_pct):
     sym = symbol.replace("_","").replace("/","").lower()
     return f"{sym}_{tf}_{days}d_r{int(round(risk_pct))}"
 
-def _config_filename(symbol, tf, days, risk_pct, equity):
-    """wickfill_btcusdt_15m_3d_$234_r20.json"""
+def _config_filename(symbol, tf, days, risk_pct, equity, sl_pct=None, tp_pct=None):
+    """wickfill_btcusdt_15m_3d_$234_r20_sl0.5_tp1.2.json"""
     sym = symbol.replace("_","").replace("/","").lower()
     eq  = int(round(equity))
     r   = int(round(risk_pct))
-    return f"wickfill_{sym}_{tf}_{days}d_${eq}_r{r}.json"
+    sl_part = f"_sl{round(sl_pct,2)}" if sl_pct is not None else ""
+    tp_part = f"_tp{round(tp_pct,2)}" if tp_pct is not None else ""
+    return f"wickfill_{sym}_{tf}_{days}d_${eq}_r{r}{sl_part}{tp_part}.json"
 
 def _find_auto_config(symbol, tf, days, risk_pct):
     """Ищет лучший конфиг: сначала GitHub, потом локально."""
@@ -2786,28 +2788,28 @@ def _find_auto_config(symbol, tf, days, risk_pct):
     days = int(days)
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
-    pat_prefix = f"wickfill_{sym}_{tf}_{days}d_"
-    pat_suffix = f"_r{r}.json"
+    import re as _re_fc
+    pat_re = _re_fc.compile(rf"^wickfill_{_re_fc.escape(sym)}_{_re_fc.escape(tf)}_{days}d_\$\d+_r{r}(_sl[\d.]+_tp[\d.]+)?\.json$")
 
     # 1. Попытка с GitHub
     try:
         gh_files = _gh_list_folder("configs")
         for f in gh_files:
             name = f["name"]
-            if name.startswith(pat_prefix) and name.endswith(pat_suffix):
-                raw = _gh_get_file(f"configs/{name}")
-                if not raw: continue
-                data = json.loads(raw)
-                if not (data.get("best") and data["best"].get("params")): continue
-                if int(data.get("days", days)) != days: continue
-                if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
-                print(f"{_ts()} [gh] ✅ Конфиг загружен с GitHub: configs/{name}", flush=True)
-                return f"github:configs/{name}", data
+            if not pat_re.match(name): continue
+            raw = _gh_get_file(f"configs/{name}")
+            if not raw: continue
+            data = json.loads(raw)
+            if not (data.get("best") and data["best"].get("params")): continue
+            if int(data.get("days", days)) != days: continue
+            if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
+            print(f"{_ts()} [gh] ✅ Конфиг загружен с GitHub: configs/{name}", flush=True)
+            return f"github:configs/{name}", data
     except Exception as e:
         print(f"{_ts()} [gh] Ошибка загрузки конфига: {e}", flush=True)
 
     # 2. Локальный фолбек
-    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}.json"
+    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}*.json"
     best_path, best_data, best_eq = None, None, -1
     for d in _AUTO_DIRS:
         if not os.path.isdir(d): continue
@@ -2862,7 +2864,9 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
 
     _log(f"[save] Сохраняю в: {save_dir}", "info")
 
-    fname = _config_filename(symbol, tf, days, risk_pct, eq)
+    fname = _config_filename(symbol, tf, days, risk_pct, eq,
+                             sl_pct=best.get("params", {}).get("sl_pct"),
+                             tp_pct=best.get("params", {}).get("tp_pct"))
     fpath = os.path.join(save_dir, fname)
 
     data = {
@@ -2881,7 +2885,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         import re as _re
         sym_key = symbol.replace("_","").replace("/","").lower()
         r_key   = int(round(risk_pct))
-        _pat    = _re.compile(rf"^wickfill_{_re.escape(sym_key)}_{_re.escape(tf)}_{days}d_\$\d+_r{r_key}\.json$")
+        _pat    = _re.compile(rf"^wickfill_{_re.escape(sym_key)}_{_re.escape(tf)}_{days}d_\$\d+_r{r_key}(_sl[\d.]+_tp[\d.]+)?\.json$")
         existing_files = _gh_list_folder("configs")
         for _ef in existing_files:
             if _pat.match(_ef["name"]) and _ef["name"] != fname:
@@ -2946,7 +2950,9 @@ def run_optimizer(params):
     days         = _si(params.get("wf_days"), 3)
     risk_pct     = max(1.0, min(100.0, _sf(params.get("wf_risk"), 20.0)))
     sl_min       = max(0.1, min(5.0, _sf(params.get("wf_sl_min"), 0.4)))
+    sl_max       = max(sl_min, min(10.0, _sf(params.get("wf_sl_max"), 0.8)))
     PARAM_SPACE["sl_pct"]["min"] = sl_min
+    PARAM_SPACE["sl_pct"]["max"] = sl_max
     infinite     = params.get("infinite", False)
     alert_cfg    = params.get("alert_cfg", None)  # dict или None
     n_candles    = _si(params.get("wf_n_candles"), 0)
@@ -3083,7 +3089,7 @@ def run_optimizer(params):
         import glob as _glob2
         sym2 = symbol.replace("_","").replace("/","").lower()
         r2   = int(round(risk_pct))
-        search_pat = f"wickfill_{sym2}_{tf}_{days}d_$*_r{r2}.json"
+        search_pat = f"wickfill_{sym2}_{tf}_{days}d_$*_r{r2}*.json"
         olog(f"🗂 Ищу: {search_pat}", "info")
         for d in existing_dirs:
             all_wf = _glob2.glob(os.path.join(d, "wickfill_*.json"))
@@ -4577,8 +4583,12 @@ details summary::-webkit-details-marker{display:none}
           <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
         </div>
         <div class="field-inset" style="flex:1">
-          <label>Мин. стоп (%)</label>
+          <label>Стоп мин (%)</label>
           <input type="number" id="wf_sl_min" min="0.1" max="5" step="0.1" value="0.4" style="width:100%">
+        </div>
+        <div class="field-inset" style="flex:1">
+          <label>Стоп макс (%)</label>
+          <input type="number" id="wf_sl_max" min="0.1" max="10" step="0.1" value="0.8" style="width:100%">
         </div>
       </div>
       <div class="field-row" style="margin-bottom:0">
@@ -4901,7 +4911,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
-  const _runFields = ['wf_symbol','wf_days','wf_sl_min'];
+  const _runFields = ['wf_symbol','wf_days','wf_sl_min','wf_sl_max'];
   _runFields.forEach(id => {
     const saved = localStorage.getItem('wf_last_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
@@ -5092,18 +5102,20 @@ function startOpt(){
   const days=document.getElementById('wf_days').value;
   const risk=document.getElementById('wf_risk').value;
   const sl_min=parseFloat(document.getElementById('wf_sl_min').value)||0.4;
+  const sl_max=parseFloat(document.getElementById('wf_sl_max').value)||0.8;
   // Сохраняем параметры запуска в localStorage
   localStorage.setItem('wf_last_wf_symbol', rawSym);
   localStorage.setItem('wf_last_wf_tf_sel', tf);
   localStorage.setItem('wf_last_wf_days', days);
   localStorage.setItem('wf_last_wf_sl_min', sl_min);
+  localStorage.setItem('wf_last_wf_sl_max', sl_max);
   const alertCfg=getAlertCfg();
   // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
   const _rawSeed=window._loadedSeed||null;
   const seed=(_rawSeed&&_rawSeed.tf&&_rawSeed.tf!==tf)?null:_rawSeed;
   if(_rawSeed&&!seed) console.warn('[seed] Сброшен: tf seed='+_rawSeed.tf+' != выбран='+tf);
   const eco=document.getElementById('ecoModeChk')?.checked||false;
-  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,wf_sl_min:sl_min,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
+  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,wf_sl_min:sl_min,wf_sl_max:sl_max,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
       if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
