@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.193"
+APP_VERSION = "3.194"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -330,7 +330,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     umsf=p["use_ms_filter"]; ms_lb=p["ms_lookback"]
     uemaf=p.get("use_ema_filter", False); ema_per=p.get("ema_period", 50)
 
-    if not candles_list or len(candles_list) < max(ll, gl, rl, q_atr, sw_len, ms_lb, ema_per if uemaf else 0) + 10:
+    if not candles_list or len(candles_list) < max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20) + 10:
         return None
     if days_limit > 0:
         cutoff = time.time() - days_limit * 86400
@@ -514,7 +514,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     pending_sig=0; sig_bar=-1; last_sig=0
     _csigs=[]
 
-    start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ema_per if uemaf else 0,ret_lb,rep_lb,clu_lb)+2
+    start_i=max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20)+2
     start_i=min(start_i,n-1)
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
