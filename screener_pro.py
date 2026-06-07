@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.191"
+APP_VERSION = "3.192"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2923,14 +2923,31 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     gh_path = f"configs/{fname}"
 
     # 1. Попытка сохранить на GitHub
-    # Удаляем старые конфиги с тем же sym/tf/days/risk но другим equity
+    # Сначала проверяем: вдруг на GitHub уже лежит лучший результат (другое устройство)
     gh_ok = False
+    our_fit = best.get("validated_fitness") or best.get("fitness", -9999)
     try:
         import re as _re
         sym_key = symbol.replace("_","").replace("/","").lower()
         r_key   = int(round(risk_pct))
         _pat    = _re.compile(rf"^wickfill_{_re.escape(sym_key)}_{_re.escape(tf)}_{days}d_\$\d+_r{r_key}(_sl[\d.]+_tp[\d.]+)?\.json$")
         existing_files = _gh_list_folder("configs")
+        gh_best_fit = -9999
+        for _ef in existing_files:
+            if _pat.match(_ef["name"]):
+                try:
+                    _raw = _gh_get_file(f"configs/{_ef['name']}")
+                    if _raw:
+                        _gd = json.loads(_raw)
+                        _gb = _gd.get("best", {})
+                        _gf = _gb.get("validated_fitness") or _gb.get("fitness", -9999)
+                        if _gf > gh_best_fit:
+                            gh_best_fit = _gf
+                except Exception: pass
+        if gh_best_fit > our_fit:
+            _log(f"⏭ GitHub уже лучше (gh={gh_best_fit:.2f} > our={our_fit:.2f}), пропускаем сохранение", "info")
+            return fpath
+        # Удаляем старые конфиги с тем же sym/tf/days/risk
         for _ef in existing_files:
             if _pat.match(_ef["name"]) and _ef["name"] != fname:
                 try:
