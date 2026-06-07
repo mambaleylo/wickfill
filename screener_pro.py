@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.195
+WickFill Optimizer v3.196
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -9,6 +9,7 @@ WickFill Optimizer v3.195
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.195: fix bounce-режима — body_ok, geo, css теперь используют правильный фитиль для лонг/шорт
+- v3.196: fix bounce — sweep/ret/rep/clu/near_level теперь зеркалятся для нижнего фитиля лонг
 """
 
 import json, time, threading, random, math, os, base64
@@ -29,7 +30,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.195"
+APP_VERSION = "3.196"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -625,11 +626,16 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             quiet_ok=True
 
         # OPT: sweep filter — sliding deque O(1)
+        # bounce: лонг = нижний фитиль пробивает нижний уровень и возвращается; шорт = верхний
         if uswf:
             sw_hi=_slide_hi_sw[i-1] if i>0 else hi
             sw_lo=_slide_lo_sw[i-1] if i>0 else lo
-            sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
-            sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
+            if wd=="bounce":
+                sweep_ok_l=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
+                sweep_ok_s=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
+            else:
+                sweep_ok_l=hi>=sw_hi*(1-sw_tol/100) and cl<sw_hi
+                sweep_ok_s=lo<=sw_lo*(1+sw_tol/100) and cl>sw_lo
         else:
             sweep_ok_l=sweep_ok_s=True
 
@@ -653,36 +659,61 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             ema_ok_l = ema_ok_s = True
 
         if uretf:
-            ret_up=_calc_return_rate(i,True)  if is_up_w else None
-            ret_dn=_calc_return_rate(i,False) if is_dn_w else None
+            # bounce: лонг ищет нижние фитили в истории (is_up_wick=False), шорт — верхние
+            if wd=="bounce":
+                ret_up=_calc_return_rate(i,False) if is_up_w else None
+                ret_dn=_calc_return_rate(i,True)  if is_dn_w else None
+            else:
+                ret_up=_calc_return_rate(i,True)  if is_up_w else None
+                ret_dn=_calc_return_rate(i,False) if is_dn_w else None
             ret_ok_l=ret_up is not None and ret_up>=ret_minwr
             ret_ok_s=ret_dn is not None and ret_dn>=ret_minwr
         else:
             ret_ok_l=ret_ok_s=True
 
         if urepf:
-            rep_ok_l=is_up_w and _count_tested_level(i,hi,True)>=rep_min
-            rep_ok_s=is_dn_w and _count_tested_level(i,lo,False)>=rep_min
+            # bounce: лонг проверяет уровень lo (нижний фитиль), шорт — hi
+            if wd=="bounce":
+                rep_ok_l=is_up_w and _count_tested_level(i,lo,False)>=rep_min
+                rep_ok_s=is_dn_w and _count_tested_level(i,hi,True)>=rep_min
+            else:
+                rep_ok_l=is_up_w and _count_tested_level(i,hi,True)>=rep_min
+                rep_ok_s=is_dn_w and _count_tested_level(i,lo,False)>=rep_min
         else:
             rep_ok_l=rep_ok_s=True
 
         if ucluf:
-            clu_ok_l=is_up_w and _count_wick_cluster(i,hi,True)>=clu_min
-            clu_ok_s=is_dn_w and _count_wick_cluster(i,lo,False)>=clu_min
+            # bounce: лонг ищет кластер нижних фитилей на lo, шорт — верхних на hi
+            if wd=="bounce":
+                clu_ok_l=is_up_w and _count_wick_cluster(i,lo,False)>=clu_min
+                clu_ok_s=is_dn_w and _count_wick_cluster(i,hi,True)>=clu_min
+            else:
+                clu_ok_l=is_up_w and _count_wick_cluster(i,hi,True)>=clu_min
+                clu_ok_s=is_dn_w and _count_wick_cluster(i,lo,False)>=clu_min
         else:
             clu_ok_l=clu_ok_s=True
 
         if uclof and rng>0:
             close_pos=(cl-lo)/rng*100
-            clo_ok_l=close_pos>=clo_lng; clo_ok_s=close_pos<=clo_sht
+            # bounce: лонг (нижний фитиль) — закрытие должно быть выше (верхние N%), шорт — ниже
+            if wd=="bounce":
+                clo_ok_l=close_pos>=clo_lng; clo_ok_s=close_pos<=clo_sht
+            else:
+                clo_ok_l=close_pos>=clo_lng; clo_ok_s=close_pos<=clo_sht
         else:
             clo_ok_l=clo_ok_s=True
 
-        long_sig_base=(is_up_w and body_ok_up and rsi_ok_l and near_hi
+        # bounce: near_lo для лонга (нижний фитиль у нижнего уровня), near_hi для шорта
+        if wd=="bounce":
+            near_l=near_lo; near_s=near_hi
+        else:
+            near_l=near_hi; near_s=near_lo
+
+        long_sig_base=(is_up_w and body_ok_up and rsi_ok_l and near_l
                        and geo_ok_l and css_ok_l and quiet_ok
                        and sweep_ok_l and ms_ok_l and ema_ok_l and ret_ok_l
                        and rep_ok_l and clu_ok_l and clo_ok_l)
-        short_sig_base=(is_dn_w and body_ok_dn and rsi_ok_s and near_lo
+        short_sig_base=(is_dn_w and body_ok_dn and rsi_ok_s and near_s
                         and geo_ok_s and css_ok_s and quiet_ok
                         and sweep_ok_s and ms_ok_s and ema_ok_s and ret_ok_s
                         and rep_ok_s and clu_ok_s and clo_ok_s)
