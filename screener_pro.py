@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.190"
+APP_VERSION = "3.191"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -98,6 +98,8 @@ PARAM_SPACE = {
     "sweep_toler_pct":    {"min": 0.3,  "max": 1.0,  "step": 0.1,  "type": "float", "label": "Sweep — допуск (%)"},
     "use_ms_filter":      {"values": [False, True], "type": "bool", "label": "Структура рынка HH/HL"},
     "ms_lookback":        {"min": 20,   "max": 60,   "step": 10,   "type": "int",   "label": "Структура — период"},
+    "use_ema_filter":     {"values": [False, True], "type": "bool", "label": "EMA тренд-фильтр"},
+    "ema_period":         {"min": 20,   "max": 200,  "step": 20,   "type": "int",   "label": "EMA — период"},
 }
 
 def _param_grid(spec):
@@ -131,6 +133,7 @@ FILTER_GROUPS = {
     "close_long_min_pct": "use_close_filter", "close_short_max_pct": "use_close_filter",
     "quiet_atr_len": "use_quiet_filter", "quiet_max_ratio": "use_quiet_filter", "quiet_min_ratio": "use_quiet_filter",
     "ms_lookback": "use_ms_filter",
+    "ema_period":  "use_ema_filter",
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -325,8 +328,9 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     uqf=p["use_quiet_filter"]; q_atr=p["quiet_atr_len"]; q_max=p["quiet_max_ratio"]; q_min=p["quiet_min_ratio"]
     uswf=p["use_sweep_filter"]; sw_len=p["sweep_len"]; sw_tol=p["sweep_toler_pct"]
     umsf=p["use_ms_filter"]; ms_lb=p["ms_lookback"]
+    uemaf=p.get("use_ema_filter", False); ema_per=p.get("ema_period", 50)
 
-    if not candles_list or len(candles_list) < max(ll, gl, rl, q_atr, sw_len, ms_lb) + 10:
+    if not candles_list or len(candles_list) < max(ll, gl, rl, q_atr, sw_len, ms_lb, ema_per) + 10:
         return None
     if days_limit > 0:
         cutoff = time.time() - days_limit * 86400
@@ -366,6 +370,14 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             atr_vals[i]=(atr_vals[i-1]*(period-1)+trs[i-1])/period
         return atr_vals
     atr_series = _atr(candles_list, max(q_atr,2))
+
+    # EMA series (exponential moving average)
+    ema_series = [0.0] * n
+    if uemaf and n >= ema_per:
+        k = 2.0 / (ema_per + 1)
+        ema_series[ema_per - 1] = sum(closes[:ema_per]) / ema_per
+        for _ei in range(ema_per, n):
+            ema_series[_ei] = closes[_ei] * k + ema_series[_ei - 1] * (1 - k)
 
     def _calc_return_rate(i, is_up_wick):
         # OPT: плоские массивы вместо candles_list[ki]["high"] и т.д.
@@ -502,7 +514,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     pending_sig=0; sig_bar=-1; last_sig=0
     _csigs=[]
 
-    start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ret_lb,rep_lb,clu_lb)+2
+    start_i=max(ll,gl,rl,q_atr,sw_len,ms_lb,ema_per,ret_lb,rep_lb,clu_lb)+2
     start_i=min(start_i,n-1)
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
@@ -623,6 +635,13 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         else:
             ms_ok_l=ms_ok_s=True
 
+        # EMA trend filter: лонг только выше EMA, шорт только ниже
+        if uemaf and i>=ema_per and ema_series[i]>0:
+            ema_ok_l = cl > ema_series[i]
+            ema_ok_s = cl < ema_series[i]
+        else:
+            ema_ok_l = ema_ok_s = True
+
         if uretf:
             ret_up=_calc_return_rate(i,True)  if is_up_w else None
             ret_dn=_calc_return_rate(i,False) if is_dn_w else None
@@ -651,11 +670,11 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 
         long_sig_base=(is_up_w and body_ok_up and rsi_ok_l and near_hi
                        and geo_ok_l and css_ok_l and quiet_ok
-                       and sweep_ok_l and ms_ok_l and ret_ok_l
+                       and sweep_ok_l and ms_ok_l and ema_ok_l and ret_ok_l
                        and rep_ok_l and clu_ok_l and clo_ok_l)
         short_sig_base=(is_dn_w and body_ok_dn and rsi_ok_s and near_lo
                         and geo_ok_s and css_ok_s and quiet_ok
-                        and sweep_ok_s and ms_ok_s and ret_ok_s
+                        and sweep_ok_s and ms_ok_s and ema_ok_s and ret_ok_s
                         and rep_ok_s and clu_ok_s and clo_ok_s)
 
         if fcon:
