@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.198
+WickFill Optimizer v3.199
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -9,6 +9,7 @@ WickFill Optimizer v3.198
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
+- v3.199: добавлены UI-поля wf_tp_min/wf_tp_max — ограничение диапазона тейка, аналогично sl
 - v3.198: fix — _GRIDS["sl_pct"] пересчитывается после изменения sl_min/sl_max (раньше оптимизатор игнорировал ограничение снизу)
 - v3.196: fix bounce — sweep/ret/rep/clu/near_level теперь зеркалятся для нижнего фитиля лонг
 """
@@ -3104,6 +3105,11 @@ def run_optimizer(params):
     PARAM_SPACE["sl_pct"]["max"] = sl_max
     # Пересчитываем сетку — _GRIDS строится один раз при импорте, нужно обновить вручную
     _GRIDS["sl_pct"] = _param_grid(PARAM_SPACE["sl_pct"])
+    tp_min       = max(0.1, min(5.0, _sf(params.get("wf_tp_min"), 0.5)))
+    tp_max       = max(tp_min, min(20.0, _sf(params.get("wf_tp_max"), 2.0)))
+    PARAM_SPACE["tp_pct"]["min"] = tp_min
+    PARAM_SPACE["tp_pct"]["max"] = tp_max
+    _GRIDS["tp_pct"] = _param_grid(PARAM_SPACE["tp_pct"])
     infinite     = params.get("infinite", False)
     alert_cfg    = params.get("alert_cfg", None)  # dict или None
     n_candles    = _si(params.get("wf_n_candles"), 0)
@@ -4749,6 +4755,14 @@ details summary::-webkit-details-marker{display:none}
           <label>Стоп макс (%)</label>
           <input type="number" id="wf_sl_max" min="0.1" max="10" step="0.1" value="0.8" style="width:100%">
         </div>
+        <div class="field-inset" style="flex:1">
+          <label>Тейк мин (%)</label>
+          <input type="number" id="wf_tp_min" min="0.1" max="5" step="0.1" value="0.5" style="width:100%">
+        </div>
+        <div class="field-inset" style="flex:1">
+          <label>Тейк макс (%)</label>
+          <input type="number" id="wf_tp_max" min="0.1" max="20" step="0.1" value="2.0" style="width:100%">
+        </div>
       </div>
       <div class="field-row" style="margin-bottom:0">
         <div class="field-inset" style="flex:3">
@@ -5070,7 +5084,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
-  const _runFields = ['wf_symbol','wf_days','wf_sl_min','wf_sl_max'];
+  const _runFields = ['wf_symbol','wf_days','wf_sl_min','wf_sl_max','wf_tp_min','wf_tp_max'];
   _runFields.forEach(id => {
     const saved = localStorage.getItem('wf_last_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
@@ -5262,19 +5276,23 @@ function startOpt(){
   const risk=document.getElementById('wf_risk').value;
   const sl_min=parseFloat(document.getElementById('wf_sl_min').value)||0.4;
   const sl_max=parseFloat(document.getElementById('wf_sl_max').value)||0.8;
+  const tp_min=parseFloat(document.getElementById('wf_tp_min').value)||0.5;
+  const tp_max=parseFloat(document.getElementById('wf_tp_max').value)||2.0;
   // Сохраняем параметры запуска в localStorage
   localStorage.setItem('wf_last_wf_symbol', rawSym);
   localStorage.setItem('wf_last_wf_tf_sel', tf);
   localStorage.setItem('wf_last_wf_days', days);
   localStorage.setItem('wf_last_wf_sl_min', sl_min);
   localStorage.setItem('wf_last_wf_sl_max', sl_max);
+  localStorage.setItem('wf_last_wf_tp_min', tp_min);
+  localStorage.setItem('wf_last_wf_tp_max', tp_max);
   const alertCfg=getAlertCfg();
   // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
   const _rawSeed=window._loadedSeed||null;
   const seed=(_rawSeed&&_rawSeed.tf&&_rawSeed.tf!==tf)?null:_rawSeed;
   if(_rawSeed&&!seed) console.warn('[seed] Сброшен: tf seed='+_rawSeed.tf+' != выбран='+tf);
   const eco=document.getElementById('ecoModeChk')?.checked||false;
-  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,wf_sl_min:sl_min,wf_sl_max:sl_max,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
+  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,wf_sl_min:sl_min,wf_sl_max:sl_max,wf_tp_min:tp_min,wf_tp_max:tp_max,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
       if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
