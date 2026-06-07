@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.189"
+APP_VERSION = "3.190"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -256,6 +256,31 @@ def _live_candle_updater():
                                         opt_state["chart_candles"] = cc2 + [live_c]
                                 elif c["t"] > last_closed_t:
                                     # Строго больше: не дублируем закрытую свечу
+                                    # Проверяем gap — пропущены ли свечи за время офлайна
+                                    gap_candles = round((c["t"] - last_closed_t) / interval_sec) - 1
+                                    if gap_candles >= 1:
+                                        # Есть пропуск — дозагружаем недостающие закрытые свечи
+                                        try:
+                                            limit = min(gap_candles + 3, 100)
+                                            r_gap = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+                                                params={"contract": symbol, "interval": tf, "limit": limit}, timeout=8)
+                                            if r_gap.status_code == 200:
+                                                gap_data = r_gap.json()
+                                                # Берём только закрытые свечи новее last_closed_t и старее c["t"]
+                                                for gc in gap_data:
+                                                    gc_t = int(gc.get("t", 0))
+                                                    if gc_t > last_closed_t and gc_t < c["t"]:
+                                                        cc2.append({"t": gc_t, "o": float(gc["o"]),
+                                                                     "h": float(gc["h"]), "l": float(gc["l"]),
+                                                                     "c": float(gc["c"])})
+                                                # Дедупликация и сортировка
+                                                seen = {}
+                                                for x in cc2:
+                                                    seen[x["t"]] = x
+                                                cc2 = sorted(seen.values(), key=lambda x: x["t"])
+                                                print(f"{_ts()} [SW] Gap-fill: вставлено {gap_candles} пропущ. свечей", flush=True)
+                                        except Exception as _ge:
+                                            print(f"{_ts()} [SW] Gap-fill ошибка: {_ge}", flush=True)
                                     opt_state["chart_candles"] = cc2 + [live_c]
                 else:
                     _net_errors += 1
