@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.196
+WickFill Optimizer v3.197
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -8,7 +8,7 @@ WickFill Optimizer v3.196
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
-- v3.195: fix bounce-режима — body_ok, geo, css теперь используют правильный фитиль для лонг/шорт
+- v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
 - v3.196: fix bounce — sweep/ret/rep/clu/near_level теперь зеркалятся для нижнего фитиля лонг
 """
 
@@ -30,7 +30,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.196"
+APP_VERSION = "3.197"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -988,7 +988,7 @@ def _fetch_candles(symbol, tf, days):
     print(f"{_ts()} [fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
-        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="\r", flush=True)
+        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="", flush=True)
         try:
             with opt_lock:
                 opt_state["fetch_pct"] = pct
@@ -1006,17 +1006,20 @@ def _fetch_candles(symbol, tf, days):
                     last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
                     if r.status_code in (429, 502, 503, 504):
                         _wait = min(2 ** _fetch_attempt * 2, 60)
-                        print(f"\n{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с...", flush=True)
+                        print(f"
+{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с...", flush=True)
                         time.sleep(_wait)
                         _fetch_attempt += 1
                         continue
-                    print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True)
+                    print(f"
+{_ts()} [fetch] ❌ {last_http_error}", flush=True)
                     _fetch_ok = False
                     break
                 data = r.json()
                 if not isinstance(data, list):
                     last_http_error = f"Неожиданный ответ API: {str(data)[:200]}"
-                    print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True)
+                    print(f"
+{_ts()} [fetch] ❌ {last_http_error}", flush=True)
                     _fetch_ok = False
                     break
                 if not data:
@@ -1042,16 +1045,19 @@ def _fetch_candles(symbol, tf, days):
             except Exception as e:
                 last_exception = str(e)
                 _wait = min(2 ** _fetch_attempt * 3, 60)
-                print(f"\n{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}/{_fetch_max_attempts}): {e}, повтор через {_wait}с...", flush=True)
+                print(f"
+{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}/{_fetch_max_attempts}): {e}, повтор через {_wait}с...", flush=True)
                 time.sleep(_wait)
                 _fetch_attempt += 1
         if not _fetch_ok and _fetch_attempt >= _fetch_max_attempts:
-            print(f"\n{_ts()} [fetch] ❌ Превышено кол-во попыток. Последняя ошибка: {last_exception or last_http_error}", flush=True)
+            print(f"
+{_ts()} [fetch] ❌ Превышено кол-во попыток. Последняя ошибка: {last_exception or last_http_error}", flush=True)
             break
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    print(f"\n{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
+    print(f"
+{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
     # Сигнализируем UI: загрузка завершена (100%), затем сбрасываем
     try:
         with opt_lock:
@@ -1367,13 +1373,21 @@ def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leve
     close_t = candle_t + TF_SECONDS.get(tf, 3600)
     moscow_offset = 3 * 3600  # UTC+3
     dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
-    lev_str = f"\n⚡ Плечо: <b>{int(leverage)}×</b>" if leverage and int(leverage) > 1 else ""
+    lev_str = f"
+⚡ Плечо: <b>{int(leverage)}×</b>" if leverage and int(leverage) > 1 else ""
     text = (
-        f"🔔 <b>WickFill Сигнал</b>\n\n"
-        f"{dir_str} <b>{symbol}</b> {tf}\n"
-        f"🕐 {dt}\n\n"
-        f"📥 Вход: <b>{entry:.6g}</b>\n"
-        f"✅ Тейк-профит: <b>{tp:.6g}</b>\n"
+        f"🔔 <b>WickFill Сигнал</b>
+
+"
+        f"{dir_str} <b>{symbol}</b> {tf}
+"
+        f"🕐 {dt}
+
+"
+        f"📥 Вход: <b>{entry:.6g}</b>
+"
+        f"✅ Тейк-профит: <b>{tp:.6g}</b>
+"
         f"❌ Стоп-лосс: <b>{sl:.6g}</b>"
         f"{lev_str}"
     )
@@ -1387,7 +1401,8 @@ import hmac, hashlib
 def _gate_sign(api_secret, method, url_path, query_string, body_str, ts):
     """Подписывает запрос по алгоритму Gate.io v4."""
     body_hash = hashlib.sha512((body_str or "").encode()).hexdigest()
-    msg = "\n".join([method, url_path, query_string, body_hash, str(ts)])
+    msg = "
+".join([method, url_path, query_string, body_hash, str(ts)])
     sig = hmac.new(api_secret.encode(), msg.encode(), hashlib.sha512).hexdigest()
     return sig
 
@@ -1622,10 +1637,13 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     # 5. Выставляем ордер
     ok, order_log = _gate_place_order(cfg, contract, direction, size, tp, sl)
     if not ok:
-        return False, f"Ошибка ордера: {order_log}\n" + "\n".join(log_lines)
+        return False, f"Ошибка ордера: {order_log}
+" + "
+".join(log_lines)
     dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
     log_lines.append(f"✓ Ордер: {dir_str} {contract} {order_log or ""}")
-    return True, "\n".join(log_lines)
+    return True, "
+".join(log_lines)
 
 
 def _build_chart_html(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
@@ -2107,11 +2125,18 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
             exit_candle_t = s.get("t", int(time.time())) + TF_SECONDS.get(tf, 3600)
             dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(exit_candle_t + moscow_offset))
             text = (
-                f"🔔 <b>WickFill — Сделка закрыта</b>\n\n"
-                f"{dir_str} <b>{symbol}</b> {tf}\n"
-                f"{res_str}  <b>{pct_str}</b>\n\n"
-                f"📥 Вход:   <b>{s['ep']:.6g}</b>\n"
-                f"📤 Выход:  <b>{exit_p:.6g}</b>\n"
+                f"🔔 <b>WickFill — Сделка закрыта</b>
+
+"
+                f"{dir_str} <b>{symbol}</b> {tf}
+"
+                f"{res_str}  <b>{pct_str}</b>
+
+"
+                f"📥 Вход:   <b>{s['ep']:.6g}</b>
+"
+                f"📤 Выход:  <b>{exit_p:.6g}</b>
+"
                 f"🕐 {dt} (МСК)"
             )
             ok = _send_alert(alert_cfg, text)
@@ -2185,6 +2210,20 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             })
             alert_state["signals"] = alert_state["signals"][:50]
         print(f"[alert] Сигнал: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tg={'✓' if tg_ok else '✕'}")
+        # Диагностика: показываем последнюю свечу чтобы понять откуда взялось направление
+        try:
+            _dc = candles[-1]
+            _dhi = _dc["high"]; _dlo = _dc["low"]; _dop = _dc["open"]; _dcl = _dc["close"]
+            _drng = _dhi - _dlo
+            _dup_w = _dhi - max(_dop, _dcl); _ddn_w = min(_dop, _dcl) - _dlo
+            _dup_pct = _dup_w / _drng * 100 if _drng > 0 else 0
+            _ddn_pct = _ddn_w / _drng * 100 if _drng > 0 else 0
+            _wd = best_params.get("wick_dir", "?")
+            _nb = best_params.get("use_next_bar", False)
+            print(f"[alert] candle: O={_dop:.4g} H={_dhi:.4g} L={_dlo:.4g} C={_dcl:.4g} "
+                  f"up_wick={_dup_pct:.1f}% dn_wick={_ddn_pct:.1f}% wick_dir={_wd} nb={_nb}")
+        except Exception:
+            pass
 
         # 2. Автоторговля Gate.io
         gate_key    = alert_cfg.get("gate_key", "")
@@ -2462,9 +2501,12 @@ def _perf_save(symbol, tf):
     ts = time.strftime("%Y%m%d_%H%M%S")
     sym = symbol.replace("_","").replace("/","").lower()
     fname = f"wickfill_perf_{sym}_{tf}.txt"
-    lines = [f"WickFill perf-log  symbol={symbol}  tf={tf}  saved={time.strftime('%Y-%m-%d %H:%M:%S')}\n",
-             f"{'время':>8}  {'событие':<28}  детали\n",
-             "-"*80 + "\n"]
+    lines = [f"WickFill perf-log  symbol={symbol}  tf={tf}  saved={time.strftime('%Y-%m-%d %H:%M:%S')}
+",
+             f"{'время':>8}  {'событие':<28}  детали
+",
+             "-"*80 + "
+"]
     prev_t = 0.0
     for e in data:
         t = e["t"]; dt = t - prev_t; prev_t = t
@@ -2474,7 +2516,8 @@ def _perf_save(symbol, tf):
         # Помечаем записи где прошло много времени
         if dt > 5:   flag = f"  ⚠ +{dt:.1f}s"
         if dt > 30:  flag = f"  🔴 +{dt:.1f}s ЗАТЫК"
-        lines.append(f"{t:>8.1f}s  {ev:<28}  {details}{flag}\n")
+        lines.append(f"{t:>8.1f}s  {ev:<28}  {details}{flag}
+")
     txt = "".join(lines)
     # 1. GitHub first (logs/)
     gh_path = f"logs/{fname}"
@@ -2501,7 +2544,8 @@ def _perf_save(symbol, tf):
         except Exception as e:
             print(f"[perf] Ошибка записи {d}: {e}", flush=True)
     if not saved:
-        print(f"[perf] Не удалось сохранить лог\n{txt[:2000]}", flush=True)
+        print(f"[perf] Не удалось сохранить лог
+{txt[:2000]}", flush=True)
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                    prev_best_params=None, prev_top20=None, pool=None, n_workers=1,
@@ -2778,7 +2822,8 @@ def _gh_get_file(gh_path):
     if not result or "content" not in result:
         return None
     try:
-        return base64.b64decode(result["content"].replace("\n","")).decode("utf-8")
+        return base64.b64decode(result["content"].replace("
+","")).decode("utf-8")
     except Exception:
         return None
 
@@ -3534,7 +3579,8 @@ def run_optimizer_safe(params):
     try:
         run_optimizer(params)
     except Exception as e:
-        print(f"[opt] ИСКЛЮЧЕНИЕ: {e}\n{traceback.format_exc()}", flush=True)
+        print(f"[opt] ИСКЛЮЧЕНИЕ: {e}
+{traceback.format_exc()}", flush=True)
         with opt_lock:
             opt_state["running"] = False
             opt_state["error"] = str(e)
@@ -3582,7 +3628,8 @@ def _run_multi_safe(sym_list, base_params):
                 try:
                     run_optimizer(params)
                 except Exception as e:
-                    print(f"[multi] ИСКЛЮЧЕНИЕ run_optimizer {sym}: {e}\n{traceback.format_exc()}", flush=True)
+                    print(f"[multi] ИСКЛЮЧЕНИЕ run_optimizer {sym}: {e}
+{traceback.format_exc()}", flush=True)
                 # snapshot result into opt_states
                 try:
                     with opt_lock:
@@ -3636,7 +3683,8 @@ def _run_multi_safe(sym_list, base_params):
                                 s["sl"]     = best.get("params", {}).get("sl_pct", None)
                                 s["tp"]     = best.get("params", {}).get("tp_pct", None)
                 except Exception as e:
-                    print(f"[multi] ИСКЛЮЧЕНИЕ snapshot {sym}: {e}\n{traceback.format_exc()}", flush=True)
+                    print(f"[multi] ИСКЛЮЧЕНИЕ snapshot {sym}: {e}
+{traceback.format_exc()}", flush=True)
                 # Запускаем per-symbol SW-тред после первого цикла (один раз на символ)
                 try:
                     if sym_cycles[sym] == 1 and best_params:
@@ -3659,9 +3707,11 @@ def _run_multi_safe(sym_list, base_params):
                             if sym in _sw_state:
                                 _sw_state[sym]["params"] = best_params
                 except Exception as e:
-                    print(f"[multi] ИСКЛЮЧЕНИЕ SW-тред {sym}: {e}\n{traceback.format_exc()}", flush=True)
+                    print(f"[multi] ИСКЛЮЧЕНИЕ SW-тред {sym}: {e}
+{traceback.format_exc()}", flush=True)
     except Exception as e:
-        print(f"[multi] КРИТИЧЕСКОЕ ИСКЛЮЧЕНИЕ: {e}\n{traceback.format_exc()}", flush=True)
+        print(f"[multi] КРИТИЧЕСКОЕ ИСКЛЮЧЕНИЕ: {e}
+{traceback.format_exc()}", flush=True)
     finally:
         # Останавливаем все per-symbol SW-треды
         with _sw_state_lock:
@@ -3770,7 +3820,8 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                 )
             except Exception as e:
                 _slog(f"❌ Ошибка цикла: {e}", "error")
-                print(f"[par] {sym} цикл {cycle} ошибка: {e}\n{traceback.format_exc()}", flush=True)
+                print(f"[par] {sym} цикл {cycle} ошибка: {e}
+{traceback.format_exc()}", flush=True)
                 _time.sleep(2)
                 continue
 
@@ -3857,7 +3908,8 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
 
     except Exception as e:
         _slog(f"❌ Критическая ошибка: {e}", "error")
-        print(f"[par] {sym} критическая ошибка: {e}\n{traceback.format_exc()}", flush=True)
+        print(f"[par] {sym} критическая ошибка: {e}
+{traceback.format_exc()}", flush=True)
     finally:
         try:
             pool.shutdown(wait=False)
@@ -3917,7 +3969,8 @@ def _run_multi_parallel(sym_list, base_params):
                 break
             threading.Event().wait(timeout=1)
     except Exception as e:
-        print(f"[par] Ошибка координатора: {e}\n{traceback.format_exc()}", flush=True)
+        print(f"[par] Ошибка координатора: {e}
+{traceback.format_exc()}", flush=True)
     finally:
         for ev in stop_events.values():
             ev.set()
@@ -6242,7 +6295,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "eco_mode": _eco_mode})
         elif parsed.path == "/scan_stop":
             import traceback
-            print("[STOP] /scan_stop вызван:\n" + "".join(traceback.format_stack()), flush=True)
+            print("[STOP] /scan_stop вызван:
+" + "".join(traceback.format_stack()), flush=True)
             _opt_stop_flag.set()
             # Немедленно сбрасываем флаг running — не ждём пока тред сам дойдёт до выхода
             with opt_lock:
@@ -6312,7 +6366,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/delete_config":
             qs = parse_qs(parsed.query)
             fname = qs.get("fname", [""])[0]
-            if not fname or "/" in fname or "\\" in fname or not fname.endswith(".json"):
+            if not fname or "/" in fname or "\" in fname or not fname.endswith(".json"):
                 self._json({"ok": False, "msg": "Недопустимое имя файла"}); return
             # Удаляем с GitHub
             gh_del = False
@@ -6386,15 +6440,23 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 sh=os.path.expanduser("~/wickfill_update.sh")
                 with open(sh,"w") as f:
-                    f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
-                    f.write("termux-wake-lock\n")
-                    f.write(f"pkill -9 -f {script_name}\n")
-                    f.write("pkill -9 -f 'multiprocessing.spawn'\n")
-                    f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
-                    f.write("sleep 2\n")
+                    f.write("#!/data/data/com.termux/files/usr/bin/bash
+")
+                    f.write("termux-wake-lock
+")
+                    f.write(f"pkill -9 -f {script_name}
+")
+                    f.write("pkill -9 -f 'multiprocessing.spawn'
+")
+                    f.write("pkill -9 -f 'multiprocessing.resource_tracker'
+")
+                    f.write("sleep 2
+")
                     # Скачать свежий скрипт прямо с GitHub (токен для приватного репо)
-                    f.write('curl -fsSL -H "Authorization: token ' + _GH_TOKEN + '" "' + raw_url + '?ts=$(date +%s)" -o \'' + script_path + '\' || { echo "curl failed, using existing"; }\n')
-                    f.write(f"{sys.executable} '{script_path}'\n")
+                    f.write('curl -fsSL -H "Authorization: token ' + _GH_TOKEN + '" "' + raw_url + '?ts=$(date +%s)" -o \'' + script_path + '\' || { echo "curl failed, using existing"; }
+')
+                    f.write(f"{sys.executable} '{script_path}'
+")
                 os.chmod(sh, 0o755)
                 subprocess.Popen(["bash", sh],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -6501,7 +6563,8 @@ class Handler(BaseHTTPRequestHandler):
                 ok,log=_gate_execute_signal(params,symbol,direction,price,tp,sl,leverage,0,fixed_notional_usdt=notional)
                 if ok:
                     dir_str="ЛОНГ" if direction==1 else "ШОРТ"
-                    self._json({"ok":True,"msg":f"{dir_str} {symbol} × {leverage} (${notional:.0f} notional), TP={tp}, SL={sl}\n{log}"})
+                    self._json({"ok":True,"msg":f"{dir_str} {symbol} × {leverage} (${notional:.0f} notional), TP={tp}, SL={sl}
+{log}"})
                 else:
                     self._json({"ok":False,"msg":(log or "ошибка").splitlines()[-1]})
             except Exception as e:
@@ -6667,8 +6730,3 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
-
-
-
-
-
