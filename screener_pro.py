@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.197
+WickFill Optimizer v3.198
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -9,6 +9,7 @@ WickFill Optimizer v3.197
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
+- v3.198: fix — _GRIDS["sl_pct"] пересчитывается после изменения sl_min/sl_max (раньше оптимизатор игнорировал ограничение снизу)
 - v3.196: fix bounce — sweep/ret/rep/clu/near_level теперь зеркалятся для нижнего фитиля лонг
 """
 
@@ -30,7 +31,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.197"
+APP_VERSION = "3.198"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -988,7 +989,8 @@ def _fetch_candles(symbol, tf, days):
     print(f"{_ts()} [fetch] {symbol} {tf} {days}д — нужно ~{total_needed} свечей...", flush=True)
     while current_from < now:
         pct = int((current_from - since) / max(now - since, 1) * 100)
-        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="", flush=True)
+        print("[fetch] {}% ({} св.)".format(pct, len(all_candles)), end="
+", flush=True)
         try:
             with opt_lock:
                 opt_state["fetch_pct"] = pct
@@ -3100,6 +3102,8 @@ def run_optimizer(params):
     sl_max       = max(sl_min, min(10.0, _sf(params.get("wf_sl_max"), 0.8)))
     PARAM_SPACE["sl_pct"]["min"] = sl_min
     PARAM_SPACE["sl_pct"]["max"] = sl_max
+    # Пересчитываем сетку — _GRIDS строится один раз при импорте, нужно обновить вручную
+    _GRIDS["sl_pct"] = _param_grid(PARAM_SPACE["sl_pct"])
     infinite     = params.get("infinite", False)
     alert_cfg    = params.get("alert_cfg", None)  # dict или None
     n_candles    = _si(params.get("wf_n_candles"), 0)
