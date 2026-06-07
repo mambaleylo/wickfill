@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.173
+WickFill Optimizer v3.174
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -8,6 +8,7 @@ WickFill Optimizer v3.173
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
+- v3.174: fix bounce-режима — body_ok, geo, css теперь используют правильный фитиль для лонг/шорт
 """
 
 import json, time, threading, random, math, os, base64
@@ -558,10 +559,18 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         if wd=="upper": is_dn_w=False
         if wd=="lower": is_up_w=False
         # bounce: нижний фитиль = лонг, верхний = шорт (отталкивание)
-        if wd=="bounce": is_up_w, is_dn_w = is_dn_w, is_up_w
+        # eff_long_w / eff_short_w — физический фитиль для лонг/шорт сигнала
+        if wd=="bounce":
+            is_up_w, is_dn_w = is_dn_w, is_up_w
+            eff_long_w=dn_w; eff_long_w_pct=dn_w_pct; eff_long_w_pp=dn_w_pp
+            eff_short_w=up_w; eff_short_w_pct=up_w_pct; eff_short_w_pp=up_w_pp
+        else:
+            eff_long_w=up_w; eff_long_w_pct=up_w_pct; eff_long_w_pp=up_w_pp
+            eff_short_w=dn_w; eff_short_w_pct=dn_w_pct; eff_short_w_pp=dn_w_pp
 
-        body_ok_up=(not fbr) or (body<up_w)
-        body_ok_dn=(not fbr) or (body<dn_w)
+        # body_ok использует эффективный фитиль для каждого направления
+        body_ok_up=(not fbr) or (body<eff_long_w)
+        body_ok_dn=(not fbr) or (body<eff_short_w)
 
         rsi_now=rsi_series[i]
         rsi_ok_l=(not urf) or rsi_now<=rlmax
@@ -579,29 +588,30 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         if ugf:
             _s=max(0,i-gl)
             hist_up=_all_upw[_s:i]; hist_dn=_all_dnw[_s:i]
-            geo_up=sum(1 for w in hist_up if up_w>w)/len(hist_up)*100 if hist_up else 0
-            geo_dn=sum(1 for w in hist_dn if dn_w>w)/len(hist_dn)*100 if hist_dn else 0
+            geo_up=sum(1 for w in hist_up if eff_long_w>w)/len(hist_up)*100 if hist_up else 0
+            geo_dn=sum(1 for w in hist_dn if eff_short_w>w)/len(hist_dn)*100 if hist_dn else 0
             geo_ok_l=geo_up>=gmin; geo_ok_s=geo_dn>=gmin
         else:
             geo_ok_l=geo_ok_s=True
 
         # OPT: _css использует _all_rng вместо candles_list[j]["high"]-candles_list[j]["low"]
         def _css(is_long):
-            wick=dn_w if is_long else up_w; w_pct=dn_w_pct if is_long else up_w_pct
+            wick=eff_long_w if is_long else eff_short_w
+            w_pct=eff_long_w_pct if is_long else eff_short_w_pct
             s1=min(w_pct/mwp*100,100) if mwp>0 else 100
             cp=(cl-lo)/rng*100 if rng>0 else 50
             s2=cp if is_long else 100-cp; s2=max(min(s2,100),0)
             s3=max(min((1-body/wick)*100,100),0) if wick>0 else 0
             _cs=max(0,i-20); hist_rng=_all_rng[_cs:i]
             s4=sum(1 for r2 in hist_rng if rng>r2)/len(hist_rng)*100 if hist_rng else 50
-            wp_v=dn_w_pp if is_long else up_w_pp
+            wp_v=eff_long_w_pp if is_long else eff_short_w_pp
             s5=min(wp_v/mwpp*100,100) if mwpp>0 else 100
             tw=ww+wc+wb+wr_w+wp_w
             return (s1*ww+s2*wc+s3*wb+s4*wr_w+s5*wp_w)/tw if tw>0 else 0
 
         if ucss:
-            css_ok_l=is_up_w and _css(False)>=css_mn
-            css_ok_s=is_dn_w and _css(True)>=css_mn
+            css_ok_l=is_up_w and _css(True)>=css_mn
+            css_ok_s=is_dn_w and _css(False)>=css_mn
         else:
             css_ok_l=css_ok_s=True
 
