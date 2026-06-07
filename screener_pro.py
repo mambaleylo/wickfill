@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.187"
+APP_VERSION = "3.188"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4571,16 +4571,18 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
-      <div style="display:grid;grid-template-columns:3fr 1fr;gap:6px;margin-bottom:0">
-        <div class="field-inset">
+      <div class="field-row" style="margin-bottom:6px;align-items:flex-end">
+        <div class="field-inset" style="flex:3">
           <label>Символы (через запятую)</label>
           <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
         </div>
-        <div class="field-inset">
+        <div class="field-inset" style="flex:1">
           <label>Мин. стоп (%)</label>
           <input type="number" id="wf_sl_min" min="0.1" max="5" step="0.1" value="0.4" style="width:100%">
         </div>
-        <div class="field-inset">
+      </div>
+      <div class="field-row" style="margin-bottom:0">
+        <div class="field-inset" style="flex:3">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
             <option value="5m">5m</option>
@@ -4591,7 +4593,7 @@ details summary::-webkit-details-marker{display:none}
             <option value="1d">1d</option>
           </select>
         </div>
-        <div class="field-inset">
+        <div class="field-inset" style="flex:1">
           <label>История (дни)</label>
           <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" value="20" style="width:100%">
         </div>
