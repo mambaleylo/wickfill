@@ -28,7 +28,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.185"
+APP_VERSION = "3.186"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2945,6 +2945,8 @@ def run_optimizer(params):
     tf           = params.get("wf_tf", "1h")
     days         = _si(params.get("wf_days"), 3)
     risk_pct     = max(1.0, min(100.0, _sf(params.get("wf_risk"), 20.0)))
+    sl_min       = max(0.1, min(5.0, _sf(params.get("wf_sl_min"), 0.4)))
+    PARAM_SPACE["sl_pct"]["min"] = sl_min
     infinite     = params.get("infinite", False)
     alert_cfg    = params.get("alert_cfg", None)  # dict или None
     n_candles    = _si(params.get("wf_n_candles"), 0)
@@ -4569,9 +4571,15 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
-      <div class="field-inset" style="margin-bottom:6px">
-        <label>Символы (через запятую)</label>
-        <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset" style="flex:3">
+          <label>Символы (через запятую)</label>
+          <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
+        </div>
+        <div class="field-inset" style="flex:1">
+          <label>Мин. стоп (%)</label>
+          <input type="number" id="wf_sl_min" min="0.1" max="5" step="0.1" value="0.4" style="width:100%">
+        </div>
       </div>
       <div class="field-row" style="margin-bottom:0">
         <div class="field-inset">
@@ -4893,7 +4901,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
-  const _runFields = ['wf_symbol','wf_days'];
+  const _runFields = ['wf_symbol','wf_days','wf_sl_min'];
   _runFields.forEach(id => {
     const saved = localStorage.getItem('wf_last_'+id);
     if(saved) { const el=document.getElementById(id); if(el) el.value=saved; }
@@ -5083,17 +5091,19 @@ function startOpt(){
   const tf=document.getElementById('wf_tf_sel').value;
   const days=document.getElementById('wf_days').value;
   const risk=document.getElementById('wf_risk').value;
+  const sl_min=parseFloat(document.getElementById('wf_sl_min').value)||0.4;
   // Сохраняем параметры запуска в localStorage
   localStorage.setItem('wf_last_wf_symbol', rawSym);
   localStorage.setItem('wf_last_wf_tf_sel', tf);
   localStorage.setItem('wf_last_wf_days', days);
+  localStorage.setItem('wf_last_wf_sl_min', sl_min);
   const alertCfg=getAlertCfg();
   // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
   const _rawSeed=window._loadedSeed||null;
   const seed=(_rawSeed&&_rawSeed.tf&&_rawSeed.tf!==tf)?null:_rawSeed;
   if(_rawSeed&&!seed) console.warn('[seed] Сброшен: tf seed='+_rawSeed.tf+' != выбран='+tf);
   const eco=document.getElementById('ecoModeChk')?.checked||false;
-  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
+  const body=JSON.stringify({wf_symbol:sym,wf_tf:tf,wf_days:days,wf_risk:risk,wf_sl_min:sl_min,infinite:infiniteMode,alert_cfg:alertCfg,seed,eco_mode:eco});
   fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(r=>r.json()).then(d=>{
       if(!d.ok){addLogLine('[!!] '+(d.msg||'Ошибка'),'error');return;}
