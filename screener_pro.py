@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.205
+WickFill Optimizer v3.206
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -12,6 +12,7 @@ WickFill Optimizer v3.205
 - v3.203: _find_auto_config — убран локальный фолбек, только GitHub; при пустом GitHub — старт с нуля
 - v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
 - v3.205: _clamp_tp зажимает sl_pct/tp_pct к текущим границам UI; seed при загрузке зажимается через _clamp_sl_tp_to_bounds — оптимизатор не выходит за wf_sl_min/max, wf_tp_min/max
+- v3.206: таблица лучшей комбинации и stat-grid показывают «Вход след.св.» (use_next_bar да/нет)
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -38,7 +39,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.205"
+APP_VERSION = "3.206"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4946,7 +4947,7 @@ details summary::-webkit-details-marker{display:none}
         <thead>
           <tr>
             <th>Депозит</th><th>WR%</th>
-            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th><th title="Риск / Стоп-лосс">Плечо×</th>
+            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th><th title="Вход на следующей свече">Вход</th><th title="Риск / Стоп-лосс">Плечо×</th>
           </tr>
         </thead>
         <tbody id="top20Body"></tbody>
@@ -5697,6 +5698,7 @@ function renderBest(b){
     {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.8?'good':pf>=1.2?'warn':'bad'},
     {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
     {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
+    {v:b.params?.use_next_bar!=null?(b.params.use_next_bar?'да':'нет'):'—',l:'Вход след.св.',c:''},
     {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
   document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell ${s.c}"><div class="stat-v">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
@@ -5847,6 +5849,7 @@ function renderTop20(list){
     const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
+    const nb=r.params?.use_next_bar!=null?(r.params.use_next_bar?'да':'нет'):'—';
     const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
     const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
     const levRaw=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
@@ -5857,6 +5860,7 @@ function renderTop20(list){
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td>
+      <td style="font-size:.8rem;color:${nb==='да'?'var(--yellow)':'var(--text3)'}">${nb}</td>
       <td style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
