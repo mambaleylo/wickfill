@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.206
+WickFill Optimizer v3.207
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -39,7 +39,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.206"
+APP_VERSION = "3.207"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5698,7 +5698,7 @@ function renderBest(b){
     {v:pf===999?'∞':pf.toFixed(2),l:'PF',c:pf>=1.8?'good':pf>=1.2?'warn':'bad'},
     {v:(b.params?.sl_pct??'—')+'%',l:'SL',c:''},
     {v:(b.params?.tp_pct??'—')+'%',l:'TP',c:''},
-    {v:b.params?.use_next_bar!=null?(b.params.use_next_bar?'да':'нет'):'—',l:'Вход след.св.',c:''},
+    {v:b.params?.use_next_bar!=null?(b.params.use_next_bar?'✔ след.св.':'✘ тек.св.'):'—',l:'Вход',c:''},
     {v:b.params?.rsi_len??'—',l:'RSI len',c:''},
   ];
   document.getElementById('bestGrid').innerHTML=stats.map(s=>`<div class="stat-cell ${s.c}"><div class="stat-v">${s.v}</div><div class="stat-l">${s.l}</div></div>`).join('');
@@ -5849,7 +5849,7 @@ function renderTop20(list){
     const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
-    const nb=r.params?.use_next_bar!=null?(r.params.use_next_bar?'да':'нет'):'—';
+    const nb=r.params?.use_next_bar!=null?(r.params.use_next_bar?'✔ след.':'✘ тек.'):'—';
     const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
     const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
     const levRaw=(typeof sl==='number'||!isNaN(parseFloat(sl)))&&parseFloat(sl)>0
@@ -5860,7 +5860,7 @@ function renderTop20(list){
       <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
       <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
       <td>${sl}</td><td>${tp}</td>
-      <td style="font-size:.8rem;color:${nb==='да'?'var(--yellow)':'var(--text3)'}">${nb}</td>
+      <td style="font-size:.8rem;color:${nb.startsWith('✔')?'var(--green)':'var(--text3)'}">${nb}</td>
       <td style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
   }).join('');
 }
