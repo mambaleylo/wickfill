@@ -1,0 +1,7 @@
+WickFill perf-log  symbol=DOGE_USDT  tf=5m  saved=2026-06-08 22:55:50
+   время  событие                       детали
+--------------------------------------------------------------------------------
+     0.1s  start                         symbol=DOGE_USDT  tf=5m  days=5  risk=10.0  pool=process  cpus=8
+     5.8s  pool_create                   workers=8  pool_type=process  n_candles=1440  ⚠ +5.7s
+     6.3s  pool_ready                    sec=6.2  workers=8
+     6.3s  optimizer_done                reason=stop_flag
