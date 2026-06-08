@@ -9,6 +9,8 @@ WickFill Optimizer v3.202
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
+- v3.202: /recent_configs — убран локальный fallback, только GitHub
+- v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
 - v3.199: добавлены UI-поля wf_tp_min/wf_tp_max — ограничение диапазона тейка, аналогично sl
 - v3.198: fix — _GRIDS["sl_pct"] пересчитывается после изменения sl_min/sl_max (раньше оптимизатор игнорировал ограничение снизу)
