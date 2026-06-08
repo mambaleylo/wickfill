@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.210
+WickFill Optimizer v3.211
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -13,6 +13,7 @@ WickFill Optimizer v3.210
 - v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
 - v3.205: _clamp_tp зажимает sl_pct/tp_pct к текущим границам UI; seed при загрузке зажимается через _clamp_sl_tp_to_bounds — оптимизатор не выходит за wf_sl_min/max, wf_tp_min/max
 - v3.206: таблица лучшей комбинации и stat-grid показывают «Вход след.св.» (use_next_bar да/нет)
+- v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
 - v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
@@ -220,6 +221,13 @@ def _live_candle_updater():
                     print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
                         fresh = _fetch_candles(symbol, tf, 3)
+                        # _fetch_candles уже обрезает незакрытую, но на всякий случай доп. проверка
+                        if fresh:
+                            _sw_now2 = int(time.time())
+                            _sw_iv2  = TF_SECONDS.get(tf, 3600)
+                            if fresh[-1]["t"] + _sw_iv2 > _sw_now2:
+                                _sw_dropped = fresh.pop()
+                                print(f"{_ts()} [SW] ✂ Убрана незакрытая свеча t={_sw_dropped['t']}", flush=True)
                         if fresh and len(fresh) > 10:
                             # Пересчитываем сигналы с лучшими параметрами
                             best_p = best.get("params", {})
@@ -1070,6 +1078,11 @@ def _fetch_candles(symbol, tf, days):
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
+    # Обрезаем незакрытую последнюю свечу: t + interval_sec > now значит свеча ещё не закрыта
+    _fetch_now = int(time.time())
+    if result and result[-1]["t"] + interval_sec > _fetch_now:
+        _dropped = result.pop()
+        print(f"\n{_ts()} [fetch] ✂ Обрезана незакрытая свеча t={_dropped['t']}, now={_fetch_now}", flush=True)
     print(f"\n{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
     # Сигнализируем UI: загрузка завершена (100%), затем сбрасываем
     try:
