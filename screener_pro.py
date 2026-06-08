@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.208
+WickFill Optimizer v3.209
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -13,6 +13,9 @@ WickFill Optimizer v3.208
 - v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
 - v3.205: _clamp_tp зажимает sl_pct/tp_pct к текущим границам UI; seed при загрузке зажимается через _clamp_sl_tp_to_bounds — оптимизатор не выходит за wf_sl_min/max, wf_tp_min/max
 - v3.206: таблица лучшей комбинации и stat-grid показывают «Вход след.св.» (use_next_bar да/нет)
+- v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
+- v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
+- v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -39,7 +42,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.208"
+APP_VERSION = "3.209"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -524,7 +527,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     t_orig_sl=0.0; t_pos=0.0; t_entry_bar=-1
     be_triggered=False; be_trig_lvl=0.0
     pending_sig=0; sig_bar=-1; last_sig=0
-    _csigs=[]
+    _csigs=[]; _pending_signal_bar=None
 
     start_i=max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20)+2
     start_i=min(start_i,n-1)
@@ -751,7 +754,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                         t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1-be_trig/100)
                         be_triggered=False;in_trade=True;t_entry_bar=i
                     if _collect and in_trade:
-                        _csigs.append({"bar_i":i,"dir":t_dir,"ep":t_ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
+                        _csigs.append({"bar_i":i,"dir":t_dir,"ep":t_ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None,"signal_bar":sig_bar})
                 pending_sig=0
 
             if in_trade and i>t_entry_bar:
@@ -836,6 +839,10 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             _csigs[-1]["exit_bar"]=None;_csigs[-1]["win"]=is_win_ot;_csigs[-1]["open_end"]=True
             _csigs[-1]["exit_p"]=exit_p
 
+    # Если use_next_bar и в конце симуляции есть pending_sig — вход не состоялся (нужна следующая свеча)
+    # Передаём это в результат чтобы JS мог скрыть TP/SL для несуществующего трейда
+    _pending_signal_bar = sig_bar if (nb and pending_sig != 0) else None
+
     wr_val=wins/trades*100 if trades>0 else 0
     avg_pnl=sum(pnls)/len(pnls) if pnls else 0
     profit_factor=(sum(x for x in pnls if x>0)/abs(sum(x for x in pnls if x<0))
@@ -905,6 +912,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         "profit_factor": round(profit_factor,2) if profit_factor!=float("inf") else 999.0,
         "avg_pnl": round(avg_pnl,4), "fitness": round(fitness,4),
         "params": dict(p), "_signals": _csigs if _collect else None,
+        "pending_signal_bar": _pending_signal_bar,
     }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1717,6 +1725,7 @@ canvas{{display:block;width:100%;height:100%}}
 const CANDLES={candles_json};
 const SIGNALS={signals_json};
 const TF_SEC={tf_sec};
+let PENDING_BAR=null;  // bar_i сигнала ожидающего входа (use_next_bar, ещё не открыт)
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
@@ -1767,6 +1776,24 @@ function render(){{
   // Active open trade — find regardless of viewport (labels always visible)
   // Исключаем сигналы на live-свече — до закрытия свечи TP/SL не рисуем
   const activeSig=SIGNALS.find(s=>s.open_end===true && s.bar_i!==_liveBarGlobal);
+  // Маркер ожидающего сигнала (use_next_bar=true, вход на следующей свече которая ещё live)
+  const _pendingVi = PENDING_BAR !== null ? PENDING_BAR - viewStart : -1;
+  if(_pendingVi >= 0 && _pendingVi < vis.length) {{
+    const _pc = vis[_pendingVi];
+    const _px = cx(_pendingVi);
+    const _arrowSz = Math.max(4, Math.min(7, cw*0.45));
+    const _arrowOff = Math.max(14, Math.min(22, cw*2.2));
+    // Рисуем пунктирный маркер — сигнал обнаружен, ждём открытия на следующей свече
+    ctx.setLineDash([2,2]); ctx.lineWidth=1.2;
+    ctx.strokeStyle='rgba(200,180,80,0.7)'; ctx.fillStyle='rgba(200,180,80,0.25)';
+    ctx.beginPath();
+    const _ay=py(_pc.l)+_arrowOff;
+    ctx.moveTo(_px,_ay-_arrowSz); ctx.lineTo(_px-_arrowSz,_ay); ctx.lineTo(_px+_arrowSz,_ay);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.setLineDash([]); ctx.font='bold 8px system-ui'; ctx.textAlign='center';
+    ctx.fillStyle='rgba(200,180,80,0.85)';
+    ctx.fillText('⏳',_px,py(_pc.l)+_arrowOff+_arrowSz+14);
+  }}
   for(const s of SIGNALS){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
@@ -2066,6 +2093,7 @@ window.addEventListener('message', e => {{
     ? {{...CANDLES[CANDLES.length-1]}} : null;
   CANDLES.length = 0; e.data.candles.forEach(c => CANDLES.push(c));
   SIGNALS.length = 0; e.data.signals.forEach(s => SIGNALS.push(s));
+  PENDING_BAR = e.data.pending_bar ?? null;
   // Если последняя свеча в новых данных — закрытая, а у нас была live актуальная — добавляем обратно
   if (prevLive && CANDLES.length > 0 && !CANDLES[CANDLES.length-1].live) {{
     const lastT = CANDLES[CANDLES.length-1].t;
@@ -2320,7 +2348,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             with opt_lock:
                 _sw_candles = new_c
 
-    def _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val):
+    def _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=None):
         """Обновляет chart в opt_state (всегда) и в opt_states[symbol] (для мультирежима)."""
         ts = int(time.time())
         with opt_lock:
@@ -2328,6 +2356,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             if not is_multi or symbol == _active_chart_symbol:
                 opt_state["chart_candles"]   = chart_candles_fmt
                 opt_state["chart_signals"]   = chart_signals_data
+                opt_state["chart_pending_bar"] = pending_bar
                 opt_state["chart_updated_at"] = ts
                 if chart_path_val:
                     opt_state["chart_path"] = chart_path_val
@@ -2336,6 +2365,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 s = opt_states.get(symbol, {})
                 s["chart_candles"]    = chart_candles_fmt
                 s["chart_signals"]    = chart_signals_data
+                s["chart_pending_bar"] = pending_bar
                 s["chart_updated_at"] = ts
                 if chart_path_val:
                     s["chart_path"] = chart_path_val
@@ -2397,6 +2427,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
         if best_p:
             sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct)
             chart_signals_data = sim["_signals"] if sim else []
+            _sw_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
             cur_c2 = _fetch_current_candle(symbol, tf)
             if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
@@ -2422,7 +2453,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                     br = dict(opt_state.get("best") or {})
 
             chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val)
+            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar)
 
             with opt_lock:
                 opt_state["sw_last_update"]  = int(time.time())
@@ -5369,7 +5400,7 @@ function _loadChartFrame(sym){
       .then(r=>r.json())
       .then(d=>{
         if(d.candles&&d.signals&&frame.contentWindow){
-          frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals},'*');
+          frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals,pending_bar:d.pending_bar??null},'*');
         }
       })
       .catch(()=>{});
@@ -6230,7 +6261,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/chart_data":
             qs = parse_qs(parsed.query)
             req_sym = qs.get("symbol",[""])[0].upper()
-            cc = []; cs = []
+            cc = []; cs = []; cpb = None
             if req_sym:
                 # Мультирежим: берём данные конкретного символа из opt_states
                 with opt_states_lock:
@@ -6238,6 +6269,7 @@ class Handler(BaseHTTPRequestHandler):
                 if sym_st.get("chart_candles"):
                     cc = list(sym_st["chart_candles"])
                     cs = list(sym_st.get("chart_signals") or [])
+                    cpb = sym_st.get("chart_pending_bar")
             if not cc:
                 # Fallback: активный символ из opt_state
                 with opt_lock:
@@ -6245,7 +6277,8 @@ class Handler(BaseHTTPRequestHandler):
                     if not req_sym or req_sym == active_sym:
                         cc = list(opt_state.get("chart_candles", []))
                         cs = list(opt_state.get("chart_signals", []))
-            self._json({"ok": True, "candles": cc, "signals": cs})
+                        cpb = opt_state.get("chart_pending_bar")
+            self._json({"ok": True, "candles": cc, "signals": cs, "pending_bar": cpb})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
