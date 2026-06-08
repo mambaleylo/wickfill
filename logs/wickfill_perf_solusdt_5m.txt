@@ -1,179 +1,191 @@
-WickFill perf-log  symbol=SOL_USDT  tf=5m  saved=2026-06-08 09:12:25
+WickFill perf-log  symbol=SOL_USDT  tf=5m  saved=2026-06-08 09:13:19
    время  событие                       детали
 --------------------------------------------------------------------------------
      0.0s  start                         symbol=SOL_USDT  tf=5m  days=2  risk=10.0  pool=process  cpus=8
-     3.7s  pool_create                   workers=8  pool_type=process  n_candles=577
-     6.0s  pool_ready                    sec=6.0  workers=8
-     6.0s  cycle_start                   cycle=1  n_candles=577
-     6.0s  phase1_start                  start=1  label=Старт #1 (предыдущий лучший)
-     6.5s  pmap                          n=1  workers=8  sec=0.511  sec_per_cand=0.511
-     6.8s  pmap                          n=19  workers=8  sec=0.329  sec_per_cand=0.0173
-     6.8s  param                         key=use_level_filter  n_cands=19  sec=0.329  pass_n=1  start=Старт #1 (предыдущий лучший)
-     6.8s  pmap                          n=2  workers=8  sec=0.051  sec_per_cand=0.0255
-     6.9s  param                         key=use_sweep_filter  n_cands=2  sec=0.056  pass_n=1  start=Старт #1 (предыдущий лучший)
-     6.9s  pmap                          n=2  workers=8  sec=0.056  sec_per_cand=0.028
-     6.9s  param                         key=use_cluster_filter  n_cands=2  sec=0.056  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.1s  pmap                          n=11  workers=8  sec=0.231  sec_per_cand=0.021
-     7.1s  param                         key=use_return_filter  n_cands=11  sec=0.232  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.4s  pmap                          n=10  workers=8  sec=0.23  sec_per_cand=0.023
-     7.4s  param                         key=ret_lookback  n_cands=10  sec=0.231  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.5s  pmap                          n=10  workers=8  sec=0.081  sec_per_cand=0.0081
-     7.5s  param                         key=min_wick_pct_price  n_cands=10  sec=0.081  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.5s  pmap                          n=2  workers=8  sec=0.037  sec_per_cand=0.0185
-     7.5s  param                         key=use_repeat_filter  n_cands=2  sec=0.037  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.5s  pmap                          n=9  workers=8  sec=0.046  sec_per_cand=0.0051
-     7.5s  param                         key=use_be  n_cands=9  sec=0.046  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.6s  pmap                          n=5  workers=8  sec=0.028  sec_per_cand=0.0056
-     7.6s  param                         key=be_offset_pct  n_cands=5  sec=0.028  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.6s  pmap                          n=11  workers=8  sec=0.046  sec_per_cand=0.0042
-     7.6s  param                         key=use_ema_filter  n_cands=11  sec=0.047  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.7s  pmap                          n=10  workers=8  sec=0.051  sec_per_cand=0.0051
-     7.7s  param                         key=ema_period  n_cands=10  sec=0.052  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.7s  pmap                          n=15  workers=8  sec=0.062  sec_per_cand=0.0041
-     7.7s  param                         key=tp_pct  n_cands=15  sec=0.063  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.7s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
-     7.7s  param                         key=use_quiet_filter  n_cands=2  sec=0.019  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.9s  pmap                          n=29  workers=8  sec=0.108  sec_per_cand=0.0037
-     7.9s  param                         key=sl_pct  n_cands=29  sec=0.109  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.9s  pmap                          n=2  workers=8  sec=0.019  sec_per_cand=0.0095
-     7.9s  param                         key=use_ms_filter  n_cands=2  sec=0.021  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.9s  pmap                          n=8  workers=8  sec=0.037  sec_per_cand=0.0046
-     7.9s  param                         key=use_rsi_filter  n_cands=8  sec=0.038  pass_n=1  start=Старт #1 (предыдущий лучший)
-     7.9s  pmap                          n=6  workers=8  sec=0.032  sec_per_cand=0.0053
-     8.0s  param                         key=use_geo_filter  n_cands=6  sec=0.033  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.0s  pmap                          n=9  workers=8  sec=0.047  sec_per_cand=0.0052
-     8.0s  param                         key=min_return_pct  n_cands=9  sec=0.047  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.0s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
-     8.0s  param                         key=use_next_bar  n_cands=2  sec=0.018  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.0s  pmap                          n=2  workers=8  sec=0.019  sec_per_cand=0.0095
-     8.0s  param                         key=use_css_filter  n_cands=2  sec=0.019  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.1s  pmap                          n=5  workers=8  sec=0.03  sec_per_cand=0.006
-     8.1s  param                         key=level_toler_pct  n_cands=5  sec=0.03  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.1s  pmap                          n=5  workers=8  sec=0.031  sec_per_cand=0.0062
-     8.1s  param                         key=ret_n  n_cands=5  sec=0.031  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.2s  pmap                          n=16  workers=8  sec=0.06  sec_per_cand=0.0037
-     8.2s  param                         key=use_confirm_candle  n_cands=16  sec=0.06  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.2s  pmap                          n=15  workers=8  sec=0.061  sec_per_cand=0.0041
-     8.2s  param                         key=confirm_body_pct  n_cands=15  sec=0.062  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.2s  pmap                          n=2  workers=8  sec=0.019  sec_per_cand=0.0095
-     8.2s  param                         key=use_close_filter  n_cands=2  sec=0.02  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.3s  pmap                          n=18  workers=8  sec=0.072  sec_per_cand=0.004
-     8.3s  param                         key=level_lookback  n_cands=18  sec=0.072  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.3s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
-     8.3s  param                         key=filter_body_rat  n_cands=2  sec=0.019  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.4s  pmap                          n=4  workers=8  sec=0.027  sec_per_cand=0.0067
-     8.4s  param                         key=wick_dir  n_cands=4  sec=0.028  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.4s  pmap                          n=13  workers=8  sec=0.042  sec_per_cand=0.0032
-     8.4s  param                         key=min_wick_pct  n_cands=13  sec=0.043  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.4s  pmap                          n=8  workers=8  sec=0.032  sec_per_cand=0.004
-     8.4s  param                         key=be_trigger_pct  n_cands=8  sec=0.032  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.4s  pmap                          n=2  workers=8  sec=0.017  sec_per_cand=0.0085
-     8.5s  param                         key=filter_consec  n_cands=2  sec=0.017  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.5s  pmap                          n=5  workers=8  sec=0.026  sec_per_cand=0.0052
-     8.5s  param                         key=ret_wick_sim  n_cands=5  sec=0.026  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.5s  pmap                          n=5  workers=8  sec=0.029  sec_per_cand=0.0058
-     8.5s  param                         key=geo_lookback  n_cands=5  sec=0.029  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.5s  pmap                          n=9  workers=8  sec=0.043  sec_per_cand=0.0048
-     8.6s  param                         key=geo_min_pct  n_cands=9  sec=0.043  pass_n=1  start=Старт #1 (предыдущий лучший)
-     8.6s  pass_done                     pass_n=1  sec=2.081  improved=True  start=Старт #1 (предыдущий лучший)
-     8.6s  pmap                          n=6  workers=8  sec=0.034  sec_per_cand=0.0057
-     8.6s  param                         key=use_geo_filter  n_cands=6  sec=0.034  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.6s  pmap                          n=5  workers=8  sec=0.031  sec_per_cand=0.0062
-     8.6s  param                         key=geo_lookback  n_cands=5  sec=0.032  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.7s  pmap                          n=11  workers=8  sec=0.052  sec_per_cand=0.0047
-     8.7s  param                         key=use_return_filter  n_cands=11  sec=0.052  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.7s  pmap                          n=5  workers=8  sec=0.025  sec_per_cand=0.005
-     8.7s  param                         key=ret_n  n_cands=5  sec=0.026  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.7s  pmap                          n=2  workers=8  sec=0.023  sec_per_cand=0.0115
-     8.7s  param                         key=use_next_bar  n_cands=2  sec=0.023  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.8s  pmap                          n=2  workers=8  sec=0.035  sec_per_cand=0.0175
-     8.8s  param                         key=use_quiet_filter  n_cands=2  sec=0.035  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.9s  pmap                          n=40  workers=8  sec=0.158  sec_per_cand=0.004
-     8.9s  param                         key=quiet_max_ratio  n_cands=40  sec=0.159  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.9s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
-     8.9s  param                         key=use_ms_filter  n_cands=2  sec=0.019  pass_n=2  start=Старт #1 (предыдущий лучший)
-     8.9s  pmap                          n=2  workers=8  sec=0.016  sec_per_cand=0.008
-     8.9s  param                         key=use_rsi_filter  n_cands=2  sec=0.017  pass_n=2  start=Старт #1 (предыдущий лучший)
+     3.8s  pool_create                   workers=8  pool_type=process  n_candles=577
+     7.2s  pool_ready                    sec=7.2  workers=8
+     7.2s  cycle_start                   cycle=1  n_candles=577
+     7.2s  phase1_start                  start=1  label=Старт #1 (предыдущий лучший)
+     7.7s  pmap                          n=1  workers=8  sec=0.507  sec_per_cand=0.507
+     7.7s  pmap                          n=2  workers=8  sec=0.023  sec_per_cand=0.0115
+     7.7s  param                         key=use_cluster_filter  n_cands=2  sec=0.023  pass_n=1  start=Старт #1 (предыдущий лучший)
+     7.7s  pmap                          n=2  workers=8  sec=0.023  sec_per_cand=0.0115
+     7.7s  param                         key=use_css_filter  n_cands=2  sec=0.023  pass_n=1  start=Старт #1 (предыдущий лучший)
+     7.7s  pmap                          n=2  workers=8  sec=0.02  sec_per_cand=0.01
+     7.7s  param                         key=filter_body_rat  n_cands=2  sec=0.02  pass_n=1  start=Старт #1 (предыдущий лучший)
+     7.8s  pmap                          n=2  workers=8  sec=0.02  sec_per_cand=0.01
+     7.8s  param                         key=use_close_filter  n_cands=2  sec=0.02  pass_n=1  start=Старт #1 (предыдущий лучший)
+     7.9s  pmap                          n=11  workers=8  sec=0.159  sec_per_cand=0.0145
+     7.9s  param                         key=use_return_filter  n_cands=11  sec=0.16  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.0s  pmap                          n=5  workers=8  sec=0.107  sec_per_cand=0.0214
+     8.0s  param                         key=ret_wick_sim  n_cands=5  sec=0.108  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.2s  pmap                          n=8  workers=8  sec=0.198  sec_per_cand=0.0248
+     8.2s  param                         key=use_rsi_filter  n_cands=8  sec=0.198  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.4s  pmap                          n=7  workers=8  sec=0.191  sec_per_cand=0.0273
+     8.4s  param                         key=rsi_len  n_cands=7  sec=0.191  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.5s  pmap                          n=2  workers=8  sec=0.056  sec_per_cand=0.028
+     8.5s  param                         key=use_sweep_filter  n_cands=2  sec=0.056  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.6s  pmap                          n=2  workers=8  sec=0.075  sec_per_cand=0.0375
+     8.6s  param                         key=use_repeat_filter  n_cands=2  sec=0.075  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.6s  pmap                          n=2  workers=8  sec=0.041  sec_per_cand=0.0205
+     8.6s  param                         key=use_quiet_filter  n_cands=2  sec=0.041  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.7s  pmap                          n=5  workers=8  sec=0.076  sec_per_cand=0.0152
+     8.7s  param                         key=ret_n  n_cands=5  sec=0.076  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.8s  pmap                          n=13  workers=8  sec=0.082  sec_per_cand=0.0063
+     8.8s  param                         key=min_wick_pct  n_cands=13  sec=0.083  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.8s  pmap                          n=11  workers=8  sec=0.056  sec_per_cand=0.0051
+     8.8s  param                         key=use_ema_filter  n_cands=11  sec=0.057  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.9s  pmap                          n=10  workers=8  sec=0.048  sec_per_cand=0.0048
+     8.9s  param                         key=ema_period  n_cands=10  sec=0.049  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.9s  pmap                          n=9  workers=8  sec=0.046  sec_per_cand=0.0051
+     8.9s  param                         key=use_be  n_cands=9  sec=0.047  pass_n=1  start=Старт #1 (предыдущий лучший)
+     8.9s  pmap                          n=5  workers=8  sec=0.031  sec_per_cand=0.0062
+     8.9s  param                         key=be_offset_pct  n_cands=5  sec=0.031  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.0s  pmap                          n=2  workers=8  sec=0.02  sec_per_cand=0.01
+     9.0s  param                         key=use_ms_filter  n_cands=2  sec=0.02  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.0s  pmap                          n=8  workers=8  sec=0.037  sec_per_cand=0.0046
+     9.0s  param                         key=be_trigger_pct  n_cands=8  sec=0.038  pass_n=1  start=Старт #1 (предыдущий лучший)
      9.0s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
-     9.0s  param                         key=use_repeat_filter  n_cands=2  sec=0.018  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.1s  pmap                          n=19  workers=8  sec=0.086  sec_per_cand=0.0045
-     9.1s  param                         key=use_level_filter  n_cands=19  sec=0.086  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.1s  pmap                          n=18  workers=8  sec=0.072  sec_per_cand=0.004
-     9.1s  param                         key=level_lookback  n_cands=18  sec=0.073  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.2s  pmap                          n=2  workers=8  sec=0.025  sec_per_cand=0.0125
-     9.2s  param                         key=use_css_filter  n_cands=2  sec=0.026  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.2s  pmap                          n=13  workers=8  sec=0.063  sec_per_cand=0.0048
-     9.2s  param                         key=css_min_score  n_cands=13  sec=0.063  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.3s  pmap                          n=11  workers=8  sec=0.048  sec_per_cand=0.0044
-     9.3s  param                         key=use_ema_filter  n_cands=11  sec=0.049  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.3s  pmap                          n=10  workers=8  sec=0.054  sec_per_cand=0.0054
-     9.3s  param                         key=ema_period  n_cands=10  sec=0.055  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.4s  pmap                          n=10  workers=8  sec=0.053  sec_per_cand=0.0053
-     9.4s  param                         key=ret_lookback  n_cands=10  sec=0.054  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.4s  pmap                          n=2  workers=8  sec=0.032  sec_per_cand=0.016
-     9.4s  param                         key=filter_consec  n_cands=2  sec=0.034  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.4s  pmap                          n=10  workers=8  sec=0.041  sec_per_cand=0.0041
-     9.4s  param                         key=min_wick_pct_price  n_cands=10  sec=0.041  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.5s  pmap                          n=16  workers=8  sec=0.07  sec_per_cand=0.0044
-     9.5s  param                         key=use_confirm_candle  n_cands=16  sec=0.071  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.6s  pmap                          n=15  workers=8  sec=0.07  sec_per_cand=0.0047
-     9.6s  param                         key=confirm_body_pct  n_cands=15  sec=0.071  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.6s  pmap                          n=5  workers=8  sec=0.03  sec_per_cand=0.006
-     9.6s  param                         key=ret_wick_sim  n_cands=5  sec=0.03  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.7s  pmap                          n=9  workers=8  sec=0.052  sec_per_cand=0.0058
-     9.7s  param                         key=use_be  n_cands=9  sec=0.052  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.7s  pmap                          n=2  workers=8  sec=0.021  sec_per_cand=0.0105
-     9.7s  param                         key=use_cluster_filter  n_cands=2  sec=0.021  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.7s  pmap                          n=4  workers=8  sec=0.025  sec_per_cand=0.0063
-     9.7s  param                         key=css_wt_range  n_cands=4  sec=0.025  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.8s  pmap                          n=9  workers=8  sec=0.041  sec_per_cand=0.0046
-     9.8s  param                         key=geo_min_pct  n_cands=9  sec=0.041  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.8s  pmap                          n=5  workers=8  sec=0.029  sec_per_cand=0.0058
-     9.8s  param                         key=level_toler_pct  n_cands=5  sec=0.029  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.8s  pmap                          n=9  workers=8  sec=0.043  sec_per_cand=0.0048
-     9.8s  param                         key=min_return_pct  n_cands=9  sec=0.043  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.9s  pmap                          n=2  workers=8  sec=0.019  sec_per_cand=0.0095
-     9.9s  param                         key=use_close_filter  n_cands=2  sec=0.019  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.9s  pmap                          n=15  workers=8  sec=0.068  sec_per_cand=0.0045
-     9.9s  param                         key=tp_pct  n_cands=15  sec=0.069  pass_n=2  start=Старт #1 (предыдущий лучший)
-     9.9s  pmap                          n=4  workers=8  sec=0.02  sec_per_cand=0.005
-     9.9s  param                         key=css_wt_price  n_cands=4  sec=0.021  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.0s  pmap                          n=8  workers=8  sec=0.04  sec_per_cand=0.005
-    10.0s  param                         key=be_trigger_pct  n_cands=8  sec=0.04  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.0s  pmap                          n=2  workers=8  sec=0.02  sec_per_cand=0.01
-    10.0s  param                         key=use_sweep_filter  n_cands=2  sec=0.021  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.1s  pmap                          n=13  workers=8  sec=0.052  sec_per_cand=0.004
-    10.1s  param                         key=min_wick_pct  n_cands=13  sec=0.052  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.1s  pmap                          n=4  workers=8  sec=0.03  sec_per_cand=0.0075
-    10.1s  param                         key=css_wt_close  n_cands=4  sec=0.03  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.1s  pmap                          n=2  workers=8  sec=0.024  sec_per_cand=0.012
-    10.1s  param                         key=filter_body_rat  n_cands=2  sec=0.024  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.1s  pmap                          n=5  workers=8  sec=0.034  sec_per_cand=0.0068
-    10.1s  param                         key=css_wt_wick  n_cands=5  sec=0.035  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.2s  pmap                          n=10  workers=8  sec=0.053  sec_per_cand=0.0053
-    10.2s  param                         key=quiet_min_ratio  n_cands=10  sec=0.053  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.3s  pmap                          n=10  workers=8  sec=0.055  sec_per_cand=0.0055
-    10.3s  param                         key=quiet_atr_len  n_cands=10  sec=0.055  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.3s  pmap                          n=5  workers=8  sec=0.03  sec_per_cand=0.006
-    10.3s  param                         key=be_offset_pct  n_cands=5  sec=0.03  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.3s  pmap                          n=4  workers=8  sec=0.023  sec_per_cand=0.0057
-    10.3s  param                         key=css_wt_body  n_cands=4  sec=0.023  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.3s  pmap                          n=4  workers=8  sec=0.027  sec_per_cand=0.0067
-    10.3s  param                         key=wick_dir  n_cands=4  sec=0.027  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.5s  pmap                          n=29  workers=8  sec=0.127  sec_per_cand=0.0044
-    10.5s  param                         key=sl_pct  n_cands=29  sec=0.128  pass_n=2  start=Старт #1 (предыдущий лучший)
-    10.5s  pass_done                     pass_n=2  sec=1.912  improved=True  start=Старт #1 (предыдущий лучший)
-    10.5s  pmap                          n=11  workers=8  sec=0.056  sec_per_cand=0.0051
-    10.5s  param                         key=use_quiet_filter  n_cands=11  sec=0.056  pass_n=3  start=Старт #1 (предыдущий лучший)
-    10.6s  pmap                          n=10  workers=8  sec=0.057  sec_per_cand=0.0057
-    10.6s  param                         key=quiet_min_ratio  n_cands=10  sec=0.058  pass_n=3  start=Старт #1 (предыдущий лучший)
-    10.6s  pmap                          n=9  workers=8  sec=0.055  sec_per_cand=0.0061
-    10.6s  param                         key=use_be  n_cands=9  sec=0.056  pass_n=3  start=Старт #1 (предыдущий лучший)
-    10.7s  pmap                          n=5  workers=8  sec=0.038  sec_per_cand=0.0076
-    10.7s  param                         key=be_offset_pct  n_cands=5  sec=0.038  pass_n=3  start=Старт #1 (предыдущий лучший)
-    10.7s  pmap                          n=2  workers=8  sec=0.022  sec_per_cand=0.011
-    10.7s  param                         key=use_rsi_filter  n_cands=2  sec=0.022  pass_n=3  start=Старт #1 (предыдущий лучший)
-    10.7s  pass_done                     pass_n=3  sec=0.23  improved=False  start=Старт #1 (предыдущий лучший)
-    10.7s  phase1_done                   start=1  sec=4.7  equity=287.56  wr=72.0
-    10.7s  cycle_end                     cycle=1  sec=4.7  stopped=True  has_result=False
-    10.7s  optimizer_done                reason=stop_flag
+     9.0s  param                         key=filter_consec  n_cands=2  sec=0.019  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.1s  pmap                          n=19  workers=8  sec=0.088  sec_per_cand=0.0046
+     9.1s  param                         key=use_level_filter  n_cands=19  sec=0.088  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.1s  pmap                          n=5  workers=8  sec=0.033  sec_per_cand=0.0066
+     9.1s  param                         key=level_toler_pct  n_cands=5  sec=0.034  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.2s  pmap                          n=15  workers=8  sec=0.064  sec_per_cand=0.0043
+     9.2s  param                         key=tp_pct  n_cands=15  sec=0.064  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.3s  pmap                          n=16  workers=8  sec=0.067  sec_per_cand=0.0042
+     9.3s  param                         key=use_confirm_candle  n_cands=16  sec=0.068  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.3s  pmap                          n=15  workers=8  sec=0.063  sec_per_cand=0.0042
+     9.3s  param                         key=confirm_body_pct  n_cands=15  sec=0.064  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.4s  pmap                          n=9  workers=8  sec=0.04  sec_per_cand=0.0044
+     9.4s  param                         key=min_return_pct  n_cands=9  sec=0.041  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.4s  pmap                          n=2  workers=8  sec=0.018  sec_per_cand=0.009
+     9.4s  param                         key=use_next_bar  n_cands=2  sec=0.018  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.8s  pmap                          n=101  workers=8  sec=0.379  sec_per_cand=0.0038
+     9.8s  param                         key=rsi_long_max  n_cands=101  sec=0.381  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.9s  pmap                          n=29  workers=8  sec=0.124  sec_per_cand=0.0043
+     9.9s  param                         key=sl_pct  n_cands=29  sec=0.128  pass_n=1  start=Старт #1 (предыдущий лучший)
+     9.9s  pmap                          n=10  workers=8  sec=0.036  sec_per_cand=0.0036
+     9.9s  param                         key=min_wick_pct_price  n_cands=10  sec=0.038  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.0s  pmap                          n=6  workers=8  sec=0.044  sec_per_cand=0.0073
+    10.0s  param                         key=use_geo_filter  n_cands=6  sec=0.044  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.0s  pmap                          n=5  workers=8  sec=0.038  sec_per_cand=0.0076
+    10.0s  param                         key=geo_lookback  n_cands=5  sec=0.039  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.1s  pmap                          n=4  workers=8  sec=0.04  sec_per_cand=0.01
+    10.1s  param                         key=wick_dir  n_cands=4  sec=0.04  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.2s  pmap                          n=18  workers=8  sec=0.103  sec_per_cand=0.0057
+    10.2s  param                         key=level_lookback  n_cands=18  sec=0.104  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.2s  pmap                          n=9  workers=8  sec=0.052  sec_per_cand=0.0058
+    10.2s  param                         key=geo_min_pct  n_cands=9  sec=0.052  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.8s  pmap                          n=101  workers=8  sec=0.596  sec_per_cand=0.0059
+    10.8s  param                         key=rsi_short_min  n_cands=101  sec=0.597  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.9s  pmap                          n=10  workers=8  sec=0.056  sec_per_cand=0.0056
+    10.9s  param                         key=ret_lookback  n_cands=10  sec=0.06  pass_n=1  start=Старт #1 (предыдущий лучший)
+    10.9s  pass_done                     pass_n=1  sec=3.201  improved=True  start=Старт #1 (предыдущий лучший)
+    10.9s  pmap                          n=2  workers=8  sec=0.028  sec_per_cand=0.014
+    10.9s  param                         key=use_close_filter  n_cands=2  sec=0.029  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.0s  pmap                          n=8  workers=8  sec=0.054  sec_per_cand=0.0067
+    11.0s  param                         key=use_rsi_filter  n_cands=8  sec=0.054  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.0s  pmap                          n=13  workers=8  sec=0.048  sec_per_cand=0.0037
+    11.0s  param                         key=min_wick_pct  n_cands=13  sec=0.049  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.1s  pmap                          n=9  workers=8  sec=0.063  sec_per_cand=0.007
+    11.1s  param                         key=use_be  n_cands=9  sec=0.063  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.1s  pmap                          n=5  workers=8  sec=0.038  sec_per_cand=0.0076
+    11.1s  param                         key=be_offset_pct  n_cands=5  sec=0.039  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.2s  pmap                          n=2  workers=8  sec=0.038  sec_per_cand=0.019
+    11.2s  param                         key=use_css_filter  n_cands=2  sec=0.038  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.2s  pmap                          n=2  workers=8  sec=0.032  sec_per_cand=0.016
+    11.2s  param                         key=use_quiet_filter  n_cands=2  sec=0.032  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.2s  pmap                          n=11  workers=8  sec=0.057  sec_per_cand=0.0052
+    11.2s  param                         key=use_return_filter  n_cands=11  sec=0.057  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.3s  pmap                          n=2  workers=8  sec=0.019  sec_per_cand=0.0095
+    11.3s  param                         key=use_cluster_filter  n_cands=2  sec=0.02  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.3s  pmap                          n=2  workers=8  sec=0.017  sec_per_cand=0.0085
+    11.3s  param                         key=use_next_bar  n_cands=2  sec=0.017  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.3s  pmap                          n=2  workers=8  sec=0.017  sec_per_cand=0.0085
+    11.3s  param                         key=filter_consec  n_cands=2  sec=0.017  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.3s  pmap                          n=2  workers=8  sec=0.014  sec_per_cand=0.007
+    11.3s  param                         key=use_sweep_filter  n_cands=2  sec=0.014  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.3s  pmap                          n=4  workers=8  sec=0.022  sec_per_cand=0.0055
+    11.3s  param                         key=sweep_len  n_cands=4  sec=0.022  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.4s  pmap                          n=2  workers=8  sec=0.034  sec_per_cand=0.017
+    11.4s  param                         key=use_repeat_filter  n_cands=2  sec=0.034  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.4s  pmap                          n=8  workers=8  sec=0.03  sec_per_cand=0.0037
+    11.4s  param                         key=be_trigger_pct  n_cands=8  sec=0.03  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.5s  pmap                          n=19  workers=8  sec=0.052  sec_per_cand=0.0027
+    11.5s  param                         key=use_level_filter  n_cands=19  sec=0.052  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.5s  pmap                          n=18  workers=8  sec=0.058  sec_per_cand=0.0032
+    11.5s  param                         key=level_lookback  n_cands=18  sec=0.058  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.5s  pmap                          n=8  workers=8  sec=0.024  sec_per_cand=0.003
+    11.5s  param                         key=sweep_toler_pct  n_cands=8  sec=0.025  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.6s  pmap                          n=6  workers=8  sec=0.019  sec_per_cand=0.0032
+    11.6s  param                         key=use_geo_filter  n_cands=6  sec=0.019  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.6s  pmap                          n=5  workers=8  sec=0.013  sec_per_cand=0.0026
+    11.6s  param                         key=level_toler_pct  n_cands=5  sec=0.014  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.6s  pmap                          n=11  workers=8  sec=0.021  sec_per_cand=0.0019
+    11.6s  param                         key=use_ema_filter  n_cands=11  sec=0.022  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.6s  pmap                          n=29  workers=8  sec=0.056  sec_per_cand=0.0019
+    11.6s  param                         key=sl_pct  n_cands=29  sec=0.056  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.7s  pmap                          n=16  workers=8  sec=0.033  sec_per_cand=0.0021
+    11.7s  param                         key=use_confirm_candle  n_cands=16  sec=0.033  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.7s  pmap                          n=15  workers=8  sec=0.031  sec_per_cand=0.0021
+    11.7s  param                         key=confirm_body_pct  n_cands=15  sec=0.032  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.7s  pmap                          n=15  workers=8  sec=0.032  sec_per_cand=0.0021
+    11.7s  param                         key=tp_pct  n_cands=15  sec=0.032  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pmap                          n=2  workers=8  sec=0.008  sec_per_cand=0.004
+    11.8s  param                         key=filter_body_rat  n_cands=2  sec=0.008  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pmap                          n=2  workers=8  sec=0.014  sec_per_cand=0.007
+    11.8s  param                         key=use_ms_filter  n_cands=2  sec=0.014  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pmap                          n=10  workers=8  sec=0.023  sec_per_cand=0.0023
+    11.8s  param                         key=ema_period  n_cands=10  sec=0.023  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pmap                          n=10  workers=8  sec=0.022  sec_per_cand=0.0022
+    11.8s  param                         key=min_wick_pct_price  n_cands=10  sec=0.022  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pmap                          n=4  workers=8  sec=0.012  sec_per_cand=0.003
+    11.8s  param                         key=wick_dir  n_cands=4  sec=0.012  pass_n=2  start=Старт #1 (предыдущий лучший)
+    11.8s  pass_done                     pass_n=2  sec=0.939  improved=True  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=19  workers=8  sec=0.039  sec_per_cand=0.0021
+    11.9s  param                         key=use_level_filter  n_cands=19  sec=0.039  pass_n=3  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=5  workers=8  sec=0.014  sec_per_cand=0.0028
+    11.9s  param                         key=level_toler_pct  n_cands=5  sec=0.014  pass_n=3  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=4  workers=8  sec=0.012  sec_per_cand=0.003
+    11.9s  param                         key=wick_dir  n_cands=4  sec=0.012  pass_n=3  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=2  workers=8  sec=0.024  sec_per_cand=0.012
+    11.9s  param                         key=use_return_filter  n_cands=2  sec=0.025  pass_n=3  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=5  workers=8  sec=0.015  sec_per_cand=0.003
+    11.9s  param                         key=use_sweep_filter  n_cands=5  sec=0.015  pass_n=3  start=Старт #1 (предыдущий лучший)
+    11.9s  pmap                          n=8  workers=8  sec=0.019  sec_per_cand=0.0024
+    11.9s  param                         key=sweep_toler_pct  n_cands=8  sec=0.019  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.0s  pmap                          n=2  workers=8  sec=0.009  sec_per_cand=0.0045
+    12.0s  param                         key=use_close_filter  n_cands=2  sec=0.009  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.0s  pmap                          n=18  workers=8  sec=0.037  sec_per_cand=0.0021
+    12.0s  param                         key=level_lookback  n_cands=18  sec=0.037  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.0s  pmap                          n=2  workers=8  sec=0.009  sec_per_cand=0.0045
+    12.0s  param                         key=use_quiet_filter  n_cands=2  sec=0.01  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.0s  pmap                          n=16  workers=8  sec=0.035  sec_per_cand=0.0022
+    12.0s  param                         key=use_confirm_candle  n_cands=16  sec=0.036  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.0s  pmap                          n=2  workers=8  sec=0.009  sec_per_cand=0.0045
+    12.0s  param                         key=use_rsi_filter  n_cands=2  sec=0.009  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.1s  pmap                          n=11  workers=8  sec=0.023  sec_per_cand=0.0021
+    12.1s  param                         key=use_ema_filter  n_cands=11  sec=0.023  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.1s  pmap                          n=2  workers=8  sec=0.028  sec_per_cand=0.014
+    12.1s  param                         key=use_repeat_filter  n_cands=2  sec=0.029  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.1s  pmap                          n=4  workers=8  sec=0.012  sec_per_cand=0.003
+    12.1s  param                         key=sweep_len  n_cands=4  sec=0.012  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.1s  pmap                          n=2  workers=8  sec=0.011  sec_per_cand=0.0055
+    12.1s  param                         key=use_ms_filter  n_cands=2  sec=0.011  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.1s  pmap                          n=2  workers=8  sec=0.011  sec_per_cand=0.0055
+    12.1s  param                         key=use_css_filter  n_cands=2  sec=0.011  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.2s  pmap                          n=15  workers=8  sec=0.034  sec_per_cand=0.0023
+    12.2s  param                         key=tp_pct  n_cands=15  sec=0.034  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.2s  pmap                          n=10  workers=8  sec=0.022  sec_per_cand=0.0022
+    12.2s  param                         key=min_wick_pct_price  n_cands=10  sec=0.022  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.2s  pmap                          n=2  workers=8  sec=0.011  sec_per_cand=0.0055
+    12.2s  param                         key=use_geo_filter  n_cands=2  sec=0.011  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.3s  pmap                          n=29  workers=8  sec=0.059  sec_per_cand=0.002
+    12.3s  param                         key=sl_pct  n_cands=29  sec=0.059  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.3s  pmap                          n=9  workers=8  sec=0.024  sec_per_cand=0.0027
+    12.3s  param                         key=use_be  n_cands=9  sec=0.024  pass_n=3  start=Старт #1 (предыдущий лучший)
+    12.3s  pass_done                     pass_n=3  sec=0.461  improved=True  start=Старт #1 (предыдущий лучший)
+    12.3s  phase1_done                   start=1  sec=5.1  equity=1244.43  wr=73.0
+    12.3s  cycle_end                     cycle=1  sec=5.1  stopped=True  has_result=False
+    12.3s  optimizer_done                reason=stop_flag
