@@ -44,7 +44,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.210"
+APP_VERSION = "3.211"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
