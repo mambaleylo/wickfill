@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.204
+WickFill Optimizer v3.205
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -11,6 +11,7 @@ WickFill Optimizer v3.204
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
 - v3.203: _find_auto_config — убран локальный фолбек, только GitHub; при пустом GitHub — старт с нуля
 - v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
+- v3.205: _clamp_tp зажимает sl_pct/tp_pct к текущим границам UI; seed при загрузке зажимается через _clamp_sl_tp_to_bounds — оптимизатор не выходит за wf_sl_min/max, wf_tp_min/max
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -37,7 +38,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.204"
+APP_VERSION = "3.205"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2563,8 +2564,18 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         return ind
 
     def _clamp_tp(ind):
-        if _small_tf and ind and ind.get("tp_pct", 0) > 1.2:
-            ind = dict(ind); ind["tp_pct"] = 1.2
+        if not ind: return ind
+        ind = dict(ind)
+        # Зажимаем tp_pct для малых TF
+        if _small_tf and ind.get("tp_pct", 0) > 1.2:
+            ind["tp_pct"] = 1.2
+        # Зажимаем sl_pct и tp_pct к текущим границам UI (sl_min/max, tp_min/max)
+        sl_lo = PARAM_SPACE["sl_pct"]["min"]; sl_hi = PARAM_SPACE["sl_pct"]["max"]
+        tp_lo = PARAM_SPACE["tp_pct"]["min"]; tp_hi = PARAM_SPACE["tp_pct"]["max"]
+        if "sl_pct" in ind:
+            ind["sl_pct"] = max(sl_lo, min(sl_hi, ind["sl_pct"]))
+        if "tp_pct" in ind:
+            ind["tp_pct"] = max(tp_lo, min(tp_hi, ind["tp_pct"]))
         return ind
 
     def _clamp_result(r):
@@ -2878,6 +2889,19 @@ def _clamp_tp_params(p, tf):
     if not p or TF_SECONDS.get(tf, 3600) >= 3600: return p
     if p.get("tp_pct", 0) <= 1.5: return p
     p2 = dict(p); p2["tp_pct"] = 1.5
+    return p2
+
+def _clamp_sl_tp_to_bounds(p):
+    """Зажимает sl_pct и tp_pct к текущим границам PARAM_SPACE (из UI-полей wf_sl_min/max, wf_tp_min/max).
+    Вызывается при загрузке seed — чтобы конфиг из другой сессии не вышел за заданные границы."""
+    if not p: return p
+    p2 = dict(p)
+    sl_min = PARAM_SPACE["sl_pct"]["min"]; sl_max = PARAM_SPACE["sl_pct"]["max"]
+    tp_min = PARAM_SPACE["tp_pct"]["min"]; tp_max = PARAM_SPACE["tp_pct"]["max"]
+    if "sl_pct" in p2:
+        p2["sl_pct"] = max(sl_min, min(sl_max, p2["sl_pct"]))
+    if "tp_pct" in p2:
+        p2["tp_pct"] = max(tp_min, min(tp_max, p2["tp_pct"]))
     return p2
 
 def _config_key(symbol, tf, days, risk_pct):
@@ -3226,7 +3250,7 @@ def run_optimizer(params):
 
     # Если передан seed из загруженного файла — стартуем с него
     if seed and seed.get("best") and seed["best"].get("params"):
-        prev_best_params = _clamp_tp_params(dict(seed["best"]["params"]), tf)
+        prev_best_params = _clamp_sl_tp_to_bounds(_clamp_tp_params(dict(seed["best"]["params"]), tf))
         prev_top20       = [_clamp_tp_result(r, tf) for r in (seed.get("top20") or [])]
         olog(f"📂 Загружен seed: ${seed['best'].get('equity',0):.2f} WR {seed['best'].get('winrate',0):.1f}% | top20: {len(prev_top20)} записей", "ok")
         # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
