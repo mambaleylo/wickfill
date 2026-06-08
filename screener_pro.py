@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.212
+WickFill Optimizer v3.213
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.211"
+APP_VERSION = "3.213"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2134,6 +2134,28 @@ def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
 # ═══════════════════════════════════════════════════════════════
 # CHECK SIGNAL ON LAST CANDLE & SEND EMAIL
 # ═══════════════════════════════════════════════════════════════
+_trade_log_lock = threading.Lock()
+_trade_log_lines = []   # in-memory buffer для торгового лога
+
+def _write_trade_log(symbol, tf, line):
+    """Добавляет строку в торговый лог и выгружает на GitHub."""
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    entry = f"[{ts}] {line}"
+    with _trade_log_lock:
+        _trade_log_lines.append(entry)
+        lines_copy = list(_trade_log_lines)
+    # Пишем на GitHub асинхронно чтобы не блокировать поток сигналов
+    def _push():
+        try:
+            sym = symbol.replace("_","").replace("/","").lower()
+            fname = f"wickfill_trade_{sym}_{tf}.txt"
+            gh_path = f"logs/{fname}"
+            txt = "\n".join(lines_copy) + "\n"
+            _gh_put_file(gh_path, txt, f"trade-log: {fname}")
+        except Exception as e:
+            print(f"[trade_log] ошибка GitHub: {e}", flush=True)
+    threading.Thread(target=_push, daemon=True).start()
+
 def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
     """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
     if not alert_cfg or not prev_signals or not new_signals:
@@ -2242,6 +2264,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             })
             alert_state["signals"] = alert_state["signals"][:50]
         print(f"[alert] Сигнал: {symbol} {tf} {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tg={'✓' if tg_ok else '✕'}")
+        _write_trade_log(symbol, tf, f"СИГНАЛ {'ЛОНГ' if direction==1 else 'ШОРТ'} ep={ep:.6g} tp={tp:.6g} sl={sl:.6g} tg={'ok' if tg_ok else 'fail'}")
         # Диагностика: показываем последнюю свечу чтобы понять откуда взялось направление
         try:
             _dc = candles[-1]
@@ -2266,6 +2289,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         gate_auto_on = (_gate_auto_raw is True) or (str(_gate_auto_raw).lower() == "true")
         print(f"[gate_check] key={'да' if gate_key else 'нет'} secret={'да' if gate_secret else 'нет'} "
               f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
+        _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
             # Берём leverage из per-symbol state если доступен, иначе из глобального
             leverage = 1
@@ -2287,6 +2311,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             )
             status = "✓" if ok_trade else "✕"
             print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
+            _write_trade_log(symbol, tf, f"gate {status} {'ЛОНГ' if direction==1 else 'ШОРТ'} lev={leverage} | {trade_log.splitlines()[-1]}")
             with opt_lock:
                 opt_state.setdefault("logs", []).append({
                     "ts": time.strftime("%H:%M:%S"),
@@ -5147,7 +5172,10 @@ function getAlertCfg(){
   // BUG FIX: Gate работает независимо от заполненности Telegram-полей
   // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
   // Всегда передаём gate ключи в cfg — исполнение контролируется флагом gate_auto_enabled
-  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl,gate_auto_enabled:gauto});
+  // gate_auto_enabled всегда передаётся — чтобы флаг не терялся если ключи заполнены
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  // Флаг автоторговли передаём всегда независимо от заполненности ключей
+  base.gate_auto_enabled = gauto;
   // Обновляем статус галочки
   const st=document.getElementById('gate_auto_status');
   if(st) st.textContent=gauto&&gk&&gs&&gp>0?'🟢 вкл':'⚪ выкл';
