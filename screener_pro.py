@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.203
+WickFill Optimizer v3.204
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -10,6 +10,7 @@ WickFill Optimizer v3.203
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
 - v3.203: _find_auto_config — убран локальный фолбек, только GitHub; при пустом GitHub — старт с нуля
+- v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -36,7 +37,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.203"
+APP_VERSION = "3.204"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -317,7 +318,7 @@ threading.Thread(target=_live_candle_updater, daemon=True).start()
 # SIMULATE
 # ═══════════════════════════════════════════════════════════════
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
-              max_pos=6000.0, _collect=False, trade_from_ts=None):
+              max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -341,7 +342,8 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     if not candles_list or len(candles_list) < max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20) + 10:
         return None
     if days_limit > 0:
-        cutoff = time.time() - days_limit * 86400
+        _ref_ts = now_ts if now_ts else time.time()
+        cutoff = _ref_ts - days_limit * 86400
         candles_list = [c for c in candles_list if c.get("t", 0) >= cutoff]
     if len(candles_list) < max(ll, gl, rl) + 10:
         return None
@@ -3477,7 +3479,9 @@ def run_optimizer(params):
                 with opt_lock:
                     chart_candles_src = list(_sw_candles)
             # Обрезаем свечи по тому же days_limit что и оптимизатор
-            cutoff = time.time() - days * 86400
+            # Используем метку последней свечи как точку отсчёта (детерминировано)
+            _src_ts = max((c.get("t", 0) for c in chart_candles_src), default=time.time())
+            cutoff = _src_ts - days * 86400
             chart_candles_window = [c for c in chart_candles_src if c.get("t", 0) >= cutoff]
             if len(chart_candles_window) < 10:
                 chart_candles_window = chart_candles_src  # fallback
