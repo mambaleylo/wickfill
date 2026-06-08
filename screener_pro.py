@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.209
+WickFill Optimizer v3.210
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -16,6 +16,7 @@ WickFill Optimizer v3.209
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
 - v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
+- v3.210: исправлен alert-поиск — SW использует chart_signals_data (свежие, t совпадает с last_candle_t) вместо opt_state["chart_signals"] (стале сигналы оптимизатора, t не совпадал → сигнал никогда не находился)
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -42,7 +43,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.209"
+APP_VERSION = "3.210"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2471,19 +2472,10 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             if _live_alert_cfg and prev_signals_for_close:
                 _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf)
             if _live_alert_cfg:
-                # Берём сигналы из opt_state — то что видит JS на графике
-                # SW-тред и основной оптимизатор могут иметь разные параметры
-                _alert_sigs = None
-                if is_multi:
-                    with opt_states_lock:
-                        _alert_sigs = list(opt_states.get(symbol, {}).get("chart_signals") or [])
-                if not _alert_sigs:
-                    with opt_lock:
-                        _alert_sigs = list(opt_state.get("chart_signals") or [])
-                # Fallback на SW-сигналы если opt_state ещё не обновился
-                if not _alert_sigs:
-                    _alert_sigs = chart_signals_data
-                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=_alert_sigs)
+                # Используем SW-сигналы (только что посчитаны на new_candles) — их t совпадает с new_candles[-1]["t"]
+                # opt_state["chart_signals"] содержит сигналы оптимизатора на другом окне свечей,
+                # их t не совпадёт с last_candle_t → сигнал никогда не найдётся
+                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
         else:
             _set_candles(new_candles)
 
