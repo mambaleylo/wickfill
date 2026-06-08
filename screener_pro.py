@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.202
+WickFill Optimizer v3.203
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -9,6 +9,7 @@ WickFill Optimizer v3.202
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
 - v3.197: диагностический лог [alert] — показывает up_wick%, dn_wick%, wick_dir, nb для каждого сигнала
+- v3.203: _find_auto_config — убран локальный фолбек, только GitHub; при пустом GitHub — старт с нуля
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
 - v3.201: fix всех SyntaxError — literal newlines в строках, совместимость Python 3.12+
 - v3.200: fix SyntaxError line 992 — literal newline in print end= replaced with \r
@@ -35,7 +36,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.202"
+APP_VERSION = "3.203"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2917,24 +2918,8 @@ def _find_auto_config(symbol, tf, days, risk_pct):
     except Exception as e:
         print(f"{_ts()} [gh] Ошибка загрузки конфига: {e}", flush=True)
 
-    # 2. Локальный фолбек
-    pat = f"wickfill_{sym}_{tf}_{days}d_$*_r{r}*.json"
-    best_path, best_data, best_eq = None, None, -1
-    for d in _AUTO_DIRS:
-        if not os.path.isdir(d): continue
-        for fpath in _glob.glob(os.path.join(d, pat)):
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not (data.get("best") and data["best"].get("params")): continue
-                if int(data.get("days", days)) != days: continue
-                if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
-                eq = data["best"].get("equity", 0)
-                if eq > best_eq:
-                    best_eq = eq; best_path = fpath; best_data = data
-            except Exception:
-                pass
-    return best_path, best_data
+    # Локальный фолбек убран — только GitHub
+    return None, None
 
 def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     """Сохраняет конфиг в Downloads. Атомарная замена — никаких копий с (1)."""
