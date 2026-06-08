@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.201
+WickFill Optimizer v3.202
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -6326,31 +6326,8 @@ class Handler(BaseHTTPRequestHandler):
                 items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
                 gh_ok = True
             except Exception as _e:
-                print(f"{_ts()} [recent_configs] GitHub недоступен: {_e}, читаю локально", flush=True)
-            if not gh_ok:
-                import glob as _glob
-                seen = {}
-                for d in _AUTO_DIRS:
-                    if not os.path.isdir(d): continue
-                    for fp in _glob.glob(os.path.join(d, "wickfill_*.json")):
-                        _fn = os.path.basename(fp)
-                        if _fn in seen: continue
-                        try:
-                            with open(fp, encoding="utf-8") as _f:
-                                _d = json.load(_f)
-                            seen[_fn] = {
-                                "fname":    _fn,
-                                "symbol":   _d.get("symbol", ""),
-                                "tf":       _d.get("tf", ""),
-                                "days":     _d.get("days", 0),
-                                "risk_pct": _d.get("risk_pct", 20),
-                                "equity":   round(_d.get("best", {}).get("equity", 0)),
-                                "saved_at": _d.get("saved_at", ""),
-                                "source":   "local",
-                            }
-                        except: pass
-                items = sorted(seen.values(), key=lambda x: x["saved_at"], reverse=True)
-            self._json({"ok": True, "configs": items, "source": "github" if gh_ok else "local"})
+                print(f"{_ts()} [recent_configs] GitHub недоступен: {_e}", flush=True)
+            self._json({"ok": True, "configs": items, "source": "github" if gh_ok else "unavailable"})
         elif parsed.path == "/delete_config":
             qs = parse_qs(parsed.query)
             fname = qs.get("fname", [""])[0]
