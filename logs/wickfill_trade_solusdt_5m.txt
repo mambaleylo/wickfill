@@ -11,3 +11,5 @@
 [2026-06-09 02:10:19] gate_check key=да secret=да pct=15.0 auto_on=True raw=True
 [2026-06-09 02:10:30] gate ✕ ШОРТ lev=1 | ✓ Размер: 3 контр. (~23.3 USDT)
 [2026-06-09 02:35:20] СИГНАЛ ЛОНГ ep=66.73 tp=67.4307 sl=66.3296 tg=ok
+[2026-06-09 02:35:20] gate_check key=да secret=да pct=15.0 auto_on=True raw=True
+[2026-06-09 02:35:32] gate ✕ ЛОНГ lev=1 | ✓ Размер: 3 контр. (~23.3 USDT)
