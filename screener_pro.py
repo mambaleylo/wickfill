@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.211
+WickFill Optimizer v3.212
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -16,6 +16,7 @@ WickFill Optimizer v3.211
 - v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
+- v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
 - v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
 - v3.210: исправлен alert-поиск — SW использует chart_signals_data (свежие, t совпадает с last_candle_t) вместо opt_state["chart_signals"] (стале сигналы оптимизатора, t не совпадал → сигнал никогда не находился)
 - v3.202: /recent_configs — убран локальный fallback, только GitHub
@@ -2260,11 +2261,23 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         gate_key    = alert_cfg.get("gate_key", "")
         gate_secret = alert_cfg.get("gate_secret", "")
         gate_pct    = float(alert_cfg.get("gate_pct", 0))
-        gate_auto_on = alert_cfg.get("gate_auto_enabled", False)
+        _gate_auto_raw = alert_cfg.get("gate_auto_enabled", False)
+        # gate_auto_enabled может прийти как bool True или строка "true" — нормализуем
+        gate_auto_on = (_gate_auto_raw is True) or (str(_gate_auto_raw).lower() == "true")
+        print(f"[gate_check] key={'да' if gate_key else 'нет'} secret={'да' if gate_secret else 'нет'} "
+              f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
-            with opt_lock:
-                best = opt_state.get("all_time_best") or opt_state.get("best") or {}
-            leverage = best.get("leverage", 1) or 1
+            # Берём leverage из per-symbol state если доступен, иначе из глобального
+            leverage = 1
+            if symbol and symbol in opt_states:
+                with opt_states_lock:
+                    _sym_best2 = opt_states[symbol].get("best") or {}
+                leverage = (_sym_best2.get("leverage") or
+                            (_sym_best2.get("params") or {}).get("leverage") or 1)
+            if leverage == 1:
+                with opt_lock:
+                    best = opt_state.get("all_time_best") or opt_state.get("best") or {}
+                leverage = best.get("leverage", 1) or 1
             auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
             trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
