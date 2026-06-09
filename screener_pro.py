@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.216
+WickFill Optimizer v3.217
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.216"
+APP_VERSION = "3.217"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4701,8 +4701,12 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── Responsive mobile ── */
 @media(max-width:700px){
-  /* Шапка — скрыта */
-  .topbar{display:none}
+  /* Шапка — мини-версия только с версией и статусом */
+  .topbar{display:flex !important;height:36px;padding:0 10px;min-height:0}
+  .topbar-logo{font-size:.78rem;gap:5px}
+  .topbar-spacer{flex:1}
+  .topbar-meta .tb{font-size:.68rem;padding:3px 6px}
+  #speedPill{display:none !important}
 
   /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
   html,body{overflow:auto !important;height:auto !important;min-height:100dvh !important;touch-action:pan-y !important;overscroll-behavior:auto !important}
@@ -4765,8 +4769,48 @@ details summary::-webkit-details-marker{display:none}
   .log-col{flex:1;min-height:0;overflow:visible;}
   .log-area{min-height:120px;max-height:200px;overflow-y:auto;touch-action:pan-y;}
 
-  /* График */
-  .chart-area{height:260px;flex:none;}
+  /* ── Строка лучшей комбинации над графиком ── */
+  #top20Wrap{
+    display:block !important;
+    position:static !important;
+    max-height:none !important;
+    background:transparent !important;
+    z-index:auto !important;
+    border:none !important;
+    padding:0 !important;
+    margin:0 !important;
+  }
+  /* Скрываем заголовок таблицы на мобиле — экономим место */
+  #top20Wrap .table-hdr{display:none}
+  .table-panel{
+    max-height:none !important;
+    overflow:visible !important;
+    border:none !important;
+    border-radius:0 !important;
+    background:transparent !important;
+  }
+  /* Таблица конфига — горизонтальный скролл, компактная */
+  #top20Wrap table{
+    display:block;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    white-space:nowrap;
+    font-size:.72rem;
+    width:100%;
+  }
+  #top20Wrap thead th,
+  #top20Wrap tbody td{
+    padding:5px 7px;
+    font-size:.72rem;
+  }
+  /* Первая колонка (депозит) — выделена */
+  #top20Wrap tbody td:first-child{
+    font-size:.82rem;
+    font-weight:700;
+  }
+
+  /* График — полная ширина, после строки конфига */
+  .chart-area{height:260px;flex:none;order:99}
   #chartFrame{height:260px;min-height:0;display:block;}
 
   /* Циклы — компактная лента */
@@ -4781,16 +4825,6 @@ details summary::-webkit-details-marker{display:none}
 
   /* На мобиле осветляем тёмный график */
   #chartFrame{filter:brightness(1.35) contrast(0.92);}
-
-  /* Таблица топ — обычный блок, скроллится вместе со страницей */
-  #top20Wrap{
-    display:none;
-    position:static;
-    max-height:none;
-    background:var(--cream);
-    z-index:auto;
-  }
-  .table-panel{max-height:none;overflow:visible;}
 }
 </style></head><body>
 
@@ -5418,7 +5452,7 @@ function startOpt(){
       lastLogCount=0;chartOpened=false;_lastChartTs={};
       _resetLog();
       document.getElementById('bestSection').style.display='none';
-      document.getElementById('top20Wrap').style.display='none';
+      if(window.innerWidth>700) document.getElementById('top20Wrap').style.display='none';
       const _vs=document.getElementById('validSection');if(_vs){_vs._everShown=false;_vs.style.display='none';}
       const _spEl=document.getElementById('speedPill');if(_spEl){_spEl._lastShown=0;_spEl.style.display='none';}
       document.getElementById('progBar').style.width='0%';
