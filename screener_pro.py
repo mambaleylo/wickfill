@@ -16,6 +16,7 @@ WickFill Optimizer v3.220
 - v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
+- v3.223: Плечо× в автосделках = risk_pct/sl_pct (как в таблице UI); _gate_set_leverage возвращает реальное применённое плечо из ответа Gate; applied_leverage берётся из ответа API
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -47,7 +48,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.222"
+APP_VERSION = "3.223"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1501,10 +1502,18 @@ def _gate_close_position(cfg, contract):
     return err is None, err
 
 def _gate_set_leverage(cfg, contract, leverage):
-    """Устанавливает кредитное плечо для контракта."""
-    _, err = _gate_request(cfg, "POST", f"/api/v4/futures/usdt/positions/{contract}/leverage",
-                           params={"leverage": str(int(leverage))})
-    return err is None, err
+    """Устанавливает кредитное плечо для контракта. Возвращает (ok, actual_leverage_or_err)."""
+    data, err = _gate_request(cfg, "POST", f"/api/v4/futures/usdt/positions/{contract}/leverage",
+                              params={"leverage": str(int(leverage))})
+    if err:
+        return False, err
+    # Проверяем реально применённое плечо из ответа
+    actual_lev = None
+    if isinstance(data, dict):
+        actual_lev = data.get("leverage")
+    elif isinstance(data, list) and data:
+        actual_lev = data[0].get("leverage") if isinstance(data[0], dict) else None
+    return True, actual_lev
 
 def _gate_round_price(price, contract):
     """Округляет цену до шага Gate (order_price_round).
@@ -1615,28 +1624,36 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     log_lines.append(f"✓ Баланс: {balance:.2f} USDT")
     # 3. Устанавливаем плечо (2 попытки — при cross-margin первый раз может отклонить)
     applied_leverage = leverage
-    ok, err = _gate_set_leverage(cfg, contract, leverage)
+    ok, lev_result = _gate_set_leverage(cfg, contract, leverage)
     if not ok:
-        log_lines.append(f"⚠ Плечо попытка 1: {err} — повтор через 1с")
+        log_lines.append(f"⚠ Плечо попытка 1: {lev_result} — повтор через 1с")
         time.sleep(1.0)
-        ok, err = _gate_set_leverage(cfg, contract, leverage)
+        ok, lev_result = _gate_set_leverage(cfg, contract, leverage)
         if not ok:
-            log_lines.append(f"⚠ Плечо не применено: {err} — size рассчитывается без плеча (leverage=1)")
-            applied_leverage = 1  # безопасный fallback: маржа = notional, не превысим баланс
+            log_lines.append(f"⚠ Плечо не применено: {lev_result} — size рассчитывается без плеча (leverage=1)")
+            applied_leverage = 1
         else:
-            log_lines.append(f"✓ Плечо (попытка 2): {int(leverage)}×")
+            actual = int(lev_result) if lev_result else leverage
+            applied_leverage = actual
+            log_lines.append(f"✓ Плечо (попытка 2): {actual}×")
     else:
-        log_lines.append(f"✓ Плечо: {int(leverage)}×")
+        actual = int(lev_result) if lev_result else leverage
+        applied_leverage = actual
+        log_lines.append(f"✓ Плечо: {actual}× (запрошено {leverage}×)")
     # 4. Рассчитываем размер позиции
+    # Gate сам применяет плечо аккаунта к ордеру.
+    # Мы задаём size в контрактах исходя из МАРЖИ (без умножения на leverage),
+    # а Gate считает notional = size * ep * qm, маржа = notional / account_leverage.
+    # Поэтому: size = (balance * pct% * leverage) / (ep * qm)
+    # Плечо здесь нужно чтобы задать желаемый notional, но маржа при этом = balance*pct%.
     if fixed_notional_usdt is not None:
-        # Пользователь вводит размер позиции (уже с плечом)
         notional = fixed_notional_usdt
     elif fixed_margin_usdt is not None:
-        # Пользователь вводит маржу (без плеча) — умножаем на реально применённое плечо
         notional = fixed_margin_usdt * applied_leverage
     else:
         margin   = balance * (position_pct / 100.0)
         notional = margin * applied_leverage
+    log_lines.append(f"  [debug] balance={balance:.2f} pct={position_pct}% lev={applied_leverage} → margin={balance*(position_pct/100.0):.2f} notional={notional:.2f}")
     # Размер в контрактах.
     # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
     # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
@@ -2315,10 +2332,15 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
               f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
         _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
-            # Плечо берётся из UI-поля gate_leverage (явно задаётся пользователем)
-            leverage = int(float(alert_cfg.get("gate_leverage", 0) or 0))
-            if not leverage:
-                leverage = 10  # дефолт если поле не заполнено
+            # Плечо = risk_pct / sl_pct — ровно как в таблице "Плечо×" в UI
+            # UI-поле gate_leverage используется только если задано вручную (override)
+            _ui_lev = int(float(alert_cfg.get("gate_leverage", 0) or 0))
+            if _ui_lev > 0:
+                leverage = _ui_lev  # явный override из UI
+            else:
+                _sl_pct = float((best_params or {}).get("sl_pct") or 0)
+                leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 10
+            _write_trade_log(symbol, tf, f"  leverage={leverage}× (risk={risk_pct}% sl={((best_params or {}).get('sl_pct') or '?')}%)")
             auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
             trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
