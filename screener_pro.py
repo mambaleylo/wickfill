@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.224
+WickFill Optimizer v3.225
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -18,6 +18,7 @@ WickFill Optimizer v3.224
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
 - v3.223: Плечо× в автосделках = risk_pct/sl_pct (как в таблице UI); _gate_set_leverage возвращает реальное применённое плечо из ответа Gate; applied_leverage берётся из ответа API
 - v3.224: stability порог окна 0.65→0.55; фикс ложного "GitHub уже лучше" — or→None-check для validated_fitness при сравнении с gh-конфигом
+- v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -49,7 +50,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.224"
+APP_VERSION = "3.225"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2872,9 +2873,9 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         _num = sum((_xs[i] - _xm) * (_wrs_cycle[i] - _ym) for i in range(_n))
         _den = sum((_xs[i] - _xm) ** 2 for i in range(_n)) or 1e-9
         _slope = _num / _den  # winrate/окно
-        # Нормализуем: slope = -10%/окно → penalty ~0.3 (потеря 30%)
-        if _slope < 0:
-            _trend_penalty = max(0.5, 1.0 + _slope / 33.0)  # slope=-33 → ×0.0, slope=0 → ×1.0
+        # Нормализуем: slope = -10%/окно → penalty ~0.2 (потеря 20%); порог активации -5%, max штраф 30%
+        if _slope < -5.0:
+            _trend_penalty = max(0.7, 1.0 + _slope / 50.0)  # slope=-50 → ×0.0, slope=0 → ×1.0; max штраф 30%
             stability_multiplier *= _trend_penalty
         else:
             _trend_penalty = 1.0
