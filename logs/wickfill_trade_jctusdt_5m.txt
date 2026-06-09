@@ -1,0 +1,2 @@
+[2026-06-09 15:35:19] СИГНАЛ ЛОНГ ep=0.005871 tp=0.00593852 sl=0.00583577 tg=fail
+[2026-06-09 15:35:19] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
