@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.226
+WickFill Optimizer v3.229
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.226
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.229: fix автосделки — размер позиции считается от МАРЖИ (без умножения на leverage), Gate сам применяет плечо аккаунта; устранена ошибка 'margin X while available Y'
 - v3.228: equity-guard — автосохранение блокируется если новый конфиг имеет equity < 70% от текущего на GitHub (защита от перезаписи хорошего конфига худшим по прибыли даже при высоком vfit)
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
@@ -53,7 +54,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.228"
+APP_VERSION = "3.229"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1647,18 +1648,21 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         log_lines.append(f"✓ Плечо: {actual}× (запрошено {leverage}×)")
     # 4. Рассчитываем размер позиции
     # Gate сам применяет плечо аккаунта к ордеру.
-    # Мы задаём size в контрактах исходя из МАРЖИ (без умножения на leverage),
-    # а Gate считает notional = size * ep * qm, маржа = notional / account_leverage.
-    # Поэтому: size = (balance * pct% * leverage) / (ep * qm)
-    # Плечо здесь нужно чтобы задать желаемый notional, но маржа при этом = balance*pct%.
+    # Мы задаём size в контрактах исходя из МАРЖИ:
+    #   margin   = balance * pct%
+    #   size     = margin / (ep * qm)
+    # Gate видит size контрактов и сам умножает notional на leverage аккаунта.
+    # НЕ умножаем на leverage здесь — иначе Gate требует margin = notional (без деления),
+    # что превышает баланс и вызывает ошибку "margin X while available Y".
     if fixed_notional_usdt is not None:
-        notional = fixed_notional_usdt
+        # В этом режиме notional задан явно; размер как обычно
+        margin = fixed_notional_usdt / max(applied_leverage, 1)
     elif fixed_margin_usdt is not None:
-        notional = fixed_margin_usdt * applied_leverage
+        margin = fixed_margin_usdt
     else:
-        margin   = balance * (position_pct / 100.0)
-        notional = margin * applied_leverage
-    log_lines.append(f"  [debug] balance={balance:.2f} pct={position_pct}% lev={applied_leverage} → margin={balance*(position_pct/100.0):.2f} notional={notional:.2f}")
+        margin = balance * (position_pct / 100.0)
+    notional_display = margin * applied_leverage  # только для лога
+    log_lines.append(f"  [debug] balance={balance:.2f} pct={position_pct}% lev={applied_leverage} → margin={margin:.2f} (notional~{notional_display:.2f})")
     # Размер в контрактах.
     # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
     # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
@@ -1681,13 +1685,13 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         except Exception:
             _qm = 0
     if _qm > 0:
-        size = max(1, round(notional / (ep * _qm)))
-        log_lines.append(f"  [debug] notional={notional:.2f} ep={ep:.2f} qm={_qm} → size={size}")
+        size = max(1, round(margin / (ep * _qm)))
+        log_lines.append(f"  [debug] margin={margin:.2f} ep={ep:.2f} qm={_qm} → size={size}")
     else:
-        # Последний фоллбэк: предполагаем 1 контракт = 1 USD
-        size = max(1, round(notional))
-        log_lines.append(f"  [debug] qm=0 fallback: notional={notional:.2f} → size={size}")
-    log_lines.append(f"✓ Размер: {size} контр. (~{notional:.1f} USDT)")
+        # Последний фоллбэк: предполагаем 1 контракт = 1 USD (маржа)
+        size = max(1, round(margin))
+        log_lines.append(f"  [debug] qm=0 fallback: margin={margin:.2f} → size={size}")
+    log_lines.append(f"✓ Размер: {size} контр. (маржа ~{margin:.1f} USDT, notional ~{margin*applied_leverage:.1f} USDT)")
     # 5. Выставляем ордер
     ok, order_log = _gate_place_order(cfg, contract, direction, size, tp, sl)
     if not ok:
@@ -6978,4 +6982,5 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
 
