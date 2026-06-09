@@ -21,6 +21,7 @@ WickFill Optimizer v3.226
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.228: equity-guard — автосохранение блокируется если новый конфиг имеет equity < 70% от текущего на GitHub (защита от перезаписи хорошего конфига худшим по прибыли даже при высоком vfit)
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -52,7 +53,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.227"
+APP_VERSION = "3.228"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3170,6 +3171,26 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         if gh_best_fit > our_fit:
             _log(f"⏭ GitHub уже лучше (gh={gh_best_fit:.2f} > our={our_fit:.2f}), пропускаем сохранение", "info")
             return fpath
+        # Защита от перезаписи конфига с сильно лучшей прибылью (даже если vfit хуже)
+        # Не перезаписываем если новый equity < 70% от текущего на GitHub
+        try:
+            _gh_best_eq = -9999
+            for _ef in existing_files:
+                if _pat.match(_ef["name"]):
+                    try:
+                        _raw2 = _gh_get_file(f"configs/{_ef['name']}")
+                        if _raw2:
+                            _gd2 = json.loads(_raw2)
+                            _ge2 = _gd2.get("best", {}).get("equity", -9999)
+                            if _ge2 > _gh_best_eq:
+                                _gh_best_eq = _ge2
+                    except Exception: pass
+            _eq_threshold = _gh_best_eq * 0.7
+            if _gh_best_eq > 0 and eq < _eq_threshold:
+                _log(f"⛔ Перезапись заблокирована: новый equity ${eq:.0f} < 70% от текущего ${_gh_best_eq:.0f} (порог ${_eq_threshold:.0f})", "warn")
+                return fpath
+        except Exception as _eq_e:
+            print(f"{_ts()} [gh] ⚠ Ошибка equity-guard: {_eq_e}", flush=True)
         # Удаляем старые конфиги с тем же sym/tf/days/risk
         for _ef in existing_files:
             if _pat.match(_ef["name"]) and _ef["name"] != fname:
