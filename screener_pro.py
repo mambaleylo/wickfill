@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.220
+WickFill Optimizer v3.224
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -17,6 +17,7 @@ WickFill Optimizer v3.220
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
 - v3.223: Плечо× в автосделках = risk_pct/sl_pct (как в таблице UI); _gate_set_leverage возвращает реальное применённое плечо из ответа Gate; applied_leverage берётся из ответа API
+- v3.224: stability порог окна 0.65→0.55; фикс ложного "GitHub уже лучше" — or→None-check для validated_fitness при сравнении с gh-конфигом
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -48,7 +49,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.223"
+APP_VERSION = "3.224"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2851,7 +2852,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
         if wres and wres["trades"] >= 5:
             total_windows += 1
-            if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.65:
+            if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.55:
                 ok_windows += 1
     stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
     # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
@@ -3144,7 +3145,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     # 1. Попытка сохранить на GitHub
     # Сначала проверяем: вдруг на GitHub уже лежит лучший результат (другое устройство)
     gh_ok = False
-    our_fit = best.get("validated_fitness") or best.get("fitness", -9999)
+    our_fit = best.get("validated_fitness") if best.get("validated_fitness") is not None else best.get("fitness", -9999)
     try:
         import re as _re
         sym_key = symbol.replace("_","").replace("/","").lower()
@@ -3159,7 +3160,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                     if _raw:
                         _gd = json.loads(_raw)
                         _gb = _gd.get("best", {})
-                        _gf = _gb.get("validated_fitness") or _gb.get("fitness", -9999)
+                        _gf = _gb.get("validated_fitness") if _gb.get("validated_fitness") is not None else _gb.get("fitness", -9999)
                         if _gf > gh_best_fit:
                             gh_best_fit = _gf
                 except Exception: pass
