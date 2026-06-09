@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.217
+WickFill Optimizer v3.218
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.217"
+APP_VERSION = "3.218"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4702,11 +4702,11 @@ details summary::-webkit-details-marker{display:none}
 /* ── Responsive mobile ── */
 @media(max-width:700px){
   /* Шапка — мини-версия только с версией и статусом */
-  .topbar{display:flex !important;height:36px;padding:0 10px;min-height:0}
-  .topbar-logo{font-size:.78rem;gap:5px}
+  .topbar{display:flex !important;height:38px;padding:0 10px;min-height:0;overflow:hidden}
+  .topbar-logo{font-size:.80rem;gap:5px}
   .topbar-spacer{flex:1}
-  .topbar-meta .tb{font-size:.68rem;padding:3px 6px}
-  #speedPill{display:none !important}
+  /* Скрываем все кнопки в шапке на мобиле — есть Restart в сайдбаре */
+  .topbar-meta{display:none !important}
 
   /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
   html,body{overflow:auto !important;height:auto !important;min-height:100dvh !important;touch-action:pan-y !important;overscroll-behavior:auto !important}
@@ -4759,11 +4759,14 @@ details summary::-webkit-details-marker{display:none}
   #recentBody{max-height:0px}
   #recentArrow{transform:rotate(0deg)}
 
-  /* ── ПРАВАЯ ПАНЕЛЬ ── */
+  /* ── ПРАВАЯ ПАНЕЛЬ — порядок элементов на мобиле ── */
   .right{flex:1;min-height:0;overflow:visible;display:flex;flex-direction:column}
-
-  /* Top strip — вертикально, без overflow:hidden */
-  .top-strip{flex-direction:column;height:auto;max-height:none;flex:none;overflow:visible;}
+  /* Таблица конфига — первая */
+  #top20Wrap{order:1}
+  /* График — второй */
+  .chart-area{order:2;height:260px;flex:none;}
+  /* Циклы+логи (top-strip) — третьи */
+  .top-strip{order:3;flex-direction:column;height:auto;max-height:none;flex:none;overflow:visible;}
   .cycles-col{max-width:100%;border-right:none;border-bottom:1px solid var(--border2);padding:6px 10px;overflow:visible;flex-shrink:0;}
   .cc-strip{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x;}
   .log-col{flex:1;min-height:0;overflow:visible;}
@@ -4809,8 +4812,6 @@ details summary::-webkit-details-marker{display:none}
     font-weight:700;
   }
 
-  /* График — полная ширина, после строки конфига */
-  .chart-area{height:260px;flex:none;order:99}
   #chartFrame{height:260px;min-height:0;display:block;}
 
   /* Циклы — компактная лента */
