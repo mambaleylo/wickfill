@@ -16,6 +16,7 @@ WickFill Optimizer v3.220
 - v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
+- v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
 - v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
@@ -46,7 +47,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.221"
+APP_VERSION = "3.222"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2314,19 +2315,10 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
               f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
         _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
-            # Берём leverage из per-symbol state если доступен, иначе из глобального
-            leverage = 0
-            if symbol and symbol in opt_states:
-                with opt_states_lock:
-                    _sym_best2 = opt_states[symbol].get("best") or {}
-                leverage = (_sym_best2.get("leverage") or
-                            (_sym_best2.get("params") or {}).get("leverage") or 0)
+            # Плечо берётся из UI-поля gate_leverage (явно задаётся пользователем)
+            leverage = int(float(alert_cfg.get("gate_leverage", 0) or 0))
             if not leverage:
-                with opt_lock:
-                    best = opt_state.get("all_time_best") or opt_state.get("best") or {}
-                leverage = best.get("leverage", 0) or 0
-            if not leverage:
-                leverage = 10  # дефолт если оптимизатор ещё не нашёл результат
+                leverage = 10  # дефолт если поле не заполнено
             auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
             trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
@@ -5049,10 +5041,12 @@ details summary::-webkit-details-marker{display:none}
           <input type="password" id="gate_secret" placeholder="вставьте API Secret" autocomplete="off">
         </div>
         <div class="field">
-          <label>Размер позиции (% от баланса)</label>
+          <label>Размер позиции (% от баланса) · Плечо</label>
           <div class="tg-row">
-            <input type="number" id="gate_pct" placeholder="10" min="1" max="100" step="1" value="10" style="width:80px">
+            <input type="number" id="gate_pct" placeholder="10" min="1" max="100" step="1" value="10" style="width:72px">
             <span style="font-size:.75rem;color:var(--text3);align-self:center">%</span>
+            <input type="number" id="gate_leverage" placeholder="10" min="1" max="100" step="1" value="10" style="width:60px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
+            <span style="font-size:.75rem;color:var(--text3);align-self:center">×</span>
             <button class="btn-tg-test" id="gateTestBtn" onclick="testGateConnection()">Тест</button>
           </div>
         </div>
@@ -5226,7 +5220,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _textFields = ['gate_key','gate_secret','gate_pct','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
+  const _textFields = ['gate_key','gate_secret','gate_pct','gate_leverage','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
   const _checkFields = ['gate_auto_enabled'];
   _textFields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
@@ -5271,6 +5265,7 @@ function getAlertCfg(){
   const gk=document.getElementById('gate_key').value.trim();
   const gs=document.getElementById('gate_secret').value.trim();
   const gp=parseFloat(document.getElementById('gate_pct').value)||0;
+  const glev=parseInt(document.getElementById('gate_leverage')?.value)||10;
   const ntfy=document.getElementById('al_ntfy_topic').value.trim();
   const base=(t&&c)?{tg_token:t,tg_chat_id:c}:{};
   if(ntfy) base.ntfy_topic=ntfy;
@@ -5281,7 +5276,7 @@ function getAlertCfg(){
   // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
   // Всегда передаём gate ключи в cfg — исполнение контролируется флагом gate_auto_enabled
   // gate_auto_enabled всегда передаётся — чтобы флаг не терялся если ключи заполнены
-  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_leverage:glev,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
   // Флаг автоторговли передаём всегда независимо от заполненности ключей
   base.gate_auto_enabled = gauto;
   // Обновляем статус галочки
