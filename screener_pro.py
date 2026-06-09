@@ -16,6 +16,7 @@ WickFill Optimizer v3.220
 - v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
+- v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
 - v3.209: pending_signal_bar — при use_next_bar маркер ⏳ на сигнальной свече; TP/SL не рисуются пока вход не состоялся; PENDING_BAR передаётся через opt_state → postMessage → chart JS
 - v3.210: исправлен alert-поиск — SW использует chart_signals_data (свежие, t совпадает с last_candle_t) вместо opt_state["chart_signals"] (стале сигналы оптимизатора, t не совпадал → сигнал никогда не находился)
@@ -45,7 +46,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.220"
+APP_VERSION = "3.221"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1604,15 +1605,25 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     if not ok:
         return False, f"Ошибка закрытия позиции: {err}"
     log_lines.append("✓ Старая позиция закрыта (или не было)")
+    # Небольшая пауза после закрытия — Gate должен сбросить позицию прежде чем принять новое плечо
+    time.sleep(0.5)
     # 2. Получаем баланс
     balance, err = _gate_get_balance(cfg)
     if err or balance is None:
         return False, f"Ошибка получения баланса: {err}"
     log_lines.append(f"✓ Баланс: {balance:.2f} USDT")
-    # 3. Устанавливаем плечо
+    # 3. Устанавливаем плечо (2 попытки — при cross-margin первый раз может отклонить)
+    applied_leverage = leverage
     ok, err = _gate_set_leverage(cfg, contract, leverage)
     if not ok:
-        log_lines.append(f"⚠ Плечо: {err}")  # не критично — продолжаем
+        log_lines.append(f"⚠ Плечо попытка 1: {err} — повтор через 1с")
+        time.sleep(1.0)
+        ok, err = _gate_set_leverage(cfg, contract, leverage)
+        if not ok:
+            log_lines.append(f"⚠ Плечо не применено: {err} — size рассчитывается без плеча (leverage=1)")
+            applied_leverage = 1  # безопасный fallback: маржа = notional, не превысим баланс
+        else:
+            log_lines.append(f"✓ Плечо (попытка 2): {int(leverage)}×")
     else:
         log_lines.append(f"✓ Плечо: {int(leverage)}×")
     # 4. Рассчитываем размер позиции
@@ -1620,11 +1631,11 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         # Пользователь вводит размер позиции (уже с плечом)
         notional = fixed_notional_usdt
     elif fixed_margin_usdt is not None:
-        # Пользователь вводит маржу (без плеча) — умножаем
-        notional = fixed_margin_usdt * leverage
+        # Пользователь вводит маржу (без плеча) — умножаем на реально применённое плечо
+        notional = fixed_margin_usdt * applied_leverage
     else:
         margin   = balance * (position_pct / 100.0)
-        notional = margin * leverage
+        notional = margin * applied_leverage
     # Размер в контрактах.
     # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
     # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
