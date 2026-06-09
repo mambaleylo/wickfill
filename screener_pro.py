@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.219
+WickFill Optimizer v3.220
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.219"
+APP_VERSION = "3.220"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1744,8 +1744,20 @@ let PENDING_BAR=null;  // bar_i сигнала ожидающего входа (
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
-let viewStart=Math.max(0,CANDLES.length-120),viewLen=Math.min(120,CANDLES.length);
+const _isMob=window.innerWidth<=700;
+const _defaultViewLen=_isMob?60:120;
+let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
+let _zoomResetTimer=null;
+function _scheduleZoomReset(){{
+  if(_zoomResetTimer) clearTimeout(_zoomResetTimer);
+  _zoomResetTimer=setTimeout(()=>{{
+    viewLen=Math.min(_defaultViewLen,CANDLES.length);
+    viewStart=Math.max(0,CANDLES.length-viewLen);
+    render();
+    _zoomResetTimer=null;
+  }},5000);
+}}
 function toggleSidebar(){{const sb=document.getElementById('sidebar');sidebarOpen=!sidebarOpen;sb.classList.toggle('hidden',!sidebarOpen);requestAnimationFrame(render);}}
 let _lastW=0,_lastH=0;
 function render(){{
@@ -1959,7 +1971,7 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();_scheduleZoomReset();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
 window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));render();}});
 window.addEventListener('mouseup',()=>isDragging=false);
@@ -1982,7 +1994,7 @@ wrap.addEventListener('touchmove',e=>{{
     const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
     const d=Math.sqrt(dx*dx+dy*dy),scale=_tPinchD/d;
     viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(_tPinchVL*scale)));
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));render();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));render();_scheduleZoomReset();
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
