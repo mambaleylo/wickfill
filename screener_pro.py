@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.215
+WickFill Optimizer v3.216
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.215"
+APP_VERSION = "3.216"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2819,9 +2819,34 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
     # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
     stability_multiplier = 0.5 + 0.5 * stability_ratio
+
+    # Штраф за деградирующий тренд winrate по окнам (slope penalty)
+    # Линейная регрессия по winrate окон: отрицательный slope → штраф
+    _wrs_cycle = []
+    for wi in range(3):
+        wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
+        if wres and wres["trades"] >= 5:
+            _wrs_cycle.append(wres["winrate"])
+    if len(_wrs_cycle) >= 3:
+        _n = len(_wrs_cycle)
+        _xs = list(range(_n))
+        _xm = sum(_xs) / _n; _ym = sum(_wrs_cycle) / _n
+        _num = sum((_xs[i] - _xm) * (_wrs_cycle[i] - _ym) for i in range(_n))
+        _den = sum((_xs[i] - _xm) ** 2 for i in range(_n)) or 1e-9
+        _slope = _num / _den  # winrate/окно
+        # Нормализуем: slope = -10%/окно → penalty ~0.3 (потеря 30%)
+        if _slope < 0:
+            _trend_penalty = max(0.5, 1.0 + _slope / 33.0)  # slope=-33 → ×0.0, slope=0 → ×1.0
+            stability_multiplier *= _trend_penalty
+        else:
+            _trend_penalty = 1.0
+    else:
+        _slope = 0.0; _trend_penalty = 1.0
+
     final_result["stability_ratio"] = round(stability_ratio, 2)
     final_result["validated_fitness"] = round(final_result["fitness"] * stability_multiplier, 4)
-    olog(f"  📐 Стабильность: {ok_windows}/{total_windows} окон ({'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}) → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 else "warn")
+    _slope_str = f" slope={_slope:+.1f}%/окно trend×{_trend_penalty:.2f}" if _slope != 0 else ""
+    olog(f"  📐 Стабильность: {ok_windows}/{total_windows} окон ({'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}){_slope_str} → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 and _trend_penalty >= 0.8 else "warn")
 
     # Обновляем validated_fitness для всего top20
     for r in top20_global:
@@ -3548,6 +3573,25 @@ def run_optimizer(params):
                     })
             if windows:
                 ww_str = " | ".join(f"#{w['i']} WR{w['winrate']:.0f}%{'✅' if w['ok'] else '❌'}" for w in windows)
+                # Slope-штраф по WF-окнам — обновляем validated_fitness all_time_best
+                _wf_wrs = [w["winrate"] for w in windows]
+                _n = len(_wf_wrs)
+                if _n >= 3:
+                    _xs = list(range(_n))
+                    _xm = sum(_xs) / _n; _ym = sum(_wf_wrs) / _n
+                    _num = sum((_xs[i] - _xm) * (_wf_wrs[i] - _ym) for i in range(_n))
+                    _den = sum((_xs[i] - _xm) ** 2 for i in range(_n)) or 1e-9
+                    _wf_slope = _num / _den
+                    if _wf_slope < 0:
+                        _wf_trend_pen = max(0.5, 1.0 + _wf_slope / 33.0)
+                        _old_vfit = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
+                        all_time_best["validated_fitness"] = round(_old_vfit * _wf_trend_pen, 4)
+                        all_time_best["wf_slope"] = round(_wf_slope, 2)
+                        all_time_best["wf_trend_penalty"] = round(_wf_trend_pen, 3)
+                        ww_str += f" | slope={_wf_slope:+.1f}%/окно trend×{_wf_trend_pen:.2f}"
+                    else:
+                        all_time_best["wf_slope"] = round(_wf_slope, 2)
+                        all_time_best["wf_trend_penalty"] = 1.0
                 olog(f"📊 Окна: {ww_str}", "ok")
 
             # 3) Минимальный стабильный период — ищем самый короткий рабочий отрезок
