@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.218
+WickFill Optimizer v3.219
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.218"
+APP_VERSION = "3.219"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5454,6 +5454,11 @@ function startOpt(){
       _resetLog();
       document.getElementById('bestSection').style.display='none';
       if(window.innerWidth>700) document.getElementById('top20Wrap').style.display='none';
+      // На мобиле скрываем карточку настроек при старте — освобождаем место
+      if(window.innerWidth<=700){
+        const _mc=document.querySelector('.sidebar .card');
+        if(_mc) _mc.style.display='none';
+      }
       const _vs=document.getElementById('validSection');if(_vs){_vs._everShown=false;_vs.style.display='none';}
       const _spEl=document.getElementById('speedPill');if(_spEl){_spEl._lastShown=0;_spEl.style.display='none';}
       document.getElementById('progBar').style.width='0%';
@@ -5494,6 +5499,11 @@ function stopOpt(){
   document.getElementById('wfStopBtn').style.display='none';
   document.getElementById('swStopBtn').style.display='flex';
   document.getElementById('progWrap').style.display='none';
+  // На мобиле восстанавливаем карточку настроек
+  if(window.innerWidth<=700){
+    const _mc=document.querySelector('.sidebar .card');
+    if(_mc) _mc.style.display='';
+  }
   if(window._lastTop20&&window._lastTop20.length) renderTop20(window._lastTop20);
   else if(window._lastBest) renderTop20([window._lastBest]);
   _loadRecentConfigs();
