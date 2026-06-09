@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.214
+WickFill Optimizer v3.215
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.214"
+APP_VERSION = "3.215"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2292,16 +2292,18 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
             # Берём leverage из per-symbol state если доступен, иначе из глобального
-            leverage = 1
+            leverage = 0
             if symbol and symbol in opt_states:
                 with opt_states_lock:
                     _sym_best2 = opt_states[symbol].get("best") or {}
                 leverage = (_sym_best2.get("leverage") or
-                            (_sym_best2.get("params") or {}).get("leverage") or 1)
-            if leverage == 1:
+                            (_sym_best2.get("params") or {}).get("leverage") or 0)
+            if not leverage:
                 with opt_lock:
                     best = opt_state.get("all_time_best") or opt_state.get("best") or {}
-                leverage = best.get("leverage", 1) or 1
+                leverage = best.get("leverage", 0) or 0
+            if not leverage:
+                leverage = 10  # дефолт если оптимизатор ещё не нашёл результат
             auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
             trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
@@ -2311,7 +2313,11 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             )
             status = "✓" if ok_trade else "✕"
             print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
-            _write_trade_log(symbol, tf, f"gate {status} {'ЛОНГ' if direction==1 else 'ШОРТ'} lev={leverage} | {trade_log}")
+            # Пишем каждую строку отдельно — так ошибка видна даже если лог обрывается
+            for _tl in trade_log.splitlines():
+                if _tl.strip():
+                    _write_trade_log(symbol, tf, f"  {_tl.strip()}")
+            _write_trade_log(symbol, tf, f"gate {status} {'ЛОНГ' if direction==1 else 'ШОРТ'} lev={leverage} — итог")
             with opt_lock:
                 opt_state.setdefault("logs", []).append({
                     "ts": time.strftime("%H:%M:%S"),
