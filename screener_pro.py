@@ -20,6 +20,7 @@ WickFill Optimizer v3.226
 - v3.224: stability порог окна 0.65→0.55; фикс ложного "GitHub уже лучше" — or→None-check для validated_fitness при сравнении с gh-конфигом
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
+- v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -51,7 +52,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.226"
+APP_VERSION = "3.227"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5259,12 +5260,15 @@ window.addEventListener('DOMContentLoaded', function(){
   // Авто-сохранение при изменении
   _textFields.forEach(id => {
     const el=document.getElementById(id);
-    if(el) el.addEventListener('input', () => localStorage.setItem('wf_'+id, el.value));
+    if(el) el.addEventListener('input', () => { localStorage.setItem('wf_'+id, el.value); saveAlertCfg&&saveAlertCfg(); });
   });
   _checkFields.forEach(id => {
     const el=document.getElementById(id);
-    if(el) el.addEventListener('change', () => localStorage.setItem('wf_'+id, el.checked));
+    if(el) el.addEventListener('change', () => { localStorage.setItem('wf_'+id, el.checked); saveAlertCfg&&saveAlertCfg(); });
   });
+
+  // Отправляем актуальный alert_cfg на сервер сразу после восстановления полей
+  setTimeout(()=>{ saveAlertCfg&&saveAlertCfg(); }, 500);
 
   // Восстанавливаем параметры последнего запуска (символы, таймфрейм, дни)
   const _runFields = ['wf_symbol','wf_days','wf_sl_min','wf_sl_max','wf_tp_min','wf_tp_max'];
@@ -5309,6 +5313,16 @@ function getAlertCfg(){
   if(st) st.textContent=gauto&&gk&&gs&&gp>0?'🟢 вкл':'⚪ выкл';
   // Если нет ни telegram ни gate — return null. Если есть хотя бы что-то — возвращаем
   return Object.keys(base).length?base:null;
+}
+
+function saveAlertCfg(){
+  const cfg=getAlertCfg();
+  if(!cfg) return;
+  fetch('/update_alert_cfg',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({alert_cfg:cfg})})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok) console.warn('[WickFill] update_alert_cfg failed:',d.msg);
+    }).catch(e=>console.warn('[WickFill] update_alert_cfg error:',e));
 }
 
 function sendTestNtfy(){
@@ -6763,6 +6777,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok":False,"msg":str(e)})
             return
 
+        if parsed.path == "/update_alert_cfg":
+            try: params = json.loads(body)
+            except: self._json({"ok": False, "msg": "bad JSON"}); return
+            new_cfg = params.get("alert_cfg")
+            if new_cfg is None:
+                self._json({"ok": False, "msg": "no alert_cfg"}); return
+            # Нормализуем gate_auto_enabled на случай если пришёл как строка
+            if "gate_auto_enabled" in new_cfg:
+                v = new_cfg["gate_auto_enabled"]
+                new_cfg["gate_auto_enabled"] = (v is True) or (str(v).lower() == "true")
+            with opt_lock:
+                opt_state["alert_cfg"] = new_cfg
+            # В мультирежиме обновляем для всех активных символов
+            with opt_states_lock:
+                for sym_key in list(opt_states.keys()):
+                    opt_states[sym_key]["alert_cfg"] = new_cfg
+            _write_trade_log("sys", "upd",
+                f"alert_cfg обновлён: auto={new_cfg.get('gate_auto_enabled')} key={'да' if new_cfg.get('gate_key') else 'НЕТ'}")
+            self._json({"ok": True})
+            return
+
         if parsed.path == "/update_script":
             try:
                 import urllib.request as _ur
@@ -6922,3 +6957,4 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
+
