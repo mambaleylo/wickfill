@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.225
+WickFill Optimizer v3.226
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -19,6 +19,7 @@ WickFill Optimizer v3.225
 - v3.223: Плечо× в автосделках = risk_pct/sl_pct (как в таблице UI); _gate_set_leverage возвращает реальное применённое плечо из ответа Gate; applied_leverage берётся из ответа API
 - v3.224: stability порог окна 0.65→0.55; фикс ложного "GitHub уже лучше" — or→None-check для validated_fitness при сравнении с gh-конфигом
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
+- v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
 - v3.221: fix автосделки — при ошибке установки плеча 2 retry + fallback applied_leverage=1 (size без плеча, чтобы не превысить баланс); пауза 0.5s после закрытия позиции
 - v3.212: fix Gate.io автосделки — нормализация gate_auto_enabled (bool/string), лог [gate_check] при каждом сигнале, leverage берётся из per-symbol state в multi-symbol режиме
@@ -50,7 +51,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.225"
+APP_VERSION = "3.226"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3370,7 +3371,7 @@ def run_optimizer(params):
         if "validated_fitness" not in _s:
             _s["validated_fitness"] = _s.get("fitness", 0)
         _global_best_ever = _s
-        _last_autosave_vfit = _s.get("validated_fitness", _s.get("fitness", 0))
+        _last_autosave_vfit = 0.0  # всегда 0 при загрузке — не блокировать новые сохранения старым fitness
 
     # Авто-загрузка конфига из Downloads (если нет ручного seed)
     if not seed:
@@ -3387,7 +3388,7 @@ def run_optimizer(params):
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
-            _last_autosave_vfit = auto_data["best"].get("validated_fitness", auto_data["best"].get("fitness", 0))
+            _last_autosave_vfit = 0.0  # всегда 0 при загрузке — не блокировать новые сохранения старым fitness
             olog(f"🔍 Авто-загрузка: {auto_path}", "ok")
             olog(f"   ${auto_data['best'].get('equity',0):.0f} WR {auto_data['best'].get('winrate',0):.1f}% | {len(seed['top20'])} записей top20", "ok")
         else:
@@ -3929,7 +3930,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
     prev_top20 = []
     global_best = None
     global_best_vfit = -1e18
-    last_autosave_vfit = -1e18
+    last_autosave_vfit = 0.0
     local_candles = list(candles)
     sw_thread_started = False
     sw_candles_ref = [list(candles)]  # mutable ref для SW-треда
@@ -3942,7 +3943,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             prev_best_params = dict(b.get("params", {})) if b.get("params") else None
             global_best = b
             global_best_vfit = b.get("validated_fitness", b.get("fitness", 0))
-            last_autosave_vfit = global_best_vfit
+            last_autosave_vfit = 0.0  # всегда 0 при загрузке
             _slog(f"[load] Загружен конфиг: ${b.get('equity',100):.2f}", "ok")
     except Exception:
         pass
