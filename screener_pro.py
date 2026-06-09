@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.213
+WickFill Optimizer v3.214
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -45,7 +45,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.213"
+APP_VERSION = "3.214"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1436,7 +1436,7 @@ def _gate_request(cfg, method, path, params=None, body=None):
     query_str   = "&".join(f"{k}={v}" for k, v in (params or {}).items())
     body_str    = json.dumps(body) if body else ""
     sig         = _gate_sign(api_secret, method, path, query_str, body_str, ts)
-    url         = f"https://fx-api.gateio.ws{path}" + (f"?{query_str}" if query_str else "")
+    url         = f"https://api.gateio.ws{path}" + (f"?{query_str}" if query_str else "")
     headers     = {
         "Content-Type":  "application/json",
         "KEY":           api_key,
@@ -2311,7 +2311,7 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             )
             status = "✓" if ok_trade else "✕"
             print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
-            _write_trade_log(symbol, tf, f"gate {status} {'ЛОНГ' if direction==1 else 'ШОРТ'} lev={leverage} | {trade_log.splitlines()[-1]}")
+            _write_trade_log(symbol, tf, f"gate {status} {'ЛОНГ' if direction==1 else 'ШОРТ'} lev={leverage} | {trade_log}")
             with opt_lock:
                 opt_state.setdefault("logs", []).append({
                     "ts": time.strftime("%H:%M:%S"),
