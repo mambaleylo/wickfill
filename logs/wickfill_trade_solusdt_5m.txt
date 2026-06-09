@@ -19,3 +19,5 @@
 [2026-06-09 04:55:20] СИГНАЛ ШОРТ ep=65.88 tp=65.1883 sl=66.2753 tg=ok
 [2026-06-09 04:55:20] gate_check key=да secret=да pct=15.0 auto_on=True raw=True
 [2026-06-09 04:55:34] gate ✕ ШОРТ lev=1 | ✓ Размер: 4 контр. (~23.3 USDT)
+[2026-06-09 07:50:20] СИГНАЛ ШОРТ ep=67.3 tp=66.5934 sl=67.7038 tg=ok
+[2026-06-09 07:50:20] gate_check key=да secret=да pct=15.0 auto_on=True raw=True
