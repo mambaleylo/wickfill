@@ -72,7 +72,7 @@
     "pending_signal_bar": null,
     "stability_ratio": 1.0,
     "validated_fitness": 56.4564,
-    "wf_slope": 1.27,
+    "wf_slope": 2.3,
     "wf_trend_penalty": 1.0
   },
   "top20": [
@@ -149,7 +149,7 @@
       "pending_signal_bar": null,
       "stability_ratio": 1.0,
       "validated_fitness": 56.4564,
-      "wf_slope": 1.27,
+      "wf_slope": 2.3,
       "wf_trend_penalty": 1.0
     },
     {
@@ -605,5 +605,5 @@
   "tf": "5m",
   "days": 2,
   "risk_pct": 10.0,
-  "saved_at": "2026-06-09 18:47:27"
+  "saved_at": "2026-06-09 19:13:22"
 }
