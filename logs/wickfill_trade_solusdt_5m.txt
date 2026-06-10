@@ -61,3 +61,6 @@
 [2026-06-10 06:45:38]   [debug] balance=18.32 pct=94.0% lev=17 → margin=17.22 (notional~292.69)
 [2026-06-10 06:45:38]   [debug] margin=17.22 ep=64.57 qm=0.1 → size=3
 [2026-06-10 06:45:38]   ✓ Размер: 3 контр. (маржа ~17.2 USDT, notional ~292.7 USDT)
+[2026-06-10 06:45:38]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.34483999999999 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.31172 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
+[2026-06-10 06:45:38] gate ✓ ЛОНГ lev=17 — итог
+[2026-06-10 06:55:19] СИГНАЛ ШОРТ ep=64.53 tp=63.7556 sl=64.7881 tg=ok
