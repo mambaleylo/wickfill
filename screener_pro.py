@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.248
+WickFill Optimizer v3.249
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.249: fix конфиги перестали сохраняться на GitHub — у функции _auto_save_config пропала строка def (осталось только тело), из-за чего вызов падал с NameError и сохранения не происходило
 - v3.248: fix мигающий сигнал на живой свече — _fetch_current_candle теперь определяет live-свечу строго по КАЛЕНДАРНОЙ границе: now < last_t + interval_sec; раньше использовался candle_open_t = (now//interval)×interval, из-за чего только что закрытая свеча (last_t == candle_open_t) ошибочно считалась незакрытой и периодически попадала в отображение как live — индикатор сигнала то появлялся, то пропадал
 - v3.247: fix расхождения числа сделок на графике vs лучшем конфиге — теперь _simulate для графика вызывается с days_limit=days и now_ts=_src_ts (timestamp последней свечи), идентично воркерам оптимизатора; раньше делался ручной срез по _src_ts и days_limit=0, из-за чего границы окна чуть отличались от воркерных (те считали cutoff от time.time()) → разное число сделок
 - v3.246: график теперь всегда строится по _trade_best/_trade_params (лучший конфиг между локальным all_time_best и GitHub), а не только по локальному all_time_best — раньше если _auto_save_config пропускал заливку (т.к. на GitHub уже лежал лучший конфиг с другого устройства), график всё равно показывал локальный (худший) прогон; opt_state["best"]/all_time_best по-прежнему хранят локальный рекорд для продолжения перебора
@@ -73,7 +74,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.248"
+APP_VERSION = "3.249"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -3328,7 +3329,7 @@ def _gh_fetch_best_for_trading(symbol, tf, days, risk_pct):
         return None, None
 
 
-    """Сохраняет конфиг в Downloads. Атомарная замена — никаких копий с (1)."""
+def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     import glob as _glob, tempfile
     sym = symbol.replace("_","").replace("/","").lower()
     r   = int(round(risk_pct))
