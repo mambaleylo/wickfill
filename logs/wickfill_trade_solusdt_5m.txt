@@ -48,3 +48,7 @@
 [2026-06-10 04:00:36]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.92168 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.87944 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
 [2026-06-10 04:00:36] gate ✓ ЛОНГ lev=17 — итог
 [2026-06-10 05:00:19] СИГНАЛ ШОРТ ep=65.06 tp=64.2793 sl=65.3202 tg=ok
+[2026-06-10 05:00:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
+[2026-06-10 05:00:19]   leverage=17× (risk=10.0% sl=0.4%)
+[2026-06-10 05:00:29]   Ошибка закрытия позиции: Internal error
+[2026-06-10 05:00:29] gate ✕ ШОРТ lev=17 — итог
