@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.229
+WickFill Optimizer v3.230
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.229
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.230: fix TP/SL — order_price_round берётся из Gate API (не хардкод); fix СТОП — останавливает sliding window и автосделки полностью (sw_running=False)
 - v3.229: fix автосделки — размер позиции считается от МАРЖИ (без умножения на leverage), Gate сам применяет плечо аккаунта; устранена ошибка 'margin X while available Y'
 - v3.228: equity-guard — автосохранение блокируется если новый конфиг имеет equity < 70% от текущего на GitHub (защита от перезаписи хорошего конфига худшим по прибыли даже при высоком vfit)
 - v3.222: leverage для автосделок берётся из UI-поля gate_leverage (не из оптимизатора); добавлено поле ×плечо в UI рядом с % баланса
@@ -54,7 +55,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.229"
+APP_VERSION = "3.230"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1521,23 +1522,42 @@ def _gate_set_leverage(cfg, contract, leverage):
         actual_lev = data[0].get("leverage") if isinstance(data[0], dict) else None
     return True, actual_lev
 
-def _gate_round_price(price, contract):
-    """Округляет цену до шага Gate (order_price_round).
-    Известные шаги: BTC=0.1, ETH=0.01, SOL=0.001, остальные=0.0001 или берём из API.
-    """
-    _TICK = {
-        "BTC_USDT": 0.1,   "ETH_USDT": 0.01,  "SOL_USDT": 0.001,
+_gate_price_round_cache = {}  # {contract: tick_float}
+
+def _gate_get_tick(contract):
+    """Возвращает order_price_round для контракта (с кешем)."""
+    global _gate_price_round_cache
+    if contract in _gate_price_round_cache:
+        return _gate_price_round_cache[contract]
+    # Фоллбек-таблица (используется если API недоступен)
+    _TICK_FALLBACK = {
+        "BTC_USDT": 0.1,   "ETH_USDT": 0.01,  "SOL_USDT": 0.01,
         "BNB_USDT": 0.01,  "XRP_USDT": 0.0001,"DOGE_USDT": 0.00001,
-        "LTC_USDT": 0.001, "AVAX_USDT": 0.001,"LINK_USDT": 0.001,
+        "LTC_USDT": 0.01,  "AVAX_USDT": 0.01, "LINK_USDT": 0.001,
         "DOT_USDT": 0.001, "UNI_USDT": 0.001, "ATOM_USDT": 0.001,
         "OP_USDT":  0.0001,"ARB_USDT": 0.0001,"SUI_USDT": 0.0001,
         "APT_USDT": 0.001, "INJ_USDT": 0.001, "TON_USDT": 0.001,
         "TRX_USDT": 0.00001,"ADA_USDT": 0.00001,"MATIC_USDT": 0.00001,
     }
-    tick = _TICK.get(contract, 0.1)
+    try:
+        r = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5)
+        data = r.json()
+        tick = float(data.get("order_price_round") or 0)
+        if tick > 0:
+            _gate_price_round_cache[contract] = tick
+            return tick
+    except Exception:
+        pass
+    tick = _TICK_FALLBACK.get(contract, 0.01)
+    _gate_price_round_cache[contract] = tick
+    return tick
+
+
+def _gate_round_price(price, contract):
+    """Округляет цену до шага Gate (order_price_round), полученного из API."""
     import math
+    tick = _gate_get_tick(contract)
     rounded = round(round(price / tick) * tick, 10)
-    # Форматируем без лишних нулей
     decimals = max(0, -int(math.floor(math.log10(tick)))) if tick < 1 else 0
     return f"{rounded:.{decimals}f}"
 
@@ -6565,9 +6585,14 @@ class Handler(BaseHTTPRequestHandler):
             with opt_lock:
                 opt_state["running"] = False
                 opt_state["done"] = True
+                opt_state["sw_running"] = False  # останавливаем sliding window
             with opt_states_lock:
                 for s in list(opt_states.keys()):
                     opt_states[s]["running"] = False
+                    opt_states[s]["sw_running"] = False  # все символы
+            # Останавливаем все _sw_threads (multi-symbol режим)
+            for _sym, _st in list(_sw_state.items()):
+                _st["running"] = False
             self._json({"ok":True})
         elif parsed.path == "/recent_configs":
             # Читаем список конфигов с GitHub (configs/), локалка — только fallback
