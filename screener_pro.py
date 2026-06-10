@@ -21,6 +21,7 @@ WickFill Optimizer v3.234
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
 - v3.235: fix JS-синтаксис: удалён оборванный ");" + лишний addLogLine после stopOpt → кнопки Старт/Стоп работают; fix сигнал на формирующей свече: стрелка теперь рисуется на signal_bar (свеча паттерна), а не на bar_i (свеча входа) для use_next_bar=True; fix main opt loop: pending_signal_bar сохраняется в opt_state
 - v3.234: fix лейбл текущей цены — тёмный фон вместо яркого, белый текст всегда виден
 - v3.233: уведомление о закрытии сделки — P&L на маржу%, P&L в USDT, баланс после, TP/SL цены, плечо
@@ -60,7 +61,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.235"
+APP_VERSION = "3.236"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -189,7 +190,24 @@ opt_state = {
 }
 opt_lock = threading.Lock()
 
-# ── Multi-symbol state ──────────────────────────────────────────
+# ── HTF (Higher TimeFrame) trend filter state ───────────────────
+# Фоновый поток загружает свечи старшего ТФ, прогоняет _simulate,
+# определяет направление тренда и пишет сюда.
+HTF_MAP = {"1m": "5m", "5m": "15m", "15m": "1h", "30m": "1h", "1h": "4h", "4h": "1d"}
+htf_state = {
+    "direction": 0,      # 1=лонг-тренд, -1=шорт-тренд, 0=нейтрально/нет данных
+    "tf": "",            # HTF таймфрейм
+    "symbol": "",
+    "last_update": 0,
+    "ema_val": 0.0,      # последнее значение EMA на HTF
+    "last_price": 0.0,   # последняя цена закрытия HTF
+    "n_signals": 0,      # кол-во сигналов в последнем прогоне
+    "running": False,
+}
+htf_lock = threading.Lock()
+_htf_stop_flag = threading.Event()
+
+
 # opt_states[symbol] — per-symbol snapshot updated after each cycle
 opt_states   = {}   # {symbol_key: {eq, wr, dd, trades, cycle, running, chart_updated_at, ...}}
 opt_states_lock = threading.Lock()
@@ -348,7 +366,8 @@ threading.Thread(target=_live_candle_updater, daemon=True).start()
 # SIMULATE
 # ═══════════════════════════════════════════════════════════════
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
-              max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None):
+              max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None,
+              htf_direction=0):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -755,6 +774,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                         and geo_ok_s and css_ok_s and quiet_ok
                         and sweep_ok_s and ms_ok_s and ema_ok_s and ret_ok_s
                         and rep_ok_s and clu_ok_s and clo_ok_s)
+
+        # HTF-фильтр: если старший ТФ показывает тренд — блокируем противотрендовые сигналы
+        if htf_direction == 1:   # HTF лонг-тренд → только лонги
+            short_sig_base = False
+        elif htf_direction == -1:  # HTF шорт-тренд → только шорты
+            long_sig_base = False
 
         if fcon:
             long_sig_base=long_sig_base and last_sig!=1
@@ -2602,7 +2627,10 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
         new_candles = candles[1:] + [new_c]
 
         if best_p:
-            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct)
+            _htf_dir = htf_state.get("direction", 0) if True else 0
+            with htf_lock:
+                _htf_dir = htf_state["direction"]
+            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir)
             chart_signals_data = sim["_signals"] if sim else []
             _sw_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
@@ -3325,6 +3353,76 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
             return None
     return fpath
 
+# ═══════════════════════════════════════════════════════════════
+# HTF TREND FILTER — фоновый поток
+# ═══════════════════════════════════════════════════════════════
+def _htf_worker(symbol, base_tf, days):
+    """Фоновый поток: каждые N секунд подгружает свечи HTF,
+    прогоняет _simulate с дефолтными параметрами (EMA-only),
+    определяет направление тренда (выше/ниже EMA) и пишет в htf_state."""
+    htf_tf = HTF_MAP.get(base_tf)
+    if not htf_tf:
+        return
+    interval_sec = TF_SECONDS.get(htf_tf, 3600)
+    # Обновляем каждые 2 HTF-свечи (не чаще чем раз в минуту)
+    refresh_sec = max(60, interval_sec * 2)
+
+    with htf_lock:
+        htf_state["tf"] = htf_tf
+        htf_state["symbol"] = symbol
+        htf_state["running"] = True
+
+    print(f"[HTF] Запущен фильтр {base_tf}→{htf_tf} для {symbol}, обновление каждые {refresh_sec//60}мин")
+
+    while not _htf_stop_flag.is_set():
+        try:
+            candles = _fetch_candles(symbol, htf_tf, days)
+            if candles and len(candles) >= 50:
+                # Простой параметр: EMA-200 (или период = len/3, не меньше 20)
+                ema_per = min(200, max(20, len(candles) // 3))
+                # Считаем EMA на HTF
+                ema_val = candles[0]["close"]
+                k = 2.0 / (ema_per + 1)
+                for c in candles:
+                    ema_val = c["close"] * k + ema_val * (1 - k)
+                last_close = candles[-1]["close"]
+                # Направление: выше EMA = лонг-тренд, ниже = шорт-тренд
+                direction = 1 if last_close > ema_val else -1
+                # Дополнительно: последние 3 HTF-свечи — смотрим momentum
+                if len(candles) >= 4:
+                    last3_closes = [c["close"] for c in candles[-4:]]
+                    up_bars   = sum(1 for i in range(1, 4) if last3_closes[i] > last3_closes[i-1])
+                    down_bars = sum(1 for i in range(1, 4) if last3_closes[i] < last3_closes[i-1])
+                    # Если 2 из 3 свечей против EMA-тренда → нейтрально
+                    if direction == 1 and down_bars >= 2:
+                        direction = 0
+                    elif direction == -1 and up_bars >= 2:
+                        direction = 0
+                with htf_lock:
+                    htf_state["direction"]   = direction
+                    htf_state["ema_val"]     = round(ema_val, 8)
+                    htf_state["last_price"]  = round(last_close, 8)
+                    htf_state["last_update"] = int(time.time())
+                dir_str = "↑ Лонг" if direction == 1 else ("↓ Шорт" if direction == -1 else "↔ Нейтр")
+                print(f"[HTF] {htf_tf} {symbol}: {dir_str}  price={last_close:.4g}  EMA{ema_per}={ema_val:.4g}")
+            else:
+                print(f"[HTF] Мало свечей {htf_tf}: {len(candles) if candles else 0}")
+                with htf_lock:
+                    htf_state["direction"] = 0
+        except Exception as e:
+            print(f"[HTF] Ошибка: {e}")
+            with htf_lock:
+                htf_state["direction"] = 0
+
+        # Ждём до следующего обновления
+        _htf_stop_flag.wait(timeout=refresh_sec)
+
+    with htf_lock:
+        htf_state["running"] = False
+        htf_state["direction"] = 0
+    print(f"[HTF] Остановлен {htf_tf} {symbol}")
+
+
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
     symbol       = params.get("wf_symbol", "BTC_USDT")
@@ -3349,6 +3447,15 @@ def run_optimizer(params):
 
     _opt_stop_flag.clear()
     _sw_risk = risk_pct
+
+    # Запускаем HTF-фильтр если есть старший ТФ (только для коротких ТФ < 1h)
+    _htf_stop_flag.clear()
+    if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
+        threading.Thread(target=_htf_worker, args=(symbol, tf, days), daemon=True).start()
+    else:
+        with htf_lock:
+            htf_state["direction"] = 0
+            htf_state["running"] = False
 
     # Сохраняем alert_cfg в opt_state — SW-тред читает его динамически
     with opt_lock:
@@ -3774,7 +3881,9 @@ def run_optimizer(params):
             if len(chart_candles_window) < 10:
                 chart_candles_window = chart_candles_src  # fallback
             # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
-            sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
+            with htf_lock:
+                _htf_dir_chart = htf_state["direction"]
+            sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir_chart)
             chart_signals = sim["_signals"] if sim else []
             _opt_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
@@ -4985,6 +5094,10 @@ details summary::-webkit-details-marker{display:none}
       <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" opacity=".75"/></svg>
       <span id="speedPillText">—</span>
     </span>
+    <span class="tb" id="htfPill" style="display:none" title="HTF тренд-фильтр">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><path d="M1 9 L4 5 L7 7 L11 2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span id="htfPillText">—</span>
+    </span>
     <span id="statusBadge2"></span>
 
     <span class="tb btn" id="latencyPill" onclick="checkApi()" title="Задержка API Gate.io">
@@ -5865,8 +5978,28 @@ function poll(){
       }
     }
 
+    // HTF тренд-фильтр pill
+    const htfPill=document.getElementById('htfPill');
+    const htfTxt=document.getElementById('htfPillText');
+    if(htfPill && htfTxt && d.htf_tf){
+      const dir=d.htf_direction;
+      const stale=d.htf_last_update>0 && (Date.now()/1000-d.htf_last_update)>600;
+      if(dir===1){
+        htfPill.style.display='';htfPill.style.color='var(--green,#6abf6a)';
+        htfTxt.textContent=d.htf_tf+' ↑';htfPill.title='HTF '+d.htf_tf+': лонг-тренд — шорты заблокированы'+(stale?' (устарело)':'');
+      } else if(dir===-1){
+        htfPill.style.display='';htfPill.style.color='var(--red,#e05050)';
+        htfTxt.textContent=d.htf_tf+' ↓';htfPill.title='HTF '+d.htf_tf+': шорт-тренд — лонги заблокированы'+(stale?' (устарело)':'');
+      } else {
+        htfPill.style.display='';htfPill.style.color='var(--text3)';
+        htfTxt.textContent=d.htf_tf+' ↔';htfPill.title='HTF '+d.htf_tf+': нейтрально — оба направления разрешены';
+      }
+      if(stale) htfPill.style.opacity='0.5'; else htfPill.style.opacity='1';
+    } else if(htfPill && !d.htf_tf){
+      htfPill.style.display='none';
+    }
 
-    const logs=d.logs||[];
+
     if(logs.length>lastLogCount){
       for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level,logs[i].ts);
       lastLogCount=logs.length;
@@ -6376,6 +6509,9 @@ class Handler(BaseHTTPRequestHandler):
                     "sw_candle_count":opt_state.get("sw_candle_count",0),
                     "fetch_pct":      opt_state.get("fetch_pct", -1),
                     "fetch_symbol":   opt_state.get("fetch_symbol", ""),
+                    "htf_direction":  htf_state.get("direction", 0),
+                    "htf_tf":         htf_state.get("tf", ""),
+                    "htf_last_update": htf_state.get("last_update", 0),
                 }
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
@@ -6629,6 +6765,8 @@ class Handler(BaseHTTPRequestHandler):
             # Останавливаем все _sw_threads (multi-symbol режим)
             for _sym, _st in list(_sw_state.items()):
                 _st["running"] = False
+            # Останавливаем HTF-фильтр
+            _htf_stop_flag.set()
             self._json({"ok":True})
         elif parsed.path == "/recent_configs":
             # Читаем список конфигов с GitHub (configs/), локалка — только fallback
