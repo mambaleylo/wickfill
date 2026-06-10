@@ -21,6 +21,7 @@ WickFill Optimizer v3.234
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.237: fix HTF воркер: заменён _fetch_candles (писал в opt_state["fetch_pct"] → ломал UI) на внутреннюю тихую загрузку _fetch_htf_silent без побочных эффектов; убран двойной read htf_dir в SW
 - v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
 - v3.235: fix JS-синтаксис: удалён оборванный ");" + лишний addLogLine после stopOpt → кнопки Старт/Стоп работают; fix сигнал на формирующей свече: стрелка теперь рисуется на signal_bar (свеча паттерна), а не на bar_i (свеча входа) для use_next_bar=True; fix main opt loop: pending_signal_bar сохраняется в opt_state
 - v3.234: fix лейбл текущей цены — тёмный фон вместо яркого, белый текст всегда виден
@@ -61,7 +62,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.236"
+APP_VERSION = "3.237"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2627,7 +2628,6 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
         new_candles = candles[1:] + [new_c]
 
         if best_p:
-            _htf_dir = htf_state.get("direction", 0) if True else 0
             with htf_lock:
                 _htf_dir = htf_state["direction"]
             sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir)
@@ -3358,13 +3358,12 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
 # ═══════════════════════════════════════════════════════════════
 def _htf_worker(symbol, base_tf, days):
     """Фоновый поток: каждые N секунд подгружает свечи HTF,
-    прогоняет _simulate с дефолтными параметрами (EMA-only),
-    определяет направление тренда (выше/ниже EMA) и пишет в htf_state."""
+    определяет направление тренда (EMA + momentum) и пишет в htf_state.
+    НЕ трогает opt_state — использует отдельную тихую загрузку свечей."""
     htf_tf = HTF_MAP.get(base_tf)
     if not htf_tf:
         return
     interval_sec = TF_SECONDS.get(htf_tf, 3600)
-    # Обновляем каждые 2 HTF-свечи (не чаще чем раз в минуту)
     refresh_sec = max(60, interval_sec * 2)
 
     with htf_lock:
@@ -3374,26 +3373,61 @@ def _htf_worker(symbol, base_tf, days):
 
     print(f"[HTF] Запущен фильтр {base_tf}→{htf_tf} для {symbol}, обновление каждые {refresh_sec//60}мин")
 
+    def _fetch_htf_silent(sym, tf, days_limit):
+        """Загружает свечи HTF без записи в opt_state."""
+        iv = TF_SECONDS.get(tf, 3600)
+        now = int(time.time())
+        since = now - days_limit * 86400
+        all_c = []
+        cur = since
+        try:
+            while cur < now:
+                r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+                    params={"contract": sym, "interval": tf, "from": cur, "limit": 999}, timeout=15)
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                if not isinstance(data, list) or not data:
+                    break
+                for c in data:
+                    t = int(c.get("t", 0))
+                    if t >= since:
+                        all_c.append({"t": t, "open": float(c["o"]), "high": float(c["h"]),
+                                      "low": float(c["l"]), "close": float(c["c"])})
+                last_t = int(data[-1].get("t", 0))
+                nxt = last_t + iv
+                if nxt <= cur or last_t >= now - iv:
+                    break
+                cur = nxt
+                time.sleep(0.05)
+                if _htf_stop_flag.is_set():
+                    break
+        except Exception as e:
+            print(f"[HTF] fetch error: {e}")
+        seen = set(); result = []
+        for c in sorted(all_c, key=lambda x: x["t"]):
+            if c["t"] not in seen:
+                seen.add(c["t"]); result.append(c)
+        # Убираем незакрытую последнюю свечу
+        if result and result[-1]["t"] + iv > int(time.time()):
+            result.pop()
+        return result
+
     while not _htf_stop_flag.is_set():
         try:
-            candles = _fetch_candles(symbol, htf_tf, days)
+            candles = _fetch_htf_silent(symbol, htf_tf, days)
             if candles and len(candles) >= 50:
-                # Простой параметр: EMA-200 (или период = len/3, не меньше 20)
                 ema_per = min(200, max(20, len(candles) // 3))
-                # Считаем EMA на HTF
                 ema_val = candles[0]["close"]
                 k = 2.0 / (ema_per + 1)
                 for c in candles:
                     ema_val = c["close"] * k + ema_val * (1 - k)
                 last_close = candles[-1]["close"]
-                # Направление: выше EMA = лонг-тренд, ниже = шорт-тренд
                 direction = 1 if last_close > ema_val else -1
-                # Дополнительно: последние 3 HTF-свечи — смотрим momentum
                 if len(candles) >= 4:
-                    last3_closes = [c["close"] for c in candles[-4:]]
-                    up_bars   = sum(1 for i in range(1, 4) if last3_closes[i] > last3_closes[i-1])
-                    down_bars = sum(1 for i in range(1, 4) if last3_closes[i] < last3_closes[i-1])
-                    # Если 2 из 3 свечей против EMA-тренда → нейтрально
+                    last3 = [c["close"] for c in candles[-4:]]
+                    up_bars   = sum(1 for i in range(1, 4) if last3[i] > last3[i-1])
+                    down_bars = sum(1 for i in range(1, 4) if last3[i] < last3[i-1])
                     if direction == 1 and down_bars >= 2:
                         direction = 0
                     elif direction == -1 and up_bars >= 2:
@@ -3404,7 +3438,7 @@ def _htf_worker(symbol, base_tf, days):
                     htf_state["last_price"]  = round(last_close, 8)
                     htf_state["last_update"] = int(time.time())
                 dir_str = "↑ Лонг" if direction == 1 else ("↓ Шорт" if direction == -1 else "↔ Нейтр")
-                print(f"[HTF] {htf_tf} {symbol}: {dir_str}  price={last_close:.4g}  EMA{ema_per}={ema_val:.4g}")
+                print(f"[HTF] {htf_tf} {symbol}: {dir_str}  price={last_close:.4g}  EMA{ema_per}={ema_val:.4g}  ({len(candles)} св.)")
             else:
                 print(f"[HTF] Мало свечей {htf_tf}: {len(candles) if candles else 0}")
                 with htf_lock:
@@ -3414,7 +3448,6 @@ def _htf_worker(symbol, base_tf, days):
             with htf_lock:
                 htf_state["direction"] = 0
 
-        # Ждём до следующего обновления
         _htf_stop_flag.wait(timeout=refresh_sec)
 
     with htf_lock:
