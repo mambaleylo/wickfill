@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.232
+WickFill Optimizer v3.233
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.232
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.233: уведомление о закрытии сделки — P&L на маржу%, P&L в USDT, баланс после, TP/SL цены, плечо
 - v3.232: улучшен лог автосделок — явно показывает balance×pct%=маржа×lev=позиция USDT
 - v3.231: убраны кнопка SW-стоп и SW-бейдж из UI; /sw_stop эндпоинт удалён — СТОП полностью останавливает всё
 - v3.230: fix TP/SL — order_price_round берётся из Gate API (не хардкод); fix СТОП — останавливает sliding window и автосделки полностью (sw_running=False)
@@ -57,7 +58,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.232"
+APP_VERSION = "3.233"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2238,6 +2239,20 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
     if not prev_open:
         return
     moscow_offset = 3 * 3600
+    # Получаем баланс и параметры позиции один раз для всех закрытий
+    gate_key    = alert_cfg.get("gate_key", "")
+    gate_secret = alert_cfg.get("gate_secret", "")
+    gate_pct    = float(alert_cfg.get("gate_pct", 0) or 0)
+    gate_lev    = int(float(alert_cfg.get("gate_leverage", 0) or 0))
+    auto_on     = alert_cfg.get("gate_auto_enabled", False)
+    auto_on     = (auto_on is True) or (str(auto_on).lower() == "true")
+    # Баланс запрашиваем только если автоторговля включена и ключи есть
+    balance = None
+    if auto_on and gate_key and gate_secret and gate_pct > 0:
+        bal, err = _gate_get_balance(alert_cfg)
+        if not err and bal is not None:
+            balance = bal
+
     for s in new_signals:
         bar_i = s["bar_i"]
         if bar_i not in prev_open:
@@ -2247,27 +2262,57 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
             is_win   = s.get("win", False)
             exit_p   = s.get("exit_p") or (s["tp"] if is_win else s["sl"])
             is_long  = s["dir"] == 1
-            pct      = ((exit_p - s["ep"]) / s["ep"] * 100 if is_long
-                        else (s["ep"] - exit_p) / s["ep"] * 100)
-            dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
-            res_str  = "✅ Тейк-профит" if is_win else "❌ Стоп-лосс"
-            pct_str  = ("+" if pct >= 0 else "") + f"{pct:.2f}%"
-            # Берём время закрытия свечи входа (t свечи + интервал таймфрейма), а не time.time()
+            ep       = s["ep"]
+            tp       = s["tp"]
+            sl_price = s["sl"]
+
+            # Движение цены (без плеча)
+            price_move_pct = ((exit_p - ep) / ep * 100 if is_long
+                              else (ep - exit_p) / ep * 100)
+
+            # Берём время закрытия свечи
             exit_candle_t = s.get("t", int(time.time())) + TF_SECONDS.get(tf, 3600)
-            dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(exit_candle_t + moscow_offset))
-            text = (
-                f"🔔 <b>WickFill — Сделка закрыта</b>\n\n"
+            dt = time.strftime("%d.%m.%Y %H:%M", time.gmtime(exit_candle_t + moscow_offset))
 
-                f"{dir_str} <b>{symbol}</b> {tf}\n"
-                f"{res_str}  <b>{pct_str}</b>\n\n"
+            dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
+            res_emoji = "✅" if is_win else "❌"
+            res_str  = "ТЕЙК-ПРОФИТ" if is_win else "СТОП-ЛОСС"
 
-                f"📥 Вход:   <b>{s['ep']:.6g}</b>\n"
-                f"📤 Выход:  <b>{exit_p:.6g}</b>\n"
-                f"🕐 {dt} (МСК)"
-            )
+            # Базовые строки (всегда)
+            price_sign = "+" if price_move_pct >= 0 else ""
+            price_pct_str = f"{price_sign}{price_move_pct:.3f}%"
+
+            lines = [
+                f"{res_emoji} <b>WickFill — {res_str}</b>",
+                f"",
+                f"{dir_str} <b>{symbol}</b> · {tf} · {dt} МСК",
+                f"",
+                f"📥 Вход:    <b>{ep:.6g}</b>",
+                f"📤 Выход:   <b>{exit_p:.6g}</b>",
+                f"🎯 TP:      {tp:.6g}",
+                f"🛡 SL:      {sl_price:.6g}",
+                f"",
+                f"📊 Движение цены: <b>{price_pct_str}</b>",
+            ]
+
+            # Если есть данные о позиции — добавляем P&L
+            if gate_pct > 0 and gate_lev > 0:
+                pnl_on_margin_pct = price_move_pct * gate_lev
+                pnl_sign = "+" if pnl_on_margin_pct >= 0 else ""
+                lines.append(f"⚡ Плечо:  {gate_lev}× · позиция {gate_pct:.0f}% баланса")
+                lines.append(f"💰 P&L на маржу: <b>{pnl_sign}{pnl_on_margin_pct:.2f}%</b>")
+                if balance is not None:
+                    margin_usdt = balance * gate_pct / 100.0
+                    pnl_usdt    = margin_usdt * pnl_on_margin_pct / 100.0
+                    pnl_usdt_sign = "+" if pnl_usdt >= 0 else ""
+                    lines.append(f"💵 P&L USDT: <b>{pnl_usdt_sign}{pnl_usdt:.2f} $</b>")
+                    lines.append(f"🏦 Баланс после: <b>{balance:.2f} $</b>")
+
+            text = "\n".join(lines)
             ok = _send_alert(alert_cfg, text)
             status = "✓" if ok else "✕"
-            print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pct_str} {res_str}", flush=True)
+            pnl_log = f"{price_sign}{price_move_pct:.2f}%"
+            print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pnl_log} {res_str}", flush=True)
 
 def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None, precomp_signals=None):
     """Проверяет последнюю свечу. Если сигнал — шлёт telegram + открывает сделку."""
