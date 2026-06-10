@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.242
+WickFill Optimizer v3.243
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.243: fix крах в начале каждого цикла — _run_one_cycle обращался к необъявленной _htf_index (NameError "name '_htf_index' is not defined"); добавлен параметр htf_index в _run_one_cycle и проброшен из run_optimizer/run_optimizer_safe
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
 - v3.173: тело live-свечи не пунктирное (только фитиль); таймер до закрытия свечи под лейблами TP/SL/цены; антиперекрытие правых лейблов
@@ -67,7 +68,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.242"
+APP_VERSION = "3.243"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2804,7 +2805,7 @@ def _perf_save(symbol, tf):
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                    prev_best_params=None, prev_top20=None, pool=None, n_workers=1,
-                   shake=False):
+                   shake=False, htf_index=None):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
@@ -2998,7 +2999,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         cutoff_t = now_ts_cycle - d_to * 86400
         sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
         if len(sl) < 8: return None
-        return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=_htf_index)
+        return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=htf_index)
     window_size_c = days / 3.0
     ok_windows = 0; total_windows = 0
     for wi in range(3):
@@ -3867,7 +3868,7 @@ def run_optimizer(params):
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None,
             pool=_shared_pool, n_workers=_n_workers,
-            shake=_shake_now)
+            shake=_shake_now, htf_index=_htf_index)
         _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
@@ -4366,7 +4367,8 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     local_candles, days, risk_pct, _slog, cycle_t0, tf,
                     prev_best_params=prev_best_params,
                     prev_top20=prev_top20,
-                    pool=pool, n_workers=n_workers
+                    pool=pool, n_workers=n_workers,
+                    htf_index=_htf_index_sym
                 )
             except Exception as e:
                 _slog(f"❌ Ошибка цикла: {e}", "error")
