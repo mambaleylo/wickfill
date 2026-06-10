@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.243
+WickFill Optimizer v3.244
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.244: убран ручной ввод плеча в UI Gate — leverage всегда = risk_pct/sl_pct из конфига оптимизатора (и для открытия сделки, и для уведомления о закрытии); добавлена _gate_cleanup_orphan_orders — на каждой новой свече, если позиция уже закрыта, отменяются зависшие TP/SL триггер-ордера от прошлой сделки
 - v3.243: fix крах в начале каждого цикла — _run_one_cycle обращался к необъявленной _htf_index (NameError "name '_htf_index' is not defined"); добавлен параметр htf_index в _run_one_cycle и проброшен из run_optimizer/run_optimizer_safe
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
 - v3.170: поля символ/таймфрейм/дни запоминают последние значения через localStorage
@@ -68,7 +69,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.243"
+APP_VERSION = "3.244"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1563,7 +1564,31 @@ def _gate_cancel_all_orders(cfg, contract):
                 _gate_request(cfg, "DELETE", f"/api/v4/futures/usdt/price_orders/{oid}")
 
 
-def _gate_close_position(cfg, contract):
+def _gate_cleanup_orphan_orders(cfg, contract):
+    """Если позиции по контракту нет, но висят TP/SL триггер-ордера от прошлой сделки — отменяет их.
+    Возвращает (n_cancelled, err)."""
+    pos_data, perr = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
+    if perr:
+        return 0, perr
+    pos_size = int((pos_data or {}).get("size", 0))
+    if pos_size != 0:
+        return 0, None  # позиция открыта — ордера актуальны, не трогаем
+    data, err = _gate_request(cfg, "GET", "/api/v4/futures/usdt/price_orders",
+                              params={"contract": contract, "status": "open"})
+    if err:
+        return 0, err
+    if not isinstance(data, list) or not data:
+        return 0, None
+    n = 0
+    for o in data:
+        oid = o.get("id")
+        if oid:
+            _, derr = _gate_request(cfg, "DELETE", f"/api/v4/futures/usdt/price_orders/{oid}")
+            if not derr:
+                n += 1
+    return n, None
+
+
     """Отменяет все ордера и закрывает открытую позицию по контракту (если есть)."""
     # Сначала отменяем все висящие ордера (TP/SL от предыдущей сделки)
     _gate_cancel_all_orders(cfg, contract)
@@ -2306,7 +2331,7 @@ def _write_trade_log(symbol, tf, line):
             print(f"[trade_log] ошибка GitHub: {e}", flush=True)
     threading.Thread(target=_push, daemon=True).start()
 
-def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
+def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pct=None, sl_pct=None):
     """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
     if not alert_cfg or not prev_signals or not new_signals:
         return
@@ -2320,7 +2345,8 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf):
     gate_key    = alert_cfg.get("gate_key", "")
     gate_secret = alert_cfg.get("gate_secret", "")
     gate_pct    = float(alert_cfg.get("gate_pct", 0) or 0)
-    gate_lev    = int(float(alert_cfg.get("gate_leverage", 0) or 0))
+    # Плечо больше не задаётся вручную в UI — вычисляем из risk_pct/sl_pct (как при открытии сделки)
+    gate_lev    = max(1, round(risk_pct / sl_pct)) if (risk_pct and sl_pct and sl_pct > 0) else 0
     auto_on     = alert_cfg.get("gate_auto_enabled", False)
     auto_on     = (auto_on is True) or (str(auto_on).lower() == "true")
     # Баланс запрашиваем только если автоторговля включена и ключи есть
@@ -2395,6 +2421,21 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
     """Проверяет последнюю свечу. Если сигнал — шлёт telegram + открывает сделку."""
     if not best_params or not alert_cfg: return
     if len(candles) < 5: return
+
+    # Чистим зависшие TP/SL ордера от прошлых сделок, если позиция уже закрыта (раз в каждую свечу)
+    _gk = alert_cfg.get("gate_key", ""); _gs = alert_cfg.get("gate_secret", "")
+    _gauto_raw = alert_cfg.get("gate_auto_enabled", False)
+    _gauto = (_gauto_raw is True) or (str(_gauto_raw).lower() == "true")
+    if _gk and _gs and _gauto and symbol:
+        try:
+            _contract = symbol.replace("/", "_").upper()
+            _n_cancel, _cl_err = _gate_cleanup_orphan_orders(alert_cfg, _contract)
+            if _n_cancel:
+                _write_trade_log(symbol, tf or "?", f"  cleanup: отменено {_n_cancel} зависших TP/SL ордеров (позиция закрыта)")
+            elif _cl_err:
+                _write_trade_log(symbol, tf or "?", f"  cleanup error: {_cl_err}")
+        except Exception as _e:
+            print(f"[cleanup] {symbol}: {_e}", flush=True)
 
     with opt_lock:
         if symbol is None:
@@ -2485,14 +2526,10 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
               f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
         _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
-            # Плечо = risk_pct / sl_pct — ровно как в таблице "Плечо×" в UI
-            # UI-поле gate_leverage используется только если задано вручную (override)
-            _ui_lev = int(float(alert_cfg.get("gate_leverage", 0) or 0))
-            if _ui_lev > 0:
-                leverage = _ui_lev  # явный override из UI
-            else:
-                _sl_pct = float((best_params or {}).get("sl_pct") or 0)
-                leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 10
+            # Плечо всегда = risk_pct / sl_pct — как в таблице "Плечо×" в UI.
+            # Ручной ввод плеча убран из UI (v3.244): leverage всегда из конфига оптимизатора.
+            _sl_pct = float((best_params or {}).get("sl_pct") or 0)
+            leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 10
             _write_trade_log(symbol, tf, f"  leverage={leverage}× (risk={risk_pct}% sl={((best_params or {}).get('sl_pct') or '?')}%)")
             auto_tp_pct = float(alert_cfg.get("gate_auto_tp_pct", 0))
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
@@ -2719,7 +2756,8 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
                 with opt_states_lock:
                     _live_alert_cfg = opt_states.get(symbol, {}).get("alert_cfg") or _live_alert_cfg
             if _live_alert_cfg and prev_signals_for_close:
-                _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf)
+                _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf,
+                                    risk_pct=risk_pct, sl_pct=(best_p or {}).get("sl_pct"))
             if _live_alert_cfg:
                 # Используем SW-сигналы (только что посчитаны на new_candles) — их t совпадает с new_candles[-1]["t"]
                 # opt_state["chart_signals"] содержит сигналы оптимизатора на другом окне свечей,
@@ -5462,12 +5500,11 @@ details summary::-webkit-details-marker{display:none}
           <input type="password" id="gate_secret" placeholder="вставьте API Secret" autocomplete="off">
         </div>
         <div class="field">
-          <label>Размер позиции (% от баланса) · Плечо</label>
+          <label>Размер позиции (% от баланса)</label>
           <div class="tg-row">
             <input type="number" id="gate_pct" placeholder="10" min="1" max="100" step="1" value="10" style="width:72px">
             <span style="font-size:.75rem;color:var(--text3);align-self:center">%</span>
-            <input type="number" id="gate_leverage" placeholder="10" min="1" max="100" step="1" value="10" style="width:60px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
-            <span style="font-size:.75rem;color:var(--text3);align-self:center">×</span>
+            <span style="font-size:.75rem;color:var(--text3);align-self:center">· плечо из конфига</span>
             <button class="btn-tg-test" id="gateTestBtn" onclick="testGateConnection()">Тест</button>
           </div>
         </div>
@@ -5641,7 +5678,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _textFields = ['gate_key','gate_secret','gate_pct','gate_leverage','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
+  const _textFields = ['gate_key','gate_secret','gate_pct','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
   const _checkFields = ['gate_auto_enabled'];
   _textFields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
@@ -5689,7 +5726,6 @@ function getAlertCfg(){
   const gk=document.getElementById('gate_key').value.trim();
   const gs=document.getElementById('gate_secret').value.trim();
   const gp=parseFloat(document.getElementById('gate_pct').value)||0;
-  const glev=parseInt(document.getElementById('gate_leverage')?.value)||10;
   const ntfy=document.getElementById('al_ntfy_topic').value.trim();
   const base=(t&&c)?{tg_token:t,tg_chat_id:c}:{};
   if(ntfy) base.ntfy_topic=ntfy;
@@ -5700,7 +5736,8 @@ function getAlertCfg(){
   // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
   // Всегда передаём gate ключи в cfg — исполнение контролируется флагом gate_auto_enabled
   // gate_auto_enabled всегда передаётся — чтобы флаг не терялся если ключи заполнены
-  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_leverage:glev,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  // Плечо больше не задаётся вручную — всегда берётся из конфига оптимизатора (risk_pct/sl_pct)
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
   // Флаг автоторговли передаём всегда независимо от заполненности ключей
   base.gate_auto_enabled = gauto;
   // Обновляем статус галочки
