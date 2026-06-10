@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.234
+WickFill Optimizer v3.238
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -23,6 +23,7 @@ WickFill Optimizer v3.234
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
 - v3.237: fix HTF воркер: заменён _fetch_candles (писал в opt_state["fetch_pct"] → ломал UI) на внутреннюю тихую загрузку _fetch_htf_silent без побочных эффектов; убран двойной read htf_dir в SW
 - v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
+- v3.238: fix "потеряно соединение" — _json sanitizes NaN/Inf floats перед json.dumps; добавлен try/except вокруг сериализации с логом ошибки
 - v3.235: fix JS-синтаксис: удалён оборванный ");" + лишний addLogLine после stopOpt → кнопки Старт/Стоп работают; fix сигнал на формирующей свече: стрелка теперь рисуется на signal_bar (свеча паттерна), а не на bar_i (свеча входа) для use_next_bar=True; fix main opt loop: pending_signal_bar сохраняется в opt_state
 - v3.234: fix лейбл текущей цены — тёмный фон вместо яркого, белый текст всегда виден
 - v3.233: уведомление о закрытии сделки — P&L на маржу%, P&L в USDT, баланс после, TP/SL цены, плечо
@@ -62,7 +63,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.237"
+APP_VERSION = "3.238"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -7174,8 +7175,23 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError,ConnectionResetError): pass
 
+    @staticmethod
+    def _sanitize(obj):
+        """Рекурсивно заменяет NaN/Inf на None чтобы json.dumps не падал."""
+        if isinstance(obj, float):
+            return None if (obj != obj or obj == float('inf') or obj == float('-inf')) else obj
+        if isinstance(obj, dict):
+            return {k: Handler._sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [Handler._sanitize(i) for i in obj]
+        return obj
+
     def _json(self, data):
-        body=json.dumps(data,ensure_ascii=False).encode()
+        try:
+            body=json.dumps(Handler._sanitize(data),ensure_ascii=False).encode()
+        except Exception as e:
+            print(f"[_json] ошибка сериализации: {e}", flush=True)
+            body=json.dumps({"ok":False,"msg":f"json error: {e}"},ensure_ascii=False).encode()
         try:
             self.send_response(200)
             self.send_header("Content-Type","application/json")
