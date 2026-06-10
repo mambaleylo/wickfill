@@ -1,86 +1,10 @@
-[2026-06-09 20:11:37] alert_cfg обновлён: auto=True key=да
-[2026-06-09 22:02:46] alert_cfg обновлён: auto=True key=да
-[2026-06-09 22:06:54] alert_cfg обновлён: auto=True key=да
-[2026-06-09 22:07:24] alert_cfg обновлён: auto=True key=да
-[2026-06-09 22:08:38] alert_cfg обновлён: auto=True key=да
-[2026-06-09 23:25:19] СИГНАЛ ШОРТ ep=65.28 tp=64.4966 sl=65.5411 tg=ok
-[2026-06-09 23:25:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-09 23:25:19]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-09 23:25:40]   ✓ Старая позиция закрыта (или не было)
-[2026-06-09 23:25:40]   ✓ Баланс: 14.42 USDT
-[2026-06-09 23:25:40]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-09 23:25:40]   [debug] balance=14.42 pct=94.0% lev=17 → margin=13.56 (notional~230.50)
-[2026-06-09 23:25:40]   [debug] margin=13.56 ep=65.28 qm=0.1 → size=2
-[2026-06-09 23:25:40]   ✓ Размер: 2 контр. (маржа ~13.6 USDT, notional ~230.5 USDT)
-[2026-06-09 23:25:40]   ✓ Ордер: ШОРТ SOL_USDT TP=64.49664 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=65.54112 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
-[2026-06-09 23:25:40] gate ✓ ШОРТ lev=17 — итог
-[2026-06-10 02:55:20] СИГНАЛ ШОРТ ep=65 tp=64.285 sl=65.26 tg=ok
-[2026-06-10 02:55:20] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 02:55:20]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 02:55:39]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 02:55:39]   ✓ Баланс: 19.22 USDT
-[2026-06-10 02:55:39]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 02:55:39]   [debug] balance=19.22 pct=94.0% lev=17 → margin=18.07 (notional~307.15)
-[2026-06-10 02:55:39]   [debug] margin=18.07 ep=65.00 qm=0.1 → size=3
-[2026-06-10 02:55:39]   ✓ Размер: 3 контр. (маржа ~18.1 USDT, notional ~307.1 USDT)
-[2026-06-10 02:55:39]   ✓ Ордер: ШОРТ SOL_USDT TP=64.285 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=65.26 ✅
-[2026-06-10 02:55:39] gate ✓ ШОРТ lev=17 — итог
-[2026-06-10 03:15:19] СИГНАЛ ЛОНГ ep=65.08 tp=65.7959 sl=64.8197 tg=ok
-[2026-06-10 03:15:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 03:15:19]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 03:15:41]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 03:15:41]   ✓ Баланс: 19.09 USDT
-[2026-06-10 03:15:41]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 03:15:41]   [debug] balance=19.09 pct=94.0% lev=17 → margin=17.94 (notional~305.01)
-[2026-06-10 03:15:41]   [debug] margin=17.94 ep=65.08 qm=0.1 → size=3
-[2026-06-10 03:15:41]   ✓ Размер: 3 контр. (маржа ~17.9 USDT, notional ~305.0 USDT)
-[2026-06-10 03:15:41]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.79588 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.81967999999999 ✅
-[2026-06-10 03:15:41] gate ✓ ЛОНГ lev=17 — итог
-[2026-06-10 04:00:18] СИГНАЛ ЛОНГ ep=65.14 tp=65.9217 sl=64.8794 tg=ok
-[2026-06-10 04:00:18] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 04:00:18]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 04:00:36]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 04:00:36]   ✓ Баланс: 20.38 USDT
-[2026-06-10 04:00:36]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 04:00:36]   [debug] balance=20.38 pct=94.0% lev=17 → margin=19.16 (notional~325.69)
-[2026-06-10 04:00:36]   [debug] margin=19.16 ep=65.14 qm=0.1 → size=3
-[2026-06-10 04:00:36]   ✓ Размер: 3 контр. (маржа ~19.2 USDT, notional ~325.7 USDT)
-[2026-06-10 04:00:36]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.92168 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.87944 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
-[2026-06-10 04:00:36] gate ✓ ЛОНГ lev=17 — итог
-[2026-06-10 05:00:19] СИГНАЛ ШОРТ ep=65.06 tp=64.2793 sl=65.3202 tg=ok
-[2026-06-10 05:00:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 05:00:19]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 05:00:29]   Ошибка закрытия позиции: Internal error
-[2026-06-10 05:00:29] gate ✕ ШОРТ lev=17 — итог
-[2026-06-10 06:45:18] СИГНАЛ ЛОНГ ep=64.57 tp=65.3448 sl=64.3117 tg=ok
-[2026-06-10 06:45:18] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 06:45:18]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 06:45:38]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 06:45:38]   ✓ Баланс: 18.32 USDT
-[2026-06-10 06:45:38]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 06:45:38]   [debug] balance=18.32 pct=94.0% lev=17 → margin=17.22 (notional~292.69)
-[2026-06-10 06:45:38]   [debug] margin=17.22 ep=64.57 qm=0.1 → size=3
-[2026-06-10 06:45:38]   ✓ Размер: 3 контр. (маржа ~17.2 USDT, notional ~292.7 USDT)
-[2026-06-10 06:45:38]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.34483999999999 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.31172 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
-[2026-06-10 06:45:38] gate ✓ ЛОНГ lev=17 — итог
-[2026-06-10 06:55:19] СИГНАЛ ШОРТ ep=64.53 tp=63.7556 sl=64.7881 tg=ok
-[2026-06-10 06:55:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 06:55:19]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 06:55:35]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 06:55:35]   ✓ Баланс: 6.68 USDT
-[2026-06-10 06:55:35]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 06:55:35]   [debug] balance=6.68 pct=94.0% lev=17 → margin=6.28 (notional~106.80)
-[2026-06-10 06:55:35]   [debug] margin=6.28 ep=64.53 qm=0.1 → size=1
-[2026-06-10 06:55:35]   ✓ Размер: 1 контр. (маржа ~6.3 USDT, notional ~106.8 USDT)
-[2026-06-10 06:55:35]   ✓ Ордер: ШОРТ SOL_USDT TP=63.75564 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.78812 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
-[2026-06-10 06:55:35] gate ✓ ШОРТ lev=17 — итог
-[2026-06-10 08:13:46] alert_cfg обновлён: auto=True key=да
-[2026-06-10 08:40:19] СИГНАЛ ЛОНГ ep=64.07 tp=64.7748 sl=63.8137 tg=ok
-[2026-06-10 08:40:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
-[2026-06-10 08:40:19]   leverage=17× (risk=10.0% sl=0.4%)
-[2026-06-10 08:40:37]   ✓ Старая позиция закрыта (или не было)
-[2026-06-10 08:40:37]   ✓ Баланс: 14.31 USDT
-[2026-06-10 08:40:37]   ✓ Плечо: 17× (запрошено 17×)
-[2026-06-10 08:40:37]   [debug] balance=14.31 pct=94.0% lev=17 → margin=13.45 (notional~228.72)
-[2026-06-10 08:40:37]   [debug] margin=13.45 ep=64.07 qm=0.1 → size=2
-[2026-06-10 08:40:37]   ✓ Размер: 2 контр. (маржа ~13.5 USDT, notional ~228.7 USDT)
+[2026-06-10 11:57:34] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:21] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:22] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:28] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:28] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:29] alert_cfg обновлён: auto=True key=да
+[2026-06-10 12:16:29] alert_cfg обновлён: auto=True key=да
+[2026-06-10 13:20:19] СИГНАЛ ЛОНГ ep=63.31 tp=63.6582 sl=63.1201 tg=ok
+[2026-06-10 13:20:19] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
+[2026-06-10 13:20:19]   leverage=32× (risk=10.0% sl=0.3%)
