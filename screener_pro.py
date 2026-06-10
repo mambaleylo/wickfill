@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.247
+WickFill Optimizer v3.248
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.248: fix мигающий сигнал на живой свече — _fetch_current_candle теперь определяет live-свечу строго по КАЛЕНДАРНОЙ границе: now < last_t + interval_sec; раньше использовался candle_open_t = (now//interval)×interval, из-за чего только что закрытая свеча (last_t == candle_open_t) ошибочно считалась незакрытой и периодически попадала в отображение как live — индикатор сигнала то появлялся, то пропадал
 - v3.247: fix расхождения числа сделок на графике vs лучшем конфиге — теперь _simulate для графика вызывается с days_limit=days и now_ts=_src_ts (timestamp последней свечи), идентично воркерам оптимизатора; раньше делался ручной срез по _src_ts и days_limit=0, из-за чего границы окна чуть отличались от воркерных (те считали cutoff от time.time()) → разное число сделок
 - v3.246: график теперь всегда строится по _trade_best/_trade_params (лучший конфиг между локальным all_time_best и GitHub), а не только по локальному all_time_best — раньше если _auto_save_config пропускал заливку (т.к. на GitHub уже лежал лучший конфиг с другого устройства), график всё равно показывал локальный (худший) прогон; opt_state["best"]/all_time_best по-прежнему хранят локальный рекорд для продолжения перебора
 - v3.245: синхронизирован механизм выбора конфига для торговли с механизмом сохранения на GitHub — добавлена _gh_fetch_best_for_trading; в конце каждого цикла торговый конфиг (_sw_params / _sw_state[sym]["params"]) и плечо берутся из лучшего по validated_fitness между локальным all_time_best и конфигом на GitHub (нужно при переборе с нескольких устройств); opt_state["trade_best"] / opt_states[sym]["trade_best"] хранят актуальный торговый конфиг
@@ -72,7 +73,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.247"
+APP_VERSION = "3.248"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1202,11 +1203,16 @@ def _fetch_latest_candle(symbol, tf):
         return None
 
 def _fetch_current_candle(symbol, tf):
-    """Возвращает текущую (возможно незакрытую) свечу.
-    Gate.io при запросе без параметра 'to' отдаёт последние N свечей,
-    где последняя — текущая (незакрытая). Сравниваем её timestamp
-    с предпоследней чтобы убедиться что это новый интервал.
-    При сетевых ошибках делает до 3 попыток с паузами."""
+    """Возвращает текущую незакрытую свечу (live) для отображения на графике.
+
+    Свеча считается незакрытой если она ещё не достигла своей правой границы:
+        now  <  last_t + interval_sec
+    Это строгая проверка по КАЛЕНДАРНОЙ границе — независимо от момента запуска бота.
+    Например, для 5м свеча 22:25 закрывается ровно в 22:30:00; до этого момента она live.
+
+    Если Gate уже выдал следующую закрытую свечу (last_t соответствует начавшемуся
+    и уже закрытому интервалу) — возвращаем None, чтобы не рисовать лишнего на графике.
+    """
     _max_retries = 3
     for _attempt in range(_max_retries):
         try:
@@ -1224,35 +1230,38 @@ def _fetch_current_candle(symbol, tf):
                 print(f"[live_candle] мало данных: {data}", flush=True)
                 return None
             last = data[-1]
-            prev = data[-2]
             last_t = int(last.get("t", 0))
-            prev_t = int(prev.get("t", 0))
-            # Текущая незакрытая свеча — это последняя, у неё t >= prev_t + interval_sec
-            # ИЛИ просто берём её всегда — она либо закрыта либо нет,
-            # в любом случае это самая свежая информация
             now = int(time.time())
-            candle_open_t = (now // interval_sec) * interval_sec
-            # Если последняя свеча из API — это уже текущий интервал, берём её
-            if last_t >= candle_open_t:
-                c = last
+
+            # Календарная правая граница свечи last_t: last_t + interval_sec
+            # Свеча live только если сейчас ещё не наступила её правая граница
+            candle_close_t = last_t + interval_sec
+            if now < candle_close_t:
+                # last — это действительно незакрытая свеча текущего интервала
+                result = {"t": last_t, "open": float(last["o"]),
+                          "high": float(last["h"]), "low": float(last["l"]),
+                          "close": float(last["c"]), "live": True}
+                print(f"[live_candle] live t={last_t} close_at={candle_close_t} now={now} c={result['close']}", flush=True)
+                return result
             else:
-                # Gate.io ещё не выдал текущую — строим из тикера
-                r2 = requests.get(f"{GATE_API}/futures/usdt/tickers",
-                    params={"contract": symbol}, timeout=5)
-                if r2.status_code != 200: return None
-                td = r2.json()
-                if not td: return None
-                price = float(td[0].get("last", 0))
-                open_p = float(last.get("c", price))
-                print(f"[live_candle] тикер: price={price} open={open_p} t={candle_open_t}", flush=True)
-                return {"t": candle_open_t, "open": open_p,
-                        "high": max(open_p, price), "low": min(open_p, price),
-                        "close": price, "live": True}
-            result = {"t": last_t, "open": float(c["o"]),
-                      "high": float(c["h"]), "low": float(c["l"]),
-                      "close": float(c["c"]), "live": True}
-            print(f"[live_candle] OK t={last_t} c={result['close']} (now={now} interval_t={candle_open_t})", flush=True)
-            return result
+                # last уже закрыта (now >= candle_close_t) — текущий интервал Gate ещё не отдал
+                # Строим заглушку из тикера чтобы показать начало новой свечи
+                cur_candle_open_t = (now // interval_sec) * interval_sec
+                try:
+                    r2 = requests.get(f"{GATE_API}/futures/usdt/tickers",
+                        params={"contract": symbol}, timeout=5)
+                    if r2.status_code != 200: return None
+                    td = r2.json()
+                    if not td: return None
+                    price = float(td[0].get("last", 0))
+                    open_p = float(last.get("c", price))
+                    print(f"[live_candle] тикер (новый интервал): price={price} open={open_p} t={cur_candle_open_t}", flush=True)
+                    return {"t": cur_candle_open_t, "open": open_p,
+                            "high": max(open_p, price), "low": min(open_p, price),
+                            "close": price, "live": True}
+                except Exception as _te:
+                    print(f"[live_candle] тикер ошибка: {_te}", flush=True)
+                    return None
         except Exception as e:
             _wait = 2 ** _attempt
             print(f"[live_candle] exception (попытка {_attempt+1}/{_max_retries}): {e}, пауза {_wait}с...", flush=True)
