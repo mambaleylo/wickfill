@@ -71,9 +71,9 @@
     "_signals": null,
     "pending_signal_bar": null,
     "stability_ratio": 1.0,
-    "validated_fitness": 52.129,
-    "wf_slope": -2.56,
-    "wf_trend_penalty": 0.922
+    "validated_fitness": 56.513,
+    "wf_slope": 4.76,
+    "wf_trend_penalty": 1.0
   },
   "top20": [
     {
@@ -148,9 +148,9 @@
       "_signals": null,
       "pending_signal_bar": null,
       "stability_ratio": 1.0,
-      "validated_fitness": 52.129,
-      "wf_slope": -2.56,
-      "wf_trend_penalty": 0.922
+      "validated_fitness": 56.513,
+      "wf_slope": 4.76,
+      "wf_trend_penalty": 1.0
     },
     {
       "equity": 7414.73,
@@ -605,5 +605,5 @@
   "tf": "5m",
   "days": 2,
   "risk_pct": 10.0,
-  "saved_at": "2026-06-10 16:14:52"
+  "saved_at": "2026-06-10 16:15:10"
 }
