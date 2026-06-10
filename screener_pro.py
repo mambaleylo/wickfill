@@ -21,6 +21,7 @@ WickFill Optimizer v3.234
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.235: fix JS-синтаксис: удалён оборванный ");" + лишний addLogLine после stopOpt → кнопки Старт/Стоп работают; fix сигнал на формирующей свече: стрелка теперь рисуется на signal_bar (свеча паттерна), а не на bar_i (свеча входа) для use_next_bar=True; fix main opt loop: pending_signal_bar сохраняется в opt_state
 - v3.234: fix лейбл текущей цены — тёмный фон вместо яркого, белый текст всегда виден
 - v3.233: уведомление о закрытии сделки — P&L на маржу%, P&L в USDT, баланс после, TP/SL цены, плечо
 - v3.232: улучшен лог автосделок — явно показывает balance×pct%=маржа×lev=позиция USDT
@@ -59,7 +60,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.234"
+APP_VERSION = "3.235"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1989,9 +1990,11 @@ function render(){{
     return true;
   }}
   for(const s of SIGNALS){{
-    const vi=s.bar_i-viewStart;if(vi<0||vi>=vis.length) continue;
+    // Для use_next_bar: рисуем стрелку на свече сигнала (signal_bar), а не на свече входа (bar_i)
+    const _drawBar = (s.signal_bar != null) ? s.signal_bar : s.bar_i;
+    const vi=_drawBar-viewStart;if(vi<0||vi>=vis.length) continue;
     // Не рисуем сигнал если он на live-свече — она ещё не закрыта
-    if(s.bar_i===_liveBarGlobal) continue;
+    if(_drawBar===_liveBarGlobal) continue;
     const x=cx(vi),isLong=s.dir===1;
     const c_sig=vis[vi];
     const arrowSz=Math.max(4,Math.min(7,cw*0.45));
@@ -2084,7 +2087,7 @@ function _showTipAt(offsetX,offsetY){{
   const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart)),cw2=drawW/vis.length;
   const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
-  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>s.bar_i===gi);
+  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>(s.signal_bar!=null?s.signal_bar:s.bar_i)===gi);
   const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
   const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
   let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
@@ -3773,6 +3776,7 @@ def run_optimizer(params):
             # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
             sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct)
             chart_signals = sim["_signals"] if sim else []
+            _opt_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
@@ -3782,6 +3786,7 @@ def run_optimizer(params):
             with opt_lock:
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
+                opt_state["chart_pending_bar"] = _opt_pending_bar
                 opt_state["chart_path"]     = chart_path or ""
                 opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
@@ -5655,10 +5660,6 @@ function stopOpt(){
   else if(window._lastBest) renderTop20([window._lastBest]);
   _loadRecentConfigs();
   addLogLine('⏹ Остановлен','warn');
-}
-);
-
-  addLogLine('⏹ Скользящее окно остановлено','warn');
 }
 function _loadChartFrame(sym){
   const frame=document.getElementById('chartFrame');
