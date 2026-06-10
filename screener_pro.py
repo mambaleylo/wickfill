@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.239
+WickFill Optimizer v3.240
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -23,6 +23,7 @@ WickFill Optimizer v3.239
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
 - v3.237: fix HTF воркер: заменён _fetch_candles (писал в opt_state["fetch_pct"] → ломал UI) на внутреннюю тихую загрузку _fetch_htf_silent без побочных эффектов; убран двойной read htf_dir в SW
 - v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
+- v3.240: HTF-фильтр на истории — _build_htf_index загружает свечи старшего ТФ и строит список (ts, direction) при старте оптимизации; _simulate принимает htf_index и определяет direction по timestamp каждой свечи через bisect; передаётся во все вызовы бэктеста (worker, _quick_window, _wf_sim, seed-preview)
 - v3.239: fix главный баг "потеряно соединение" — в poll() переменная logs не была объявлена (ReferenceError → catch → false disconnect); исправлено на const logs=d.logs||[]
 - v3.238: fix "потеряно соединение" — _json sanitizes NaN/Inf floats перед json.dumps; добавлен try/except вокруг сериализации с логом ошибки
 - v3.235: fix JS-синтаксис: удалён оборванный ");" + лишний addLogLine после stopOpt → кнопки Старт/Стоп работают; fix сигнал на формирующей свече: стрелка теперь рисуется на signal_bar (свеча паттерна), а не на bar_i (свеча входа) для use_next_bar=True; fix main opt loop: pending_signal_bar сохраняется в opt_state
@@ -64,7 +65,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.239"
+APP_VERSION = "3.240"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -370,7 +371,7 @@ threading.Thread(target=_live_candle_updater, daemon=True).start()
 # ═══════════════════════════════════════════════════════════════
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
               max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None,
-              htf_direction=0):
+              htf_direction=0, htf_index=None):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -578,6 +579,21 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 
     start_i=max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20)+2
     start_i=min(start_i,n-1)
+
+    # Предвычисляем HTF-direction по истории: для каждой свечи ищем ближайшую HTF-свечу ≤ ts
+    # htf_index = [(htf_ts, direction), ...] отсортированы по возрастанию ts
+    # Используем bisect для O(log n) поиска. Результат кэшируем в массив длиной n.
+    _htf_dir_arr = None
+    if htf_index:
+        import bisect as _bisect
+        _htf_ts_list  = [x[0] for x in htf_index]
+        _htf_dir_list = [x[1] for x in htf_index]
+        _htf_dir_arr  = [0] * n
+        for _hi in range(n):
+            _ct = candles_list[_hi].get("t", 0)
+            _pos = _bisect.bisect_right(_htf_ts_list, _ct) - 1
+            _htf_dir_arr[_hi] = _htf_dir_list[_pos] if _pos >= 0 else 0
+
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
         for _ti in range(start_i, n):
@@ -779,9 +795,11 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                         and rep_ok_s and clu_ok_s and clo_ok_s)
 
         # HTF-фильтр: если старший ТФ показывает тренд — блокируем противотрендовые сигналы
-        if htf_direction == 1:   # HTF лонг-тренд → только лонги
+        # На истории используем htf_index (direction по timestamp), иначе глобальный htf_direction
+        _cur_htf_dir = _htf_dir_arr[i] if _htf_dir_arr is not None else htf_direction
+        if _cur_htf_dir == 1:    # HTF лонг-тренд → только лонги
             short_sig_base = False
-        elif htf_direction == -1:  # HTF шорт-тренд → только шорты
+        elif _cur_htf_dir == -1: # HTF шорт-тренд → только шорты
             long_sig_base = False
 
         if fcon:
@@ -971,21 +989,23 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 # ═══════════════════════════════════════════════════════════════
 # WORKER POOL
 # ═══════════════════════════════════════════════════════════════
-_worker_candles = None
-_worker_days    = None
-_worker_risk    = 20.0
+_worker_candles   = None
+_worker_days      = None
+_worker_risk      = 20.0
+_worker_htf_index = None   # список (ts, direction) для HTF на истории — None = без фильтра
 # Предвычисленные массивы (закэшированы один раз на процесс)
 _worker_opens   = None
 _worker_highs   = None
 _worker_lows    = None
 _worker_closes  = None
 
-def _worker_init(candles, days, risk):
-    global _worker_candles, _worker_days, _worker_risk
+def _worker_init(candles, days, risk, htf_index=None):
+    global _worker_candles, _worker_days, _worker_risk, _worker_htf_index
     global _worker_opens, _worker_highs, _worker_lows, _worker_closes
-    _worker_candles = candles
-    _worker_days    = days
-    _worker_risk    = risk
+    _worker_candles   = candles
+    _worker_days      = days
+    _worker_risk      = risk
+    _worker_htf_index = htf_index
     # Предвычисляем массивы цен один раз — не надо делать list comprehension в каждой симуляции
     _worker_opens  = [c["open"]  for c in candles]
     _worker_highs  = [c["high"]  for c in candles]
@@ -993,7 +1013,8 @@ def _worker_init(candles, days, risk):
     _worker_closes = [c["close"] for c in candles]
 
 def _worker_evaluate(ind):
-    r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk)
+    r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk,
+                  htf_index=_worker_htf_index)
     if r: return r
     return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
             "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
@@ -2956,7 +2977,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         cutoff_t = now_ts_cycle - d_to * 86400
         sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
         if len(sl) < 8: return None
-        return _simulate(sl, final_params, 0, risk_pct=risk_pct)
+        return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=_htf_index)
     window_size_c = days / 3.0
     ok_windows = 0; total_windows = 0
     for wi in range(3):
@@ -3458,6 +3479,88 @@ def _htf_worker(symbol, base_tf, days):
     print(f"[HTF] Остановлен {htf_tf} {symbol}")
 
 
+def _build_htf_index(symbol, base_tf, days):
+    """Строит список (ts, direction) по HTF-свечам для использования в историческом бэктесте.
+    Каждый элемент: (timestamp закрытия HTF-свечи, direction в тот момент).
+    direction = 1/−1/0 по тем же правилам что и _htf_worker (EMA + momentum).
+    Возвращает отсортированный список или None если HTF недоступен."""
+    htf_tf = HTF_MAP.get(base_tf)
+    if not htf_tf:
+        return None
+    try:
+        # Загружаем HTF свечи — берём чуть больше дней для прогрева EMA
+        htf_days = min(days + 30, days * 2)
+        candles = []
+        interval_sec = TF_SECONDS.get(htf_tf, 3600)
+        needed = int(htf_days * 86400 / interval_sec) + 50
+        limit = min(needed, 999)
+        t_end = int(time.time())
+        fetched = 0
+        while fetched < needed:
+            t_from = t_end - limit * interval_sec
+            try:
+                import urllib.request as _ur2, urllib.parse as _up2
+                qs = _up2.urlencode({"contract": symbol, "interval": htf_tf,
+                                     "from": t_from, "limit": limit})
+                url = f"https://api.gateio.ws/api/v4/futures/usdt/candlesticks?{qs}"
+                with _ur2.urlopen(url, timeout=10) as r2:
+                    raw = json.loads(r2.read())
+            except Exception:
+                break
+            if not raw:
+                break
+            batch = []
+            for row in raw:
+                try:
+                    t  = int(row.get("t", row[0]) if isinstance(row, list) else row["t"])
+                    cl = float(row.get("c", row[5]) if isinstance(row, list) else row["c"])
+                    batch.append({"t": t, "close": cl})
+                except Exception:
+                    continue
+            if not batch:
+                break
+            candles = batch + [c for c in candles if c["t"] > batch[-1]["t"]]
+            if len(batch) < limit:
+                break
+            t_end = batch[0]["t"]
+            fetched += len(batch)
+            if fetched >= needed:
+                break
+        candles.sort(key=lambda x: x["t"])
+        if len(candles) < 50:
+            return None
+        # Считаем EMA нарастающим итогом по всем свечам, записываем direction после каждой свечи
+        ema_per = min(200, max(20, len(candles) // 3))
+        k = 2.0 / (ema_per + 1)
+        ema_val = candles[0]["close"]
+        result = []
+        window = []
+        for c in candles:
+            ema_val = c["close"] * k + ema_val * (1 - k)
+            window.append(c["close"])
+            if len(window) > 4:
+                window.pop(0)
+            if len(window) >= 4:
+                up_bars   = sum(1 for j in range(1, 4) if window[j] > window[j-1])
+                down_bars = sum(1 for j in range(1, 4) if window[j] < window[j-1])
+                direction = 1 if c["close"] > ema_val else -1
+                if direction == 1 and down_bars >= 2:
+                    direction = 0
+                elif direction == -1 and up_bars >= 2:
+                    direction = 0
+            else:
+                direction = 1 if c["close"] > ema_val else -1
+            result.append((c["t"], direction))
+        print(f"[HTF] index построен: {htf_tf} {symbol} — {len(result)} точек, "
+              f"лонг={sum(1 for _,d in result if d==1)} "
+              f"шорт={sum(1 for _,d in result if d==-1)} "
+              f"нейтр={sum(1 for _,d in result if d==0)}", flush=True)
+        return result
+    except Exception as e:
+        print(f"[HTF] _build_htf_index ошибка: {e}", flush=True)
+        return None
+
+
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
     symbol       = params.get("wf_symbol", "BTC_USDT")
@@ -3542,6 +3645,18 @@ def run_optimizer(params):
         olog(f"❌ Мало свечей: {len(candles)} — {reason}", "error")
         with opt_lock: opt_state["running"]=False; opt_state["error"]=f"Мало свечей: {len(candles)}"
         return
+
+    # Строим HTF-index для исторического бэктеста (только для коротких ТФ)
+    _htf_index = None
+    if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
+        olog(f"📐 Загрузка HTF ({HTF_MAP[tf]}) для исторического фильтра...", "info")
+        _htf_index = _build_htf_index(symbol, tf, days)
+        if _htf_index:
+            longs  = sum(1 for _, d in _htf_index if d == 1)
+            shorts = sum(1 for _, d in _htf_index if d == -1)
+            olog(f"✅ HTF-index: {len(_htf_index)} точек · лонг={longs} шорт={shorts}", "ok")
+        else:
+            olog(f"⚠ HTF-index недоступен — бэктест без фильтра старшего ТФ", "warn")
     # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
     cutoff_check = time.time() - days * 86400
     candles_in_window = [c for c in candles if c.get("t", 0) >= cutoff_check]
@@ -3586,7 +3701,7 @@ def run_optimizer(params):
         _shared_pool_holder[0] = PoolExecutor(
             max_workers=_n_workers,
             initializer=_worker_init,
-            initargs=(candles, 0, risk_pct)
+            initargs=(candles, 0, risk_pct, _htf_index)
         )
         _pool_ready.set()
 
@@ -3643,7 +3758,7 @@ def run_optimizer(params):
         # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
         try:
             olog(f"📊 Строю предварительный график из конфига...", "info")
-            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct)
+            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct, htf_index=_htf_index)
             if sim_pre:
                 sigs_pre = sim_pre["_signals"] or []
                 cc_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in candles]
@@ -3812,7 +3927,7 @@ def run_optimizer(params):
                     sl = list(_fresh_candles)
                 if len(sl) < 10: return None
                 return _simulate(sl, all_time_params, 0, risk_pct=risk_pct,
-                                 trade_from_ts=cutoff_from)
+                                 trade_from_ts=cutoff_from, htf_index=_htf_index)
 
             # 1) Валидация на последних 30%
             valid_sim = _wf_sim(valid_days, 0)
@@ -4161,9 +4276,14 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             opt_states.setdefault(sym, {})["running"] = False
         return
 
+    # HTF-index для параллельного режима
+    _htf_index_sym = None
+    if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
+        _htf_index_sym = _build_htf_index(sym, tf, days)
+
     # Создаём пул с выделенными воркерами
     try:
-        pool = PoolExecutor(max_workers=n_workers, initializer=_worker_init, initargs=(candles, 0, risk_pct))
+        pool = PoolExecutor(max_workers=n_workers, initializer=_worker_init, initargs=(candles, 0, risk_pct, _htf_index_sym))
     except Exception as e:
         _slog(f"❌ Ошибка пула: {e}", "error")
         with opt_states_lock:
