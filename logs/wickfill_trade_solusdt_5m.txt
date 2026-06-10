@@ -44,3 +44,7 @@
 [2026-06-10 04:00:36]   ✓ Плечо: 17× (запрошено 17×)
 [2026-06-10 04:00:36]   [debug] balance=20.38 pct=94.0% lev=17 → margin=19.16 (notional~325.69)
 [2026-06-10 04:00:36]   [debug] margin=19.16 ep=65.14 qm=0.1 → size=3
+[2026-06-10 04:00:36]   ✓ Размер: 3 контр. (маржа ~19.2 USDT, notional ~325.7 USDT)
+[2026-06-10 04:00:36]   ✓ Ордер: ЛОНГ SOL_USDT TP=65.92168 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.87944 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
+[2026-06-10 04:00:36] gate ✓ ЛОНГ lev=17 — итог
+[2026-06-10 05:00:19] СИГНАЛ ШОРТ ep=65.06 tp=64.2793 sl=65.3202 tg=ok
