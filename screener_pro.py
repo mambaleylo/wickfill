@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.250
+WickFill Optimizer v3.251
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.251: fix зависание перебора на любом параметре (напр. "Гео-1 — возврат N баров") — pmap теперь использует as_completed с таймаутом вместо pool.map без таймаута; если воркер завис (OOM, segfault, Android kill) — батч продолжается с дефолтным результатом для зависших кандидатов, а не висит вечно
 - v3.250: fix расхождение числа сделок на графике vs лучший конфиг (финальный) — граф теперь строится строго на current_candles с days_limit=0, как и воркеры оптимизатора; предыдущий патч v3.247 ошибочно применял days_limit=days внутри _simulate что давало другое окно чем у воркеров; исправлено в одиночном и мультисимвол режимах
 - v3.249: fix конфиги перестали сохраняться на GitHub — у функции _auto_save_config пропала строка def (осталось только тело), из-за чего вызов падал с NameError и сохранения не происходило
 - v3.248: fix мигающий сигнал на живой свече — _fetch_current_candle теперь определяет live-свечу строго по КАЛЕНДАРНОЙ границе: now < last_t + interval_sec; раньше использовался candle_open_t = (now//interval)×interval, из-за чего только что закрытая свеча (last_t == candle_open_t) ошибочно считалась незакрытой и периодически попадала в отображение как live — индикатор сигнала то появлялся, то пропадал
@@ -75,7 +76,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.250"
+APP_VERSION = "3.251"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2870,9 +2871,28 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     def pmap(candidates):
         if not candidates:
             return []
-        chunk = max(1, len(candidates) // (n_workers * 2))
+        from concurrent.futures import as_completed, TimeoutError as _FutTimeout
         _pt0 = time.time()
-        result = list(pool.map(_worker_evaluate, candidates, chunksize=chunk))
+        # Таймаут на кандидата: не более 120с на весь батч (защита от зависшего воркера)
+        _PMAP_TIMEOUT = max(60, len(candidates) * 30)
+        futures = {pool.submit(_worker_evaluate, c): i for i, c in enumerate(candidates)}
+        result = [{} ] * len(candidates)
+        _dead = {"fitness": -9999.0, "equity": 100.0, "trades": 0, "wins": 0,
+                 "losses": 0, "winrate": 0, "max_dd": 0, "profit_factor": 0,
+                 "avg_pnl": 0, "params": {}}
+        try:
+            for fut in as_completed(futures, timeout=_PMAP_TIMEOUT):
+                idx = futures[fut]
+                try:
+                    r = fut.result(timeout=5)
+                    result[idx] = r if r else dict(_dead, params=candidates[idx])
+                except Exception:
+                    result[idx] = dict(_dead, params=candidates[idx])
+        except _FutTimeout:
+            olog(f"⚠ pmap таймаут ({_PMAP_TIMEOUT}с) — {sum(1 for r in result if not r)} воркеров не ответили, пропускаем", "warn")
+            for i, r in enumerate(result):
+                if not r:
+                    result[i] = dict(_dead, params=candidates[i])
         _dt = round(time.time() - _pt0, 3)
         _plog("pmap", n=len(candidates), workers=n_workers, sec=_dt,
               sec_per_cand=round(_dt/len(candidates),4) if candidates else 0)
