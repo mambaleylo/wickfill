@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.244
+WickFill Optimizer v3.245
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.245: синхронизирован механизм выбора конфига для торговли с механизмом сохранения на GitHub — добавлена _gh_fetch_best_for_trading; в конце каждого цикла торговый конфиг (_sw_params / _sw_state[sym]["params"]) и плечо берутся из лучшего по validated_fitness между локальным all_time_best и конфигом на GitHub (нужно при переборе с нескольких устройств); opt_state["trade_best"] / opt_states[sym]["trade_best"] хранят актуальный торговый конфиг
 - v3.244: убран ручной ввод плеча в UI Gate — leverage всегда = risk_pct/sl_pct из конфига оптимизатора (и для открытия сделки, и для уведомления о закрытии); добавлена _gate_cleanup_orphan_orders — на каждой новой свече, если позиция уже закрыта, отменяются зависшие TP/SL триггер-ордера от прошлой сделки
 - v3.243: fix крах в начале каждого цикла — _run_one_cycle обращался к необъявленной _htf_index (NameError "name '_htf_index' is not defined"); добавлен параметр htf_index в _run_one_cycle и проброшен из run_optimizer/run_optimizer_safe
 - v3.168: межцикловая встряска — после 15 циклов без улучшения рескрамбл stop/tp/bool/cat + расширенный BH
@@ -69,7 +70,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.244"
+APP_VERSION = "3.245"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2470,14 +2471,14 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         if candle_t <= last_signal_t:
             continue  # уже отправляли
         ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
-        # Читаем плечо из лучшего конфига
+        # Читаем плечо из конфига, который реально используется для торговли (синхронизирован с GitHub)
         with opt_lock:
-            _best_for_lev = opt_state.get("all_time_best") or opt_state.get("best") or {}
+            _best_for_lev = opt_state.get("trade_best") or opt_state.get("all_time_best") or opt_state.get("best") or {}
         _sig_leverage = (_best_for_lev.get("leverage") or
                          (_best_for_lev.get("params") or {}).get("leverage") or 1)
         if symbol and symbol in opt_states:
             with opt_states_lock:
-                _sym_best = opt_states[symbol].get("best") or {}
+                _sym_best = opt_states[symbol].get("trade_best") or opt_states[symbol].get("best") or {}
             _sig_leverage = (_sym_best.get("leverage") or
                              (_sym_best.get("params") or {}).get("leverage") or _sig_leverage)
         # 1. Телеграм/ntfy уведомление
@@ -3283,7 +3284,39 @@ def _find_auto_config(symbol, tf, days, risk_pct):
     # Локальный фолбек убран — только GitHub
     return None, None
 
-def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
+def _gh_fetch_best_for_trading(symbol, tf, days, risk_pct):
+    """Возвращает (vfit, best_dict) лучшего конфига на GitHub для symbol/tf/days/risk,
+    или (None, None) если не найден / ошибка. Используется для синхронизации
+    между несколькими устройствами при выборе конфига для торговли."""
+    try:
+        days = int(days)
+        sym = symbol.replace("_", "").replace("/", "").lower()
+        r = int(round(risk_pct))
+        import re as _re_fc
+        pat_re = _re_fc.compile(rf"^wickfill_{_re_fc.escape(sym)}_{_re_fc.escape(tf)}_{days}d_\$\d+_r{r}(_sl[\d.]+_tp[\d.]+)?\.json$")
+        gh_files = _gh_list_folder("configs")
+        best_vfit = None
+        best_data = None
+        for f in gh_files:
+            name = f["name"]
+            if not pat_re.match(name): continue
+            raw = _gh_get_file(f"configs/{name}")
+            if not raw: continue
+            data = json.loads(raw)
+            gb = data.get("best") or {}
+            if not gb.get("params"): continue
+            if int(data.get("days", days)) != days: continue
+            if abs(float(data.get("risk_pct", risk_pct)) - risk_pct) > 0.1: continue
+            gf = gb.get("validated_fitness") if gb.get("validated_fitness") is not None else gb.get("fitness", -9999)
+            if best_vfit is None or gf > best_vfit:
+                best_vfit = gf
+                best_data = gb
+        return best_vfit, best_data
+    except Exception as e:
+        print(f"{_ts()} [gh] Ошибка проверки конфига для торговли: {e}", flush=True)
+        return None, None
+
+
     """Сохраняет конфиг в Downloads. Атомарная замена — никаких копий с (1)."""
     import glob as _glob, tempfile
     sym = symbol.replace("_","").replace("/","").lower()
@@ -3956,8 +3989,23 @@ def run_optimizer(params):
             olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%{_stag_str}", "found" if is_new_rec else "ok")
 
             all_time_params = dict(all_time_best["params"])
+            # --- Синхронизация с GitHub: если на GitHub лежит лучший конфиг (с другого устройства),
+            # для торговли используем его, а не локальный all_time_best ---
+            _trade_best = all_time_best
+            _trade_params = all_time_params
+            try:
+                _gh_vfit, _gh_best = _gh_fetch_best_for_trading(symbol, tf, days, risk_pct)
+                _local_vfit = all_time_best.get("validated_fitness")
+                _local_vfit = _local_vfit if _local_vfit is not None else all_time_best.get("fitness", -1e18)
+                if _gh_vfit is not None and _gh_best and _gh_vfit > _local_vfit:
+                    _trade_best = _gh_best
+                    _trade_params = dict(_gh_best["params"])
+                    olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit:.2f})", "info")
+            except Exception as _e:
+                print(f"{_ts()} [gh] Ошибка синхронизации торгового конфига: {_e}", flush=True)
             with opt_lock:
-                _sw_params = all_time_params
+                _sw_params = _trade_params
+                opt_state["trade_best"] = _trade_best
 
             # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
             now_ts = time.time()
@@ -4220,7 +4268,7 @@ def _run_multi_safe(sym_list, base_params):
                 # snapshot result into opt_states
                 try:
                     with opt_lock:
-                        best = opt_state.get("all_time_best") or opt_state.get("best")
+                        best = opt_state.get("trade_best") or opt_state.get("all_time_best") or opt_state.get("best")
                         valid = opt_state.get("valid")
                         windows = opt_state.get("windows", [])
                         min_stable = opt_state.get("min_stable_days")
@@ -4230,7 +4278,7 @@ def _run_multi_safe(sym_list, base_params):
                         chart_signals = list(opt_state.get("chart_signals", []))
                         chart_tf = opt_state.get("chart_tf","")
                         chart_path = opt_state.get("chart_path","")
-                        best_params = dict(opt_state.get("best",{}).get("params",{})) if opt_state.get("best") else {}
+                        best_params = dict((opt_state.get("trade_best") or opt_state.get("best") or {}).get("params",{}))
                     with opt_states_lock:
                         s = opt_states.setdefault(sym, {})
                         s["symbol"]   = sym
@@ -4260,6 +4308,7 @@ def _run_multi_safe(sym_list, base_params):
                         if best:
                             prev_eq = s.get("eq", 0)
                             new_eq  = round(best.get("equity", 100), 2)
+                            s["trade_best"] = best  # для торговли/плеча — всегда обновляем (учитывает GitHub-синхронизацию)
                             if new_eq >= prev_eq:
                                 s["best"]   = best
                                 s["eq"]     = new_eq
