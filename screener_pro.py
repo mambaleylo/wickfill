@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.245
+WickFill Optimizer v3.246
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.246: график теперь всегда строится по _trade_best/_trade_params (лучший конфиг между локальным all_time_best и GitHub), а не только по локальному all_time_best — раньше если _auto_save_config пропускал заливку (т.к. на GitHub уже лежал лучший конфиг с другого устройства), график всё равно показывал локальный (худший) прогон; opt_state["best"]/all_time_best по-прежнему хранят локальный рекорд для продолжения перебора
 - v3.245: синхронизирован механизм выбора конфига для торговли с механизмом сохранения на GitHub — добавлена _gh_fetch_best_for_trading; в конце каждого цикла торговый конфиг (_sw_params / _sw_state[sym]["params"]) и плечо берутся из лучшего по validated_fitness между локальным all_time_best и конфигом на GitHub (нужно при переборе с нескольких устройств); opt_state["trade_best"] / opt_states[sym]["trade_best"] хранят актуальный торговый конфиг
 - v3.244: убран ручной ввод плеча в UI Gate — leverage всегда = risk_pct/sl_pct из конфига оптимизатора (и для открытия сделки, и для уведомления о закрытии); добавлена _gate_cleanup_orphan_orders — на каждой новой свече, если позиция уже закрыта, отменяются зависшие TP/SL триггер-ордера от прошлой сделки
 - v3.243: fix крах в начале каждого цикла — _run_one_cycle обращался к необъявленной _htf_index (NameError "name '_htf_index' is not defined"); добавлен параметр htf_index в _run_one_cycle и проброшен из run_optimizer/run_optimizer_safe
@@ -70,7 +71,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.245"
+APP_VERSION = "3.246"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2735,10 +2736,10 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
             br = {}
             if is_multi:
                 with opt_states_lock:
-                    br = dict(opt_states.get(symbol, {}).get("best") or {})
+                    br = dict(opt_states.get(symbol, {}).get("trade_best") or opt_states.get(symbol, {}).get("best") or {})
             else:
                 with opt_lock:
-                    br = dict(opt_state.get("best") or {})
+                    br = dict(opt_state.get("trade_best") or opt_state.get("best") or {})
 
             chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
             _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar)
@@ -4146,7 +4147,7 @@ def run_optimizer(params):
             # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
             with htf_lock:
                 _htf_dir_chart = htf_state["direction"]
-            sim = _simulate(chart_candles_window, all_time_params, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir_chart)
+            sim = _simulate(chart_candles_window, _trade_params, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir_chart)
             chart_signals = sim["_signals"] if sim else []
             _opt_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
@@ -4154,7 +4155,8 @@ def run_optimizer(params):
             cur_c = _fetch_current_candle(symbol, tf)
             if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
-            chart_path = _save_chart(chart_candles_fmt, chart_signals, all_time_best, symbol, tf, risk_pct)
+            # На графике всегда лучший прогон — локальный или с GitHub (см. _trade_best выше)
+            chart_path = _save_chart(chart_candles_fmt, chart_signals, _trade_best, symbol, tf, risk_pct)
             with opt_lock:
                 opt_state["chart_candles"]  = chart_candles_fmt
                 opt_state["chart_signals"]  = chart_signals
@@ -4162,7 +4164,7 @@ def run_optimizer(params):
                 opt_state["chart_path"]     = chart_path or ""
                 opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
-                opt_state["all_time_best"]  = all_time_best  # всегда = глобальный рекорд
+                opt_state["all_time_best"]  = all_time_best  # всегда = глобальный рекорд (локальный, для продолжения перебора)
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
