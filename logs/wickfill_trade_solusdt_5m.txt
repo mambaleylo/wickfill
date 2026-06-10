@@ -21,3 +21,9 @@
 [2026-06-10 02:55:39]   ✓ Баланс: 19.22 USDT
 [2026-06-10 02:55:39]   ✓ Плечо: 17× (запрошено 17×)
 [2026-06-10 02:55:39]   [debug] balance=19.22 pct=94.0% lev=17 → margin=18.07 (notional~307.15)
+[2026-06-10 02:55:39]   [debug] margin=18.07 ep=65.00 qm=0.1 → size=3
+[2026-06-10 02:55:39]   ✓ Размер: 3 контр. (маржа ~18.1 USDT, notional ~307.1 USDT)
+[2026-06-10 02:55:39]   ✓ Ордер: ШОРТ SOL_USDT TP=64.285 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=65.26 ✅
+[2026-06-10 02:55:39] gate ✓ ШОРТ lev=17 — итог
+[2026-06-10 03:15:19] СИГНАЛ ЛОНГ ep=65.08 tp=65.7959 sl=64.8197 tg=ok
+[2026-06-10 03:15:19] gate_check key=да secret=да pct=94.0 auto_on=True raw=True
