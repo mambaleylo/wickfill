@@ -1,7 +1,7 @@
-WickFill perf-log  symbol=ETH_USDT  tf=5m  saved=2026-06-10 10:56:52
+WickFill perf-log  symbol=ETH_USDT  tf=5m  saved=2026-06-10 11:09:35
    время  событие                       детали
 --------------------------------------------------------------------------------
      0.0s  start                         symbol=ETH_USDT  tf=5m  days=2  risk=10.0  pool=process  cpus=8
-     3.7s  pool_create                   workers=8  pool_type=process  n_candles=576
-     6.9s  pool_ready                    sec=6.9  workers=8
-     6.9s  optimizer_done                reason=stop_flag
+     7.3s  pool_create                   workers=8  pool_type=process  n_candles=576  ⚠ +7.3s
+    10.5s  pool_ready                    sec=10.5  workers=8
+    10.5s  optimizer_done                reason=stop_flag
