@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.233
+WickFill Optimizer v3.234
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.233
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.234: fix лейбл текущей цены — тёмный фон вместо яркого, белый текст всегда виден
 - v3.233: уведомление о закрытии сделки — P&L на маржу%, P&L в USDT, баланс после, TP/SL цены, плечо
 - v3.232: улучшен лог автосделок — явно показывает balance×pct%=маржа×lev=позиция USDT
 - v3.231: убраны кнопка SW-стоп и SW-бейдж из UI; /sw_stop эндпоинт удалён — СТОП полностью останавливает всё
@@ -58,7 +59,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.233"
+APP_VERSION = "3.234"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1950,16 +1951,18 @@ function render(){{
   const lastC=vis[vis.length-1];
   if(lastC){{
     const curPrice=lastC.c,curY=py(curPrice),isUp=lastC.c>=lastC.o;
-    const cpCol=isUp?'#A3BF6F':'#FF8234';
-    ctx.setLineDash([2,3]);ctx.strokeStyle=cpCol+'80';ctx.lineWidth=1;
+    const cpLineCol=isUp?'#A3BF6F':'#FF8234';
+    const cpBgCol=isUp?'#2d4a1e':'#7a2800';
+    const cpTxtCol='#ffffff';
+    ctx.setLineDash([2,3]);ctx.strokeStyle=cpLineCol+'80';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(PAD_L,curY);ctx.lineTo(W-PAD_R,curY);ctx.stroke();
     ctx.setLineDash([]);
     const cpLblH=_candleTimer?26:14;
     if(_fitRightLabel(curY, cpLblH)){{
-      ctx.fillStyle=cpCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
+      ctx.fillStyle=cpBgCol;ctx.font='bold 9px system-ui';ctx.textAlign='left';
       ctx.beginPath();ctx.roundRect(W-PAD_R+1,curY-cpLblH/2,PAD_R-2,cpLblH,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY-(_candleTimer?5:0)+3);
-      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,curY+10);ctx.font='bold 9px system-ui';}}
+      ctx.fillStyle=cpTxtCol;ctx.fillText(curPrice.toPrecision(6),W-PAD_R+4,curY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.85)';ctx.fillText(_candleTimer,W-PAD_R+4,curY+10);ctx.font='bold 9px system-ui';}}
     }}
   }}
   for(let i=0;i<vis.length;i++){{
