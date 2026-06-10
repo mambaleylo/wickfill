@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.231
+WickFill Optimizer v3.232
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.231
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.232: улучшен лог автосделок — явно показывает balance×pct%=маржа×lev=позиция USDT
 - v3.231: убраны кнопка SW-стоп и SW-бейдж из UI; /sw_stop эндпоинт удалён — СТОП полностью останавливает всё
 - v3.230: fix TP/SL — order_price_round берётся из Gate API (не хардкод); fix СТОП — останавливает sliding window и автосделки полностью (sw_running=False)
 - v3.229: fix автосделки — размер позиции считается от МАРЖИ (без умножения на leverage), Gate сам применяет плечо аккаунта; устранена ошибка 'margin X while available Y'
@@ -56,7 +57,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.231"
+APP_VERSION = "3.232"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1683,7 +1684,7 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     else:
         margin = balance * (position_pct / 100.0)
     notional_display = margin * applied_leverage  # только для лога
-    log_lines.append(f"  [debug] balance={balance:.2f} pct={position_pct}% lev={applied_leverage} → margin={margin:.2f} (notional~{notional_display:.2f})")
+    log_lines.append(f"  [debug] balance={balance:.2f} × {position_pct}% = margin={margin:.2f} USDT × lev={applied_leverage} → позиция~{notional_display:.2f} USDT")
     # Размер в контрактах.
     # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
     # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
@@ -1712,7 +1713,7 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         # Последний фоллбэк: предполагаем 1 контракт = 1 USD (маржа)
         size = max(1, round(margin))
         log_lines.append(f"  [debug] qm=0 fallback: margin={margin:.2f} → size={size}")
-    log_lines.append(f"✓ Размер: {size} контр. (маржа ~{margin:.1f} USDT, notional ~{margin*applied_leverage:.1f} USDT)")
+    log_lines.append(f"✓ Размер: {size} контр. | маржа {size*ep*_qm:.2f} USDT | позиция {size*ep*_qm*applied_leverage:.2f} USDT ({applied_leverage}×)")
     # 5. Выставляем ордер
     ok, order_log = _gate_place_order(cfg, contract, direction, size, tp, sl)
     if not ok:
