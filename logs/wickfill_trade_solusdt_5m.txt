@@ -69,3 +69,10 @@
 [2026-06-10 06:55:35]   ✓ Старая позиция закрыта (или не было)
 [2026-06-10 06:55:35]   ✓ Баланс: 6.68 USDT
 [2026-06-10 06:55:35]   ✓ Плечо: 17× (запрошено 17×)
+[2026-06-10 06:55:35]   [debug] balance=6.68 pct=94.0% lev=17 → margin=6.28 (notional~106.80)
+[2026-06-10 06:55:35]   [debug] margin=6.28 ep=64.53 qm=0.1 → size=1
+[2026-06-10 06:55:35]   ✓ Размер: 1 контр. (маржа ~6.3 USDT, notional ~106.8 USDT)
+[2026-06-10 06:55:35]   ✓ Ордер: ШОРТ SOL_USDT TP=63.75564 ❌invalid argument: trigger.price price is not an integer multiple of a price unit | SL=64.78812 ❌invalid argument: trigger.price price is not an integer multiple of a price unit
+[2026-06-10 06:55:35] gate ✓ ШОРТ lev=17 — итог
+[2026-06-10 08:13:46] alert_cfg обновлён: auto=True key=да
+[2026-06-10 08:40:19] СИГНАЛ ЛОНГ ep=64.07 tp=64.7748 sl=63.8137 tg=ok
