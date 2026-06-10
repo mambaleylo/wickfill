@@ -1,21 +1,7 @@
-WickFill perf-log  symbol=ETH_USDT  tf=5m  saved=2026-06-10 10:51:26
+WickFill perf-log  symbol=ETH_USDT  tf=5m  saved=2026-06-10 10:56:52
    время  событие                       детали
 --------------------------------------------------------------------------------
      0.0s  start                         symbol=ETH_USDT  tf=5m  days=2  risk=10.0  pool=process  cpus=8
-     6.9s  pool_create                   workers=8  pool_type=process  n_candles=576  ⚠ +6.9s
-    10.7s  pool_ready                    sec=10.7  workers=8
-    10.7s  cycle_start                   cycle=1  n_candles=576
-    10.7s  phase1_start                  start=1  label=Старт #1 (предыдущий лучший)
-    11.2s  pmap                          n=1  workers=8  sec=0.556  sec_per_cand=0.556
-    11.3s  pmap                          n=11  workers=8  sec=0.087  sec_per_cand=0.0079
-    11.3s  param                         key=use_quiet_filter  n_cands=11  sec=0.087  pass_n=1  start=Старт #1 (предыдущий лучший)
-    11.5s  pmap                          n=14  workers=8  sec=0.147  sec_per_cand=0.0105
-    11.5s  param                         key=use_css_filter  n_cands=14  sec=0.147  pass_n=1  start=Старт #1 (предыдущий лучший)
-    11.6s  pmap                          n=13  workers=8  sec=0.153  sec_per_cand=0.0118
-    11.6s  param                         key=css_min_score  n_cands=13  sec=0.153  pass_n=1  start=Старт #1 (предыдущий лучший)
-    12.1s  pmap                          n=40  workers=8  sec=0.511  sec_per_cand=0.0128
-    12.1s  param                         key=quiet_max_ratio  n_cands=40  sec=0.512  pass_n=1  start=Старт #1 (предыдущий лучший)
-    12.1s  pass_done                     pass_n=1  sec=0.9  improved=False  start=Старт #1 (предыдущий лучший)
-    12.1s  phase1_done                   start=1  sec=1.5  equity=1258.69  wr=78.6
-    12.1s  cycle_end                     cycle=1  sec=1.5  stopped=True  has_result=False
-    12.1s  optimizer_done                reason=stop_flag
+     3.7s  pool_create                   workers=8  pool_type=process  n_candles=576
+     6.9s  pool_ready                    sec=6.9  workers=8
+     6.9s  optimizer_done                reason=stop_flag
