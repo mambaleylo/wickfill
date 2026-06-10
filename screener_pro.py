@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.240
+WickFill Optimizer v3.241
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -23,6 +23,7 @@ WickFill Optimizer v3.240
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
 - v3.237: fix HTF воркер: заменён _fetch_candles (писал в opt_state["fetch_pct"] → ломал UI) на внутреннюю тихую загрузку _fetch_htf_silent без побочных эффектов; убран двойной read htf_dir в SW
 - v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
+- v3.241: fix затыка между циклами — _auto_save_config вынесен в daemon-поток; GitHub API (list+get+put) больше не блокирует главный перебор; было до 296с паузы между циклами
 - v3.240: HTF-фильтр на истории — _build_htf_index загружает свечи старшего ТФ и строит список (ts, direction) при старте оптимизации; _simulate принимает htf_index и определяет direction по timestamp каждой свечи через bisect; передаётся во все вызовы бэктеста (worker, _quick_window, _wf_sim, seed-preview)
 - v3.239: fix главный баг "потеряно соединение" — в poll() переменная logs не была объявлена (ReferenceError → catch → false disconnect); исправлено на const logs=d.logs||[]
 - v3.238: fix "потеряно соединение" — _json sanitizes NaN/Inf floats перед json.dumps; добавлен try/except вокруг сериализации с логом ошибки
@@ -65,7 +66,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.240"
+APP_VERSION = "3.241"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4006,14 +4007,19 @@ def run_optimizer(params):
                 opt_state["windows"] = windows
                 opt_state["min_stable_days"] = min_stable_days
 
-            # Автосохранение в Downloads если результат улучшился
+            # Автосохранение — запускаем в фоновом потоке чтобы не блокировать перебор
             new_vfit = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
             if new_vfit > _last_autosave_vfit:
-                saved = _auto_save_config(symbol, tf, days, risk_pct, all_time_best, prev_top20, olog)
-                if saved:
-                    _last_autosave_vfit = new_vfit
-                else:
-                    olog(f"⚠ Авто-сохранение не удалось (проверь папку Download)", "warn")
+                _last_autosave_vfit = new_vfit  # обновляем сразу чтобы не запускать повторно
+                _save_snapshot = (symbol, tf, days, risk_pct,
+                                  dict(all_time_best), list(prev_top20))
+                def _do_autosave(_snap=_save_snapshot):
+                    _sym, _tf, _d, _r, _best, _top20 = _snap
+                    try:
+                        _auto_save_config(_sym, _tf, _d, _r, _best, _top20, olog)
+                    except Exception as _e:
+                        print(f"[autosave] ошибка: {_e}", flush=True)
+                threading.Thread(target=_do_autosave, daemon=True).start()
 
             # Обновляем chart — показываем сигналы за то же окно что и оптимизация
             # В мультирежиме _sw_candles перезаписывается другим символом — используем локальные candles
@@ -4404,13 +4410,17 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     s["chart_updated_at"] = int(_time.time())
                     s["symbol"]           = sym
 
-                # Автосохранение — только если vfit улучшился
+                # Автосохранение — фоновый поток чтобы не блокировать перебор
                 try:
                     new_vfit = best.get("validated_fitness", best.get("fitness", 0))
                     if new_vfit > last_autosave_vfit:
-                        saved = _auto_save_config(sym, tf, days, risk_pct, best, prev_top20, _slog)
-                        if saved:
-                            last_autosave_vfit = new_vfit
+                        last_autosave_vfit = new_vfit
+                        _ms_snap = (sym, tf, days, risk_pct, dict(best), list(prev_top20))
+                        def _do_ms_save(_snap=_ms_snap):
+                            try: _auto_save_config(*_snap, _slog)
+                            except Exception as _e: print(f"[autosave-ms] {_e}", flush=True)
+                        import threading as _thr
+                        _thr.Thread(target=_do_ms_save, daemon=True).start()
                 except Exception:
                     pass
 
