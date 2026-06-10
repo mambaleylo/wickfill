@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.249
+WickFill Optimizer v3.250
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.250: fix расхождение числа сделок на графике vs лучший конфиг (финальный) — граф теперь строится строго на current_candles с days_limit=0, как и воркеры оптимизатора; предыдущий патч v3.247 ошибочно применял days_limit=days внутри _simulate что давало другое окно чем у воркеров; исправлено в одиночном и мультисимвол режимах
 - v3.249: fix конфиги перестали сохраняться на GitHub — у функции _auto_save_config пропала строка def (осталось только тело), из-за чего вызов падал с NameError и сохранения не происходило
 - v3.248: fix мигающий сигнал на живой свече — _fetch_current_candle теперь определяет live-свечу строго по КАЛЕНДАРНОЙ границе: now < last_t + interval_sec; раньше использовался candle_open_t = (now//interval)×interval, из-за чего только что закрытая свеча (last_t == candle_open_t) ошибочно считалась незакрытой и периодически попадала в отображение как live — индикатор сигнала то появлялся, то пропадал
 - v3.247: fix расхождения числа сделок на графике vs лучшем конфиге — теперь _simulate для графика вызывается с days_limit=days и now_ts=_src_ts (timestamp последней свечи), идентично воркерам оптимизатора; раньше делался ручной срез по _src_ts и days_limit=0, из-за чего границы окна чуть отличались от воркерных (те считали cutoff от time.time()) → разное число сделок
@@ -74,7 +75,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.249"
+APP_VERSION = "3.250"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4146,28 +4147,18 @@ def run_optimizer(params):
             if is_multi_run:
                 chart_candles_src = list(candles)  # локальные свечи текущего символа
             else:
-                with opt_lock:
-                    chart_candles_src = list(_sw_candles)
-            # Используем те же параметры что и оптимизатор: days_limit=days, now_ts=время последней свечи.
-            # Это гарантирует что _simulate обрезает окно идентично воркерам → одинаковое число сделок.
-            # Раньше здесь делали ручной срез по _src_ts и days_limit=0 — окно чуть отличалось от
-            # воркерного (оно считало от time.time()), поэтому на графике число сделок не совпадало
-            # с best_config.
-            _src_ts = max((c.get("t", 0) for c in chart_candles_src), default=time.time())
-            chart_candles_window = chart_candles_src  # передаём весь список, _simulate сам обрежет
-            if len(chart_candles_window) < 10:
-                chart_candles_window = chart_candles_src  # fallback (уже то же самое, для ясности)
-            # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
+                # Единственный источник истины — те же свечи что шли в воркеры в этом цикле.
+                # _sw_candles мог уже сдвинуться (SW-тред добавил новую свечу) → брать оттуда нельзя.
+                chart_candles_src = list(current_candles)
+            # days_limit=0: воркеры тоже работали с days_limit=0 на уже обрезанном наборе.
+            # Любое дополнительное ограничение по времени внутри _simulate даёт другой набор сделок.
             with htf_lock:
                 _htf_dir_chart = htf_state["direction"]
-            sim = _simulate(chart_candles_window, _trade_params, days, _collect=True, risk_pct=risk_pct,
-                            htf_direction=_htf_dir_chart, now_ts=_src_ts)
+            sim = _simulate(chart_candles_src, _trade_params, 0, _collect=True, risk_pct=risk_pct,
+                            htf_direction=_htf_dir_chart)
             chart_signals = sim["_signals"] if sim else []
             _opt_pending_bar = sim["pending_signal_bar"] if sim else None
-            # Для отображения показываем только свечи внутри окна (cutoff от _src_ts как в _simulate)
-            _chart_cutoff = _src_ts - days * 86400
-            chart_candles_window_disp = [c for c in chart_candles_window if c.get("t", 0) >= _chart_cutoff] or chart_candles_window
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window_disp]
+            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_src]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
             if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
@@ -4512,15 +4503,13 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                 best = global_best
                 _slog(f"✅ Цикл #{cycle} за {int(cycle_elapsed)}с | ${best['equity']:.2f} WR {best['winrate']:.1f}% DD {best['max_dd']:.1f}%", "found")
 
-                # Обновляем graph данные
-                cutoff = _time.time() - days * 86400
-                chart_src = [c for c in local_candles if c.get("t", 0) >= cutoff] or local_candles
+                # Обновляем graph данные — те же свечи что у воркеров (local_candles, days_limit=0)
                 try:
-                    sim = _simulate(chart_src, dict(best["params"]), 0, _collect=True, risk_pct=risk_pct)
+                    sim = _simulate(local_candles, dict(best["params"]), 0, _collect=True, risk_pct=risk_pct)
                     chart_signals = sim["_signals"] if sim else []
                 except Exception:
                     chart_signals = []
-                chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_src]
+                chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in local_candles]
 
                 with opt_states_lock:
                     s = opt_states.setdefault(sym, {})
