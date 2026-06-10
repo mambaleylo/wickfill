@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.230
+WickFill Optimizer v3.231
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -21,6 +21,7 @@ WickFill Optimizer v3.230
 - v3.225: slope penalty смягчён: порог активации -5%, знаменатель 33→50, max штраф 0.5→0.7 (макс -30% вместо -50%)
 - v3.226: фикс блокировки автосохранения — _last_autosave_vfit всегда 0.0 при загрузке seed (старый fitness не блокирует новые validated_fitness); фикс в single и multi-symbol режимах
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
+- v3.231: убраны кнопка SW-стоп и SW-бейдж из UI; /sw_stop эндпоинт удалён — СТОП полностью останавливает всё
 - v3.230: fix TP/SL — order_price_round берётся из Gate API (не хардкод); fix СТОП — останавливает sliding window и автосделки полностью (sw_running=False)
 - v3.229: fix автосделки — размер позиции считается от МАРЖИ (без умножения на leverage), Gate сам применяет плечо аккаунта; устранена ошибка 'margin X while available Y'
 - v3.228: equity-guard — автосохранение блокируется если новый конфиг имеет equity < 70% от текущего на GitHub (защита от перезаписи хорошего конфига худшим по прибыли даже при высоком vfit)
@@ -55,7 +56,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.230"
+APP_VERSION = "3.231"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4831,7 +4832,7 @@ details summary::-webkit-details-marker{display:none}
   .btn-ghost{padding:10px 10px;font-size:.82rem}
   .action-row{gap:5px}
   #restartBtnMob{display:flex !important}
-  #swStopBtn{display:none !important}
+
 
   /* Скрываем не нужные элементы */
   #infiniteRow{display:none}
@@ -4931,10 +4932,7 @@ details summary::-webkit-details-marker{display:none}
       <span id="speedPillText">—</span>
     </span>
     <span id="statusBadge2"></span>
-    <span class="tb green" id="swBadge" style="display:none">
-      <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 009.5 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 7a5 5 0 019.5-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      SW
-    </span>
+
     <span class="tb btn" id="latencyPill" onclick="checkApi()" title="Задержка API Gate.io">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       <span id="latencyText">— мс</span>
@@ -5040,9 +5038,7 @@ details summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="action-row">
-      <button class="btn-ghost" id="swStopBtn" style="display:none" onclick="stopSW()">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0"><rect x="1" y="1" width="10" height="10" rx="2"/></svg> SW
-      </button>
+
       <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
     </div>
 
@@ -5174,7 +5170,7 @@ details summary::-webkit-details-marker{display:none}
       <div class="cycles-col">
         <div class="cycles-col-header">
           <span class="cycles-label" id="ccLabel">Циклы</span>
-          <span id="swStatus2" style="font-size:.65rem;color:var(--text3)"></span>
+
         </div>
         <div class="cc-strip" id="ccStrip"></div>
       </div>
@@ -5565,7 +5561,7 @@ function startOpt(){
       const _spEl=document.getElementById('speedPill');if(_spEl){_spEl._lastShown=0;_spEl.style.display='none';}
       document.getElementById('progBar').style.width='0%';
       document.getElementById('progParam').textContent='';
-      document.getElementById('swStopBtn').style.display='none';
+    
       document.getElementById('wfBtn').style.display='none';
       document.getElementById('wfStopBtn').style.display='flex';
       document.getElementById('progWrap').style.display='flex';
@@ -5599,7 +5595,7 @@ function stopOpt(){
   if(polling){clearTimeout(polling);polling=null;}
   document.getElementById('wfBtn').style.display='';
   document.getElementById('wfStopBtn').style.display='none';
-  document.getElementById('swStopBtn').style.display='flex';
+
   document.getElementById('progWrap').style.display='none';
   // На мобиле восстанавливаем карточку настроек
   if(window.innerWidth<=700){
@@ -5611,9 +5607,8 @@ function stopOpt(){
   _loadRecentConfigs();
   addLogLine('⏹ Остановлен','warn');
 }
-function stopSW(){
-  fetch('/sw_stop').then(()=>{});
-  document.getElementById('swStopBtn').style.display='none';
+);
+
   addLogLine('⏹ Скользящее окно остановлено','warn');
 }
 function _loadChartFrame(sym){
@@ -5798,17 +5793,10 @@ function poll(){
       if(d.current_param) document.getElementById('progParam').textContent='→ '+d.current_param;
     }
 
-    // SW status
-    const sw2=document.getElementById('swStatus2');
-    if(d.sw_running){
-      const upd=d.sw_last_update?new Date(d.sw_last_update*1000).toLocaleTimeString('ru'):'—';
-      sw2.textContent=`SW: ${d.sw_candle_count} св · ${upd}`;
-      sw2.style.color='var(--green)';
-    } else {sw2.textContent='';sw2.style.color='';}
+
 
     // Badges
     const badge=document.getElementById('statusBadge2');
-    const swb=document.getElementById('swBadge');
     badge.innerHTML='';
     // Быстродействие
     const sp=document.getElementById('speedPill');
@@ -5826,9 +5814,7 @@ function poll(){
         sp.style.display='none';
       }
     }
-    swb.style.display=d.sw_running?'inline-flex':'none';
-    if(d.sw_running&&!d.running) document.getElementById('swStopBtn').style.display='flex';
-    if(!d.sw_running) document.getElementById('swStopBtn').style.display='none';
+
 
     const logs=d.logs||[];
     if(logs.length>lastLogCount){
@@ -6647,9 +6633,7 @@ class Handler(BaseHTTPRequestHandler):
                     except: pass
             if gh_del: self._json({"ok": True, "source": "github"})
             else: self._json({"ok": True, "source": "local"})
-        elif parsed.path == "/sw_stop":
-            with opt_lock: opt_state["sw_running"]=False
-            self._json({"ok":True})
+
         elif parsed.path == "/reset_running":
             # Только сбрасываем флаги UI — не трогаем оптимизатор
             with opt_lock:
