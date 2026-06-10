@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.241
+WickFill Optimizer v3.242
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -23,6 +23,7 @@ WickFill Optimizer v3.241
 - v3.227: фикс автосделок — добавлен endpoint /update_alert_cfg; gate_auto_enabled и все alert/gate поля теперь синхронизируются с сервером при любом изменении и при загрузке страницы (раньше сервер видел только значение на момент старта оптимизации)
 - v3.237: fix HTF воркер: заменён _fetch_candles (писал в opt_state["fetch_pct"] → ломал UI) на внутреннюю тихую загрузку _fetch_htf_silent без побочных эффектов; убран двойной read htf_dir в SW
 - v3.236: HTF тренд-фильтр: фоновый поток загружает свечи старшего ТФ (5m→15m, 15m→1h и т.д.), считает EMA+momentum, пишет direction в htf_state; _simulate принимает htf_direction — блокирует сигналы против тренда; SW и main opt loop передают htf_direction; UI pill в топбаре показывает направление HTF
+- v3.242: fix критическое замедление HTF-фильтра — _htf_ts/_htf_dir предвычисляются один раз в _worker_init вместо аллокации новых списков на каждый вызов _simulate; bisect импортируется один раз на уровне модуля
 - v3.241: fix затыка между циклами — _auto_save_config вынесен в daemon-поток; GitHub API (list+get+put) больше не блокирует главный перебор; было до 296с паузы между циклами
 - v3.240: HTF-фильтр на истории — _build_htf_index загружает свечи старшего ТФ и строит список (ts, direction) при старте оптимизации; _simulate принимает htf_index и определяет direction по timestamp каждой свечи через bisect; передаётся во все вызовы бэктеста (worker, _quick_window, _wf_sim, seed-preview)
 - v3.239: fix главный баг "потеряно соединение" — в poll() переменная logs не была объявлена (ReferenceError → catch → false disconnect); исправлено на const logs=d.logs||[]
@@ -66,7 +67,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.241"
+APP_VERSION = "3.242"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -370,9 +371,11 @@ threading.Thread(target=_live_candle_updater, daemon=True).start()
 # ═══════════════════════════════════════════════════════════════
 # SIMULATE
 # ═══════════════════════════════════════════════════════════════
+import bisect as _bisect_module  # импортируем один раз на уровне модуля
+
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
               max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None,
-              htf_direction=0, htf_index=None):
+              htf_direction=0, htf_index=None, _htf_ts=None, _htf_dir=None):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -581,19 +584,24 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     start_i=max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20)+2
     start_i=min(start_i,n-1)
 
-    # Предвычисляем HTF-direction по истории: для каждой свечи ищем ближайшую HTF-свечу ≤ ts
-    # htf_index = [(htf_ts, direction), ...] отсортированы по возрастанию ts
-    # Используем bisect для O(log n) поиска. Результат кэшируем в массив длиной n.
+    # Предвычисляем HTF-direction по истории через bisect.
+    # _htf_ts/_htf_dir передаются предвычисленными из _worker_init (нет аллокаций).
+    # Если не переданы — строим из htf_index здесь (для вызовов вне воркера: WF, seed-preview).
     _htf_dir_arr = None
-    if htf_index:
-        import bisect as _bisect
-        _htf_ts_list  = [x[0] for x in htf_index]
-        _htf_dir_list = [x[1] for x in htf_index]
-        _htf_dir_arr  = [0] * n
+    if _htf_ts is not None and _htf_dir is not None:
+        _htf_dir_arr = [0] * n
+        _br = _bisect_module.bisect_right
         for _hi in range(n):
-            _ct = candles_list[_hi].get("t", 0)
-            _pos = _bisect.bisect_right(_htf_ts_list, _ct) - 1
-            _htf_dir_arr[_hi] = _htf_dir_list[_pos] if _pos >= 0 else 0
+            _pos = _br(_htf_ts, candles_list[_hi].get("t", 0)) - 1
+            if _pos >= 0: _htf_dir_arr[_hi] = _htf_dir[_pos]
+    elif htf_index:
+        _ts_l = [x[0] for x in htf_index]
+        _di_l = [x[1] for x in htf_index]
+        _htf_dir_arr = [0] * n
+        _br = _bisect_module.bisect_right
+        for _hi in range(n):
+            _pos = _br(_ts_l, candles_list[_hi].get("t", 0)) - 1
+            if _pos >= 0: _htf_dir_arr[_hi] = _di_l[_pos]
 
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
@@ -994,6 +1002,8 @@ _worker_candles   = None
 _worker_days      = None
 _worker_risk      = 20.0
 _worker_htf_index = None   # список (ts, direction) для HTF на истории — None = без фильтра
+_worker_htf_ts    = None   # предвычисленный список timestamps (для bisect в _simulate)
+_worker_htf_dir   = None   # предвычисленный список directions
 # Предвычисленные массивы (закэшированы один раз на процесс)
 _worker_opens   = None
 _worker_highs   = None
@@ -1003,10 +1013,19 @@ _worker_closes  = None
 def _worker_init(candles, days, risk, htf_index=None):
     global _worker_candles, _worker_days, _worker_risk, _worker_htf_index
     global _worker_opens, _worker_highs, _worker_lows, _worker_closes
+    global _worker_htf_ts, _worker_htf_dir
     _worker_candles   = candles
     _worker_days      = days
     _worker_risk      = risk
     _worker_htf_index = htf_index
+    # Предвычисляем ts/dir списки один раз чтобы не аллоцировать их внутри каждого _simulate
+    if htf_index:
+        import bisect as _bisect_init
+        _worker_htf_ts  = [x[0] for x in htf_index]
+        _worker_htf_dir = [x[1] for x in htf_index]
+    else:
+        _worker_htf_ts  = None
+        _worker_htf_dir = None
     # Предвычисляем массивы цен один раз — не надо делать list comprehension в каждой симуляции
     _worker_opens  = [c["open"]  for c in candles]
     _worker_highs  = [c["high"]  for c in candles]
@@ -1015,7 +1034,8 @@ def _worker_init(candles, days, risk, htf_index=None):
 
 def _worker_evaluate(ind):
     r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk,
-                  htf_index=_worker_htf_index)
+                  htf_index=_worker_htf_index,
+                  _htf_ts=_worker_htf_ts, _htf_dir=_worker_htf_dir)
     if r: return r
     return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
             "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
