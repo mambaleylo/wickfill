@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.246
+WickFill Optimizer v3.247
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.247: fix расхождения числа сделок на графике vs лучшем конфиге — теперь _simulate для графика вызывается с days_limit=days и now_ts=_src_ts (timestamp последней свечи), идентично воркерам оптимизатора; раньше делался ручной срез по _src_ts и days_limit=0, из-за чего границы окна чуть отличались от воркерных (те считали cutoff от time.time()) → разное число сделок
 - v3.246: график теперь всегда строится по _trade_best/_trade_params (лучший конфиг между локальным all_time_best и GitHub), а не только по локальному all_time_best — раньше если _auto_save_config пропускал заливку (т.к. на GitHub уже лежал лучший конфиг с другого устройства), график всё равно показывал локальный (худший) прогон; opt_state["best"]/all_time_best по-прежнему хранят локальный рекорд для продолжения перебора
 - v3.245: синхронизирован механизм выбора конфига для торговли с механизмом сохранения на GitHub — добавлена _gh_fetch_best_for_trading; в конце каждого цикла торговый конфиг (_sw_params / _sw_state[sym]["params"]) и плечо берутся из лучшего по validated_fitness между локальным all_time_best и конфигом на GitHub (нужно при переборе с нескольких устройств); opt_state["trade_best"] / opt_states[sym]["trade_best"] хранят актуальный торговый конфиг
 - v3.244: убран ручной ввод плеча в UI Gate — leverage всегда = risk_pct/sl_pct из конфига оптимизатора (и для открытия сделки, и для уведомления о закрытии); добавлена _gate_cleanup_orphan_orders — на каждой новой свече, если позиция уже закрыта, отменяются зависшие TP/SL триггер-ордера от прошлой сделки
@@ -71,7 +72,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.246"
+APP_VERSION = "3.247"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4137,20 +4138,26 @@ def run_optimizer(params):
             else:
                 with opt_lock:
                     chart_candles_src = list(_sw_candles)
-            # Обрезаем свечи по тому же days_limit что и оптимизатор
-            # Используем метку последней свечи как точку отсчёта (детерминировано)
+            # Используем те же параметры что и оптимизатор: days_limit=days, now_ts=время последней свечи.
+            # Это гарантирует что _simulate обрезает окно идентично воркерам → одинаковое число сделок.
+            # Раньше здесь делали ручной срез по _src_ts и days_limit=0 — окно чуть отличалось от
+            # воркерного (оно считало от time.time()), поэтому на графике число сделок не совпадало
+            # с best_config.
             _src_ts = max((c.get("t", 0) for c in chart_candles_src), default=time.time())
-            cutoff = _src_ts - days * 86400
-            chart_candles_window = [c for c in chart_candles_src if c.get("t", 0) >= cutoff]
+            chart_candles_window = chart_candles_src  # передаём весь список, _simulate сам обрежет
             if len(chart_candles_window) < 10:
-                chart_candles_window = chart_candles_src  # fallback
+                chart_candles_window = chart_candles_src  # fallback (уже то же самое, для ясности)
             # Симулируем только закрытые свечи — live-свеча добавляется ниже только для отображения
             with htf_lock:
                 _htf_dir_chart = htf_state["direction"]
-            sim = _simulate(chart_candles_window, _trade_params, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir_chart)
+            sim = _simulate(chart_candles_window, _trade_params, days, _collect=True, risk_pct=risk_pct,
+                            htf_direction=_htf_dir_chart, now_ts=_src_ts)
             chart_signals = sim["_signals"] if sim else []
             _opt_pending_bar = sim["pending_signal_bar"] if sim else None
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window]
+            # Для отображения показываем только свечи внутри окна (cutoff от _src_ts как в _simulate)
+            _chart_cutoff = _src_ts - days * 86400
+            chart_candles_window_disp = [c for c in chart_candles_window if c.get("t", 0) >= _chart_cutoff] or chart_candles_window
+            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_window_disp]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
             if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
