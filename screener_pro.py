@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.285: fix мигание графика и вертикальные разрывы между свечами: (1) rAF-батчинг — введён schedRender() с флагом _rafPending, все вызовы render за один кадр сводятся в один requestAnimationFrame — нет промежуточных пустых кадров; (2) canvas resize только при реальном изменении размера — раньше canvas.width=... при каждом render сбрасывал canvas вызывая мигание; теперь resize пропускается если W/H/dpr не изменились; (3) убран _scheduleZoomReset — прыжок viewport через 5 секунд после зума выглядел как разрыв свечей.
 - v3.284: fix плечо не отображалось в Telegram-уведомлении — _sig_leverage искал поле "leverage" в trade_best/params, но оно там не хранится (leverage не в PARAM_SPACE); теперь вычисляется тем же способом что при открытии сделки на Gate: max(1, round(risk_pct / sl_pct)); убрано условие "> 1" — плечо показывается всегда (включая 1×).
 - v3.283: fix перезагрузка свечей теперь привязана к открытию новой свечи по границе TF, а не к elapsed-таймеру — раньше для 5m-TF перезагрузка случалась через ~5-6 мин с дрейфом (зависела от длины цикла оптимизации); теперь вычисляется _next_candle_boundary = (now//tf_sec+1)*tf_sec и перезагрузка происходит ровно когда открылась новая свеча.
 - v3.282: комплексный фикс разрывов/пропажи свечей на графике: (1) render() теперь клампирует viewLen и viewStart в допустимые пределы до любого рисования — исключает пустой vis при любом состоянии массива; (2) fetchLiveCandle: open новой live-свечи берётся из last.c предыдущей закрытой, а не из биржи — нет ценового разрыва между свечами; (3) postMessage prevLive restore: при восстановлении live-свечи синхронизируем её open с close предыдущей свечи из нового массива; (4) tooltip: защита от деления на 0 если vis пустой.
@@ -151,7 +152,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.284"
+APP_VERSION = "3.285"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2029,18 +2030,15 @@ const _isMob=window.innerWidth<=700;
 const _defaultViewLen=_isMob?60:120;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
-let _zoomResetTimer=null;
-function _scheduleZoomReset(){{
-  if(_zoomResetTimer) clearTimeout(_zoomResetTimer);
-  _zoomResetTimer=setTimeout(()=>{{
-    viewLen=Math.min(_defaultViewLen,CANDLES.length);
-    viewStart=Math.max(0,CANDLES.length-viewLen);
-    render();
-    _zoomResetTimer=null;
-  }},5000);
+// rAF batching: несколько вызовов schedRender() за один кадр сводятся в один render()
+let _rafPending=false;
+function schedRender(){{
+  if(_rafPending) return;
+  _rafPending=true;
+  requestAnimationFrame(()=>{{_rafPending=false;render();}});
 }}
-function toggleSidebar(){{const sb=document.getElementById('sidebar');sidebarOpen=!sidebarOpen;sb.classList.toggle('hidden',!sidebarOpen);requestAnimationFrame(render);}}
-let _lastW=0,_lastH=0;
+function toggleSidebar(){{const sb=document.getElementById('sidebar');sidebarOpen=!sidebarOpen;sb.classList.toggle('hidden',!sidebarOpen);schedRender();}}
+let _lastW=0,_lastH=0,_lastDpr=0;
 function render(){{
   const dpr=window.devicePixelRatio||1;
   let W=wrap.clientWidth,H=wrap.clientHeight;
@@ -2051,8 +2049,13 @@ function render(){{
   // Гарантируем корректность viewport перед каждым рендером
   viewLen = Math.max(1, Math.min(viewLen, CANDLES.length));
   viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
-  canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';
-  ctx.scale(dpr,dpr);
+  // Resize canvas только если реально изменился размер — иначе сброс вызывает мигание
+  if(W!==_lastDpr||H!==canvas._lastH||dpr!==_lastDpr||canvas.width!==Math.round(W*dpr)||canvas.height!==Math.round(H*dpr)){{
+    canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);
+    canvas.style.width=W+'px';canvas.style.height=H+'px';
+    _lastDpr=dpr;canvas._lastH=H;
+  }}
+  ctx.setTransform(dpr,0,0,dpr,0,0);
   const end=Math.min(viewStart+viewLen,CANDLES.length),vis=CANDLES.slice(viewStart,end);
   let mn=Infinity,mx=-Infinity;
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
@@ -2267,9 +2270,9 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));render();_scheduleZoomReset();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));schedRender();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
-window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));render();}});
+window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));schedRender();}});
 window.addEventListener('mouseup',()=>isDragging=false);
 // Touch support
 let _t1x=0,_t1VS=0,_tPinchD=0,_tPinchVL=0,_tPinchVS=0;
@@ -2285,12 +2288,12 @@ wrap.addEventListener('touchmove',e=>{{
   e.preventDefault();
   if(e.touches.length===1){{
     const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.touches[0].clientX-_t1x)/cw2);
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));render();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));schedRender();
   }} else if(e.touches.length===2){{
     const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
     const d=Math.sqrt(dx*dx+dy*dy),scale=_tPinchD/d;
     viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(_tPinchVL*scale)));
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));render();_scheduleZoomReset();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));schedRender();
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
@@ -2341,7 +2344,7 @@ wrap.addEventListener('touchmove',e=>{{
 wrap.addEventListener('touchend',()=>{{
   _tipHideTimer=setTimeout(()=>{{tip.style.display='none';_touchActive=false;}},1200);
 }},{{passive:true}});
-window.addEventListener('resize',render);
+window.addEventListener('resize',schedRender);
 // ── Live candle: обновляем незакрытую свечу каждые 2 секунды ──
 const LIVE_SYMBOL = '{symbol}';
 const LIVE_TF     = '{tf}';
@@ -2398,7 +2401,7 @@ function fetchLiveCandle() {{
         badge.textContent = (stale ? '⚠ ' : '⬤ ') + 'LIVE  ' + d.c.toPrecision(7);
       }}
       // Всегда перерисовываем через rAF — даже если changed=false (для badge)
-      requestAnimationFrame(render);
+      schedRender();
     }}).catch(e => {{
       _liveFailCount++;
       console.warn('[live_candle] err #' + _liveFailCount, e);
@@ -2448,7 +2451,7 @@ window.addEventListener('message', e => {{
     }}
     viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
   }}
-  render();
+  schedRender();
 }});
 
 render();
