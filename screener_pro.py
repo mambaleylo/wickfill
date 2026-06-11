@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.256
+WickFill Optimizer v3.257
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.257: fix гонка карточка/граф — убрана асинхронность _do_gh_trade_sync;
+  теперь GitHub-синк синхронный с таймаутом 8с, затем граф строится сразу;
+  карточка и граф атомарно записываются в opt_state вместе → никакой гонки
 - v3.256: fix /chart endpoint брал opt_state["best"] (локальный) вместо "trade_best"
   (финальный с учётом GitHub) → trades=0 и неправильный граф после 1-го цикла
 - v3.255: fix _live_candle_updater использовал opt_state["best"] (локальный) вместо
@@ -87,7 +90,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.256"
+APP_VERSION = "3.257"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4072,51 +4075,52 @@ def run_optimizer(params):
             _local_vfit_snap = _local_vfit_snap if _local_vfit_snap is not None else all_time_best.get("fitness", -1e18)
             _atb_snap = dict(all_time_best)
             _atp_snap = dict(all_time_params)
-            _cc_src_snap = list(current_candles)  # snapshot свечей для графика — те же что у воркеров
-            def _do_gh_trade_sync(_atb=_atb_snap, _atp=_atp_snap, _lv=_local_vfit_snap,
-                                  _cc=_cc_src_snap, _elapsed=elapsed, _cycle_elapsed=cycle_elapsed):
-                global _sw_params
-                try:
-                    _gh_vfit, _gh_best = _gh_fetch_best_for_trading(symbol, tf, days, risk_pct)
-                    if _gh_vfit is not None and _gh_best and _gh_vfit > _lv:
-                        _tb = _gh_best; _tp = dict(_gh_best["params"])
-                        olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_lv:.2f})", "info")
-                    else:
-                        _tb = _atb; _tp = _atp
-                except Exception as _e:
-                    print(f"{_ts()} [gh] Ошибка синхронизации торгового конфига: {_e}", flush=True)
-                    _tb = _atb; _tp = _atp
-                # Строим граф здесь — _tp/_tb уже финальные (локальный или GitHub)
-                try:
-                    with htf_lock:
-                        _htf_d = htf_state["direction"]
-                    print(f"{_ts()} [chart] simulate: candles={len(_cc)} tp={_tp.get('tp_pct')} sl={_tp.get('sl_pct')} htf={_htf_d}", flush=True)
-                    _sim = _simulate(_cc, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d)
-                    _csig = _sim["_signals"] if _sim else []
-                    _cpend = _sim["pending_signal_bar"] if _sim else None
-                    print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0}", flush=True)
-                    _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _cc]
-                    _cur = _fetch_current_candle(symbol, tf)
-                    if _cur and _cc and _cur["t"] > _cc[-1]["t"]:
-                        _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
-                    _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
-                except Exception as _ce:
-                    import traceback
-                    print(f"{_ts()} [chart] Ошибка построения графика: {_ce}\n{traceback.format_exc()}", flush=True)
-                    _csig=[]; _cpend=None; _cfmt=[]; _cpath=""
-                with opt_lock:
-                    _sw_params = _tp
-                    opt_state["trade_best"] = _tb
-                    opt_state["chart_candles"]    = _cfmt
-                    opt_state["chart_signals"]    = _csig
-                    opt_state["chart_pending_bar"] = _cpend
-                    opt_state["chart_path"]       = _cpath or ""
-                    opt_state["chart_updated_at"] = int(time.time())
-            threading.Thread(target=_do_gh_trade_sync, daemon=True).start()
-            # Сразу ставим локальный лучший — фоновый тред перепишет когда готов
+            _cc_src_snap = list(current_candles)  # snapshot свечей для графика
+
+            # GitHub-синхронизация с таймаутом 8с — не блокирует надолго, но и не async
+            # Async вызывал гонку: карточка обновлялась новым best сразу, граф — секунды спустя
+            _tb = all_time_best
+            _tp = dict(all_time_params)
+            try:
+                from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _GTE
+                with _TPE(max_workers=1) as _gex:
+                    _gf = _gex.submit(_gh_fetch_best_for_trading, symbol, tf, days, risk_pct)
+                    try:
+                        _gh_vfit, _gh_best = _gf.result(timeout=8)
+                        if _gh_vfit is not None and _gh_best and _gh_vfit > _local_vfit_snap:
+                            _tb = _gh_best; _tp = dict(_gh_best["params"])
+                            olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit_snap:.2f})", "info")
+                    except _GTE:
+                        print(f"{_ts()} [gh] Таймаут 8с при синхронизации торгового конфига", flush=True)
+            except Exception as _e:
+                print(f"{_ts()} [gh] Ошибка синхронизации: {_e}", flush=True)
+
+            # Строим граф синхронно — карточка и граф всегда из одного конфига
+            try:
+                with htf_lock:
+                    _htf_d = htf_state["direction"]
+                _sim = _simulate(_cc_src_snap, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d)
+                _csig = _sim["_signals"] if _sim else []
+                _cpend = _sim["pending_signal_bar"] if _sim else None
+                print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_cc_src_snap)}", flush=True)
+                _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _cc_src_snap]
+                _cur = _fetch_current_candle(symbol, tf)
+                if _cur and _cc_src_snap and _cur["t"] > _cc_src_snap[-1]["t"]:
+                    _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
+                _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
+            except Exception as _ce:
+                import traceback
+                print(f"{_ts()} [chart] Ошибка: {_ce}\n{traceback.format_exc()}", flush=True)
+                _csig=[]; _cpend=None; _cfmt=[]; _cpath=""
+
             with opt_lock:
-                _sw_params = _trade_params
-                opt_state["trade_best"] = _trade_best
+                _sw_params = _tp
+                opt_state["trade_best"] = _tb
+                opt_state["chart_candles"]     = _cfmt
+                opt_state["chart_signals"]     = _csig
+                opt_state["chart_pending_bar"] = _cpend
+                opt_state["chart_path"]        = _cpath or ""
+                opt_state["chart_updated_at"]  = int(time.time())
 
             # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
             now_ts = time.time()
