@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.282
+WickFill Optimizer v3.283
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.282
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.283: fix перезагрузка свечей теперь привязана к открытию новой свечи по границе TF, а не к elapsed-таймеру — раньше для 5m-TF перезагрузка случалась через ~5-6 мин с дрейфом (зависела от длины цикла оптимизации); теперь вычисляется _next_candle_boundary = (now//tf_sec+1)*tf_sec и перезагрузка происходит ровно когда открылась новая свеча.
 - v3.282: комплексный фикс разрывов/пропажи свечей на графике: (1) render() теперь клампирует viewLen и viewStart в допустимые пределы до любого рисования — исключает пустой vis при любом состоянии массива; (2) fetchLiveCandle: open новой live-свечи берётся из last.c предыдущей закрытой, а не из биржи — нет ценового разрыва между свечами; (3) postMessage prevLive restore: при восстановлении live-свечи синхронизируем её open с close предыдущей свечи из нового массива; (4) tooltip: защита от деления на 0 если vis пустой.
 - v3.281: стрелки сигналов — лонг теперь зелёный (#2ecc71), шорт красный (#e74c3c) вместо синего/оранжевого; добавлены лейблы «L» / «S» рядом со стрелкой для мгновального распознавания направления.
 - v3.280: fix вертикальные разрывы на графике при обновлении через postMessage — когда скользящее окно сдвигало массив свечей (убирало старые) и viewStart не у правого края, старый viewStart оставался неизменным и выходил за пределы нового массива → vis обрезался, слева появлялась пустота. Теперь при wasAtEnd=false viewStart корректируется пропорционально изменению длины массива и клампируется в [0, CANDLES.length-viewLen].
@@ -149,7 +150,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.282"
+APP_VERSION = "3.283"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4101,10 +4102,12 @@ def run_optimizer(params):
     _STAGNATION_THRESH  = 15  # порог: столько циклов без улучшения → встряска
     _last_shake_vfit    = -1e18  # validated_fitness на момент последнего рескрамбла
     # ────────────────────────────────────────────────────────────────────────
-    # Автоперезагрузка свечей: каждые 4 интервала TF
-    _reload_interval_sec = TF_SECONDS.get(tf, 3600) * 1
-    _last_candle_reload  = time.time()
-    olog(f"🔄 Автообновление свечей каждые {_reload_interval_sec//60} мин (1 × {tf})", "info")
+    # Автоперезагрузка свечей: на открытии каждой новой свечи (по границе TF)
+    _tf_sec_reload = TF_SECONDS.get(tf, 3600)
+    def _next_candle_boundary():
+        return (int(time.time()) // _tf_sec_reload + 1) * _tf_sec_reload
+    _next_reload_at = _next_candle_boundary()
+    olog(f"🔄 Автообновление свечей: на открытии каждой новой {tf}-свечи", "info")
     # Сразу заполняем из seed если он есть
     if seed and seed.get("best") and seed["best"].get("params"):
         _s = dict(seed["best"])
@@ -4185,9 +4188,9 @@ def run_optimizer(params):
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
                 olog(f"═══ ЦИКЛ #{cycle} — ПРОДОЛЖЕНИЕ (лучшее за всё время: ${prev_eq:.2f}) ═══", "ok")
 
-        # Между циклами — автоперезагрузка свечей каждый 1 интервал TF
-        if cycle > 1 and infinite and (time.time() - _last_candle_reload) >= _reload_interval_sec:
-            olog(f"🔄 Перезагрузка свечей (прошло {int((time.time()-_last_candle_reload)//60)} мин)...", "info")
+        # Между циклами — автоперезагрузка свечей на открытии новой свечи (по границе TF)
+        if cycle > 1 and infinite and time.time() >= _next_reload_at:
+            olog(f"🔄 Перезагрузка свечей (новая {tf}-свеча)...", "info")
             try:
                 # Загрузка в потоке с таймаутом — не блокируем цикл при зависшей сети
                 _fr_holder = [None]
@@ -4197,7 +4200,6 @@ def run_optimizer(params):
                     fresh_reload = _fr_holder[0]
                 else:
                     olog("⚠ Перезагрузка свечей: таймаут 30с, используем старые", "warn")
-                    _last_candle_reload = time.time()
                     fresh_reload = []
                 if n_candles > 0 and n_candles < len(fresh_reload):
                     fresh_reload = fresh_reload[-n_candles:]
@@ -4212,7 +4214,8 @@ def run_optimizer(params):
                     olog(f"⚠ Перезагрузка не удалась — мало свечей ({len(fresh_reload)}), используем старые", "warn")
             except Exception as _re:
                 olog(f"⚠ Ошибка перезагрузки свечей: {_re}", "warn")
-            _last_candle_reload = time.time()
+            # Следующая перезагрузка — на открытии следующей свечи
+            _next_reload_at = _next_candle_boundary()
 
         # Между циклами — проверяем появление новой свечи и бесшовно сдвигаем окно
         if cycle > 1:
