@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.272: добавлена температура CPU в шапку — новый эндпоинт /cpu_temp читает /sys/class/thermal/thermal_zone*/temp (Termux/Android и Linux), JS опрашивает раз в 15с и показывает плашку с цветовой индикацией (зелёная <60°C, жёлтая 60-75°C, красная >75°C); если датчики недоступны — плашка скрывается.
 - v3.271: fix исчезновение свечи входа при use_next_bar — после v3.269 carry-forward спасал только уже открытые сделки (exit_bar=None), но pending-сигнал (⏳, ещё без записи в _csigs) при сдвиге окна мог "вылетать" целиком: сигнальная свеча уходила за start_i до того, как наступала свеча входа, и вход никогда не появлялся в chart_signals_data → TP/SL не рисовались, а _check_new_candle_signal не находил сигнал на свече входа → автосделки не открывались. Теперь SW-тред хранит chart_pending_info (t+dir последнего ⏳-сигнала); если на новой свече этот сигнал должен был сработать (t == new_candles[-2].t), а в пересчитанных chart_signals_data входа нет — вход синтезируется вручную (ep=close новой свечи, tp/sl из best_p) и добавляется в chart_signals_data, что восстанавливает отображение TP/SL и срабатывание автосделки.
 - v3.270: КРИТИЧЕСКИЙ fix автосделок — функция _gate_close_position была "обезглавлена" (потеряна строка `def _gate_close_position(cfg, contract):`, тело осталось как мёртвый код внутри _gate_cleanup_orphan_orders). Из-за этого _gate_execute_signal падал с NameError на первом же шаге (закрытие старой позиции) при каждой новой сделке → сделки переставали открываться автоматически, gate-результат вообще не попадал в trade-лог. Восстановлена def _gate_close_position; вызов _gate_execute_signal обёрнут в try/except с записью исключения в лог.
 - v3.269: fix исчезновение свечи входа (bar_i) и TP/SL после сдвига скользящего окна (use_next_bar): при пересчёте _simulate на new_candles=candles[1:]+[new_c] свеча входа открытой сделки могла оказаться раньше нового start_i и "теряться" из chart_signals_data. Добавлен _carry_forward_open_signal — переносит ранее открытый сигнал (exit_bar=None) в новый chart_signals_data, пересчитывая TP/SL-закрытие по new_candles, если он не найден после пересчёта.
@@ -138,7 +139,33 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.271"
+APP_VERSION = "3.272"
+
+def _get_cpu_temp():
+    """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
+    try:
+        import glob
+        # Android/Termux и обычный Linux: /sys/class/thermal/thermal_zone*/temp
+        best = None
+        for tz in glob.glob("/sys/class/thermal/thermal_zone*"):
+            try:
+                with open(tz + "/type") as f:
+                    ttype = f.read().strip().lower()
+                with open(tz + "/temp") as f:
+                    raw = int(f.read().strip())
+                # Значения обычно в milli-°C, но на некоторых платформах уже в °C
+                val = raw / 1000.0 if raw > 1000 else float(raw)
+                if val <= 0 or val > 150:
+                    continue
+                if "cpu" in ttype or "soc" in ttype or "tsens" in ttype or best is None:
+                    if best is None or "cpu" in ttype or "soc" in ttype:
+                        best = val
+            except Exception:
+                continue
+        return round(best, 1) if best is not None else None
+    except Exception:
+        return None
+
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5120,6 +5147,7 @@ body>*{position:relative;z-index:1}
 .tb.success:hover{filter:brightness(.93)}
 .tb.danger{color:var(--red)!important}
 .tb.danger:hover{background:var(--red-light)!important;border-color:rgba(139,58,58,.25)!important}
+.tb.warn{color:#b8860b!important}
 /* legacy aliases */
 .pill,.icon-btn{box-sizing:border-box}
 
@@ -5652,6 +5680,10 @@ details summary::-webkit-details-marker{display:none}
     </span>
     <span id="statusBadge2"></span>
 
+    <span class="tb" id="cpuTempPill" style="display:none" title="Температура CPU">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M5 1.5h2v5.6a2.2 2.2 0 11-2 0V1.5z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="9" r="1" fill="currentColor"/></svg>
+      <span id="cpuTempText">—</span>
+    </span>
     <span class="tb btn" id="latencyPill" onclick="checkApi()" title="Задержка API Gate.io">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       <span id="latencyText">— мс</span>
@@ -5951,6 +5983,25 @@ function checkApi(){
   }).catch(()=>{if(txt)txt.textContent='офлайн';else if(pill)pill.textContent='офлайн';pill&&pill.classList.toggle('green',false);});
 }
 checkApi();setInterval(checkApi,60000);
+
+/* ── CPU temp ── */
+function checkCpuTemp(){
+  fetch('/cpu_temp').then(r=>r.json()).then(d=>{
+    const pill=document.getElementById('cpuTempPill');
+    const txt=document.getElementById('cpuTempText');
+    if(!pill||!txt) return;
+    if(d.temp!=null){
+      pill.style.display='';
+      txt.textContent=d.temp.toFixed(1)+'°C';
+      pill.classList.toggle('green', d.temp<60);
+      pill.classList.toggle('warn', d.temp>=60 && d.temp<75);
+      pill.classList.toggle('danger', d.temp>=75);
+    } else {
+      pill.style.display='none';
+    }
+  }).catch(()=>{});
+}
+checkCpuTemp();setInterval(checkCpuTemp,15000);
 // Каждую секунду обновляем текст "нет соединения Xs"
 setInterval(()=>{ if(_connLost) _setConnStatus(false); },1000);
 // Стандартные browser events как доп. триггер
@@ -7298,6 +7349,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "error": f"HTTP {r.status_code}"})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)})
+        elif parsed.path == "/cpu_temp":
+            self._json({"temp": _get_cpu_temp()})
         elif parsed.path == "/ping":
             result={"ok":False,"ms":None,"error":""}
             try:
