@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.280
+WickFill Optimizer v3.281
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.280
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.281: стрелки сигналов — лонг теперь зелёный (#2ecc71), шорт красный (#e74c3c) вместо синего/оранжевого; добавлены лейблы «L» / «S» рядом со стрелкой для мгновального распознавания направления.
 - v3.280: fix вертикальные разрывы на графике при обновлении через postMessage — когда скользящее окно сдвигало массив свечей (убирало старые) и viewStart не у правого края, старый viewStart оставался неизменным и выходил за пределы нового массива → vis обрезался, слева появлялась пустота. Теперь при wasAtEnd=false viewStart корректируется пропорционально изменению длины массива и клампируется в [0, CANDLES.length-viewLen].
 - v3.279: убрана дублирующая кнопка AMOLED (amoledBtnMob) из action-row сайдбара рядом с Restart — она дублировала переключатель AMOLED в шапке.
 - v3.278: убран отдельный блок AMOLED из строки Старт/Стоп/Эко (занимал заметное место рядом с кнопкой запуска); переключатель перенесён в action-row маленькой иконкой-тумблером рядом с Restart.
@@ -147,7 +148,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.280"
+APP_VERSION = "3.281"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2214,12 +2215,20 @@ function render(){{
     const arrowSz=Math.max(4,Math.min(7,cw*0.45));
     const arrowOff=Math.max(14,Math.min(22,cw*2.2));
     const isOpenEnd=s.open_end===true,isWin=s.win===true;
-    ctx.fillStyle=isLong?'#4a7fc1':'#c8902a';
-    ctx.strokeStyle=isOpenEnd?'#c0a888':s.win===null?'#c0a888':isWin?'#A3BF6F':'#FF8234';
+    // Лонг=зелёный, шорт=красный; обводка по результату сделки
+    const arrowFill=isLong?'#2ecc71':'#e74c3c';
+    const arrowStroke=isOpenEnd?'#c0a888':s.win===null?'#c0a888':isWin?'#A3BF6F':'#FF8234';
+    ctx.fillStyle=arrowFill;
+    ctx.strokeStyle=arrowStroke;
     ctx.lineWidth=1.5;ctx.beginPath();
     if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
+    // Лейбл L / S рядом со стрелкой
+    ctx.font=`bold ${{Math.max(8,Math.min(10,cw*1.2))}}px system-ui`;ctx.textAlign='center';
+    ctx.fillStyle=arrowFill;
+    if(isLong){{ctx.fillText('L',x,py(c_sig.l)+arrowOff+arrowSz+10);}}
+    else{{ctx.fillText('S',x,py(c_sig.h)-arrowOff-arrowSz-3);}}
     if(_showLabels&&!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
