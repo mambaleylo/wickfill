@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.283
+WickFill Optimizer v3.284
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.283
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.284: fix плечо не отображалось в Telegram-уведомлении — _sig_leverage искал поле "leverage" в trade_best/params, но оно там не хранится (leverage не в PARAM_SPACE); теперь вычисляется тем же способом что при открытии сделки на Gate: max(1, round(risk_pct / sl_pct)); убрано условие "> 1" — плечо показывается всегда (включая 1×).
 - v3.283: fix перезагрузка свечей теперь привязана к открытию новой свечи по границе TF, а не к elapsed-таймеру — раньше для 5m-TF перезагрузка случалась через ~5-6 мин с дрейфом (зависела от длины цикла оптимизации); теперь вычисляется _next_candle_boundary = (now//tf_sec+1)*tf_sec и перезагрузка происходит ровно когда открылась новая свеча.
 - v3.282: комплексный фикс разрывов/пропажи свечей на графике: (1) render() теперь клампирует viewLen и viewStart в допустимые пределы до любого рисования — исключает пустой vis при любом состоянии массива; (2) fetchLiveCandle: open новой live-свечи берётся из last.c предыдущей закрытой, а не из биржи — нет ценового разрыва между свечами; (3) postMessage prevLive restore: при восстановлении live-свечи синхронизируем её open с close предыдущей свечи из нового массива; (4) tooltip: защита от деления на 0 если vis пустой.
 - v3.281: стрелки сигналов — лонг теперь зелёный (#2ecc71), шорт красный (#e74c3c) вместо синего/оранжевого; добавлены лейблы «L» / «S» рядом со стрелкой для мгновального распознавания направления.
@@ -150,7 +151,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.283"
+APP_VERSION = "3.284"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1607,7 +1608,7 @@ def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leve
     close_t = candle_t + TF_SECONDS.get(tf, 3600)
     moscow_offset = 3 * 3600  # UTC+3
     dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
-    lev_str = f"\n⚡ Плечо: <b>{int(leverage)}×</b>" if leverage and int(leverage) > 1 else ""
+    lev_str = f"\n⚡ Плечо: <b>{int(leverage)}×</b>" if leverage else ""
     text = (
         f"🔔 <b>WickFill Сигнал</b>\n\n"
 
@@ -2678,16 +2679,9 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         if candle_t <= last_signal_t:
             continue  # уже отправляли
         ep = s["ep"]; tp = s["tp"]; sl = s["sl"]; direction = s["dir"]
-        # Читаем плечо из конфига, который реально используется для торговли (синхронизирован с GitHub)
-        with opt_lock:
-            _best_for_lev = opt_state.get("trade_best") or opt_state.get("all_time_best") or opt_state.get("best") or {}
-        _sig_leverage = (_best_for_lev.get("leverage") or
-                         (_best_for_lev.get("params") or {}).get("leverage") or 1)
-        if symbol and symbol in opt_states:
-            with opt_states_lock:
-                _sym_best = opt_states[symbol].get("trade_best") or opt_states[symbol].get("best") or {}
-            _sig_leverage = (_sym_best.get("leverage") or
-                             (_sym_best.get("params") or {}).get("leverage") or _sig_leverage)
+        # Вычисляем плечо так же, как при открытии сделки на Gate: risk_pct / sl_pct
+        _sl_pct_val = float((best_params or {}).get("sl_pct") or 0)
+        _sig_leverage = max(1, round(risk_pct / _sl_pct_val)) if _sl_pct_val > 0 else 1
         # 1. Телеграм/ntfy уведомление
         tg_ok = _send_signal_email(alert_cfg, symbol, tf, direction, ep, tp, sl, candle_t,
                                     leverage=_sig_leverage)
