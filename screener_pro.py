@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.257
+WickFill Optimizer v3.258
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.258: fix подмены сигналов на графике после цикла 1 (мульти-символ): когда новый цикл
+  слабее рекорда (s["best"] не обновляется), chart_signals всё равно перезаписывались
+  сигналами текущего слабого цикла → "Лучшая комбинация" и график расходились.
+  Теперь в этом случае сигналы пересчитываются _simulate() под s["best"]["params"]
+  на новых свечах, чтобы график соответствовал отображаемой лучшей комбинации.
 - v3.257: fix гонка карточка/граф — убрана асинхронность _do_gh_trade_sync;
   теперь GitHub-синк синхронный с таймаутом 8с, затем граф строится сразу;
   карточка и граф атомарно записываются в opt_state вместе → никакой гонки
@@ -90,7 +95,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.257"
+APP_VERSION = "3.258"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4374,6 +4379,9 @@ def _run_multi_safe(sym_list, base_params):
                         s["min_stable_days"] = min_stable
                         s["days"]     = days_v
                         s["chart_tf"] = chart_tf  # всегда обновляем tf
+                        prev_eq = s.get("eq", 0)
+                        new_eq  = round((best or {}).get("equity", 100), 2) if best else -1
+                        record_kept = best and new_eq < prev_eq and "best" in s  # рекорд из прошлого цикла важнее текущего
                         # Обновляем данные графика: берём лучшее что есть
                         if chart_upd > 0:
                             # Полный снапшот с готовым графиком
@@ -4390,9 +4398,20 @@ def _run_multi_safe(sym_list, base_params):
                                 s["chart_updated_at"] = -1
                         elif "chart_updated_at" not in s:
                             s["chart_updated_at"] = -1
+                        # Если показанные WR/DD/Сделок относятся к рекорду s["best"] (текущий цикл слабее),
+                        # а chart_signals только что перезаписаны сигналами текущего (более слабого) цикла —
+                        # пересчитываем сигналы под s["best"]["params"] на новых свечах, чтобы график
+                        # соответствовал отображаемой "Лучшей комбинации".
+                        if record_kept and s.get("chart_candles"):
+                            try:
+                                rec_sim = _simulate(
+                                    [{"t":c["t"],"open":c["o"],"high":c["h"],"low":c["l"],"close":c["c"]} for c in s["chart_candles"]],
+                                    dict(s["best"]["params"]), 0, _collect=True, risk_pct=risk_pct
+                                )
+                                s["chart_signals"] = rec_sim["_signals"] if rec_sim else []
+                            except Exception as e:
+                                print(f"[multi] ИСКЛЮЧЕНИЕ resync chart_signals {sym}: {e}\n{traceback.format_exc()}", flush=True)
                         if best:
-                            prev_eq = s.get("eq", 0)
-                            new_eq  = round(best.get("equity", 100), 2)
                             s["trade_best"] = best  # для торговли/плеча — всегда обновляем (учитывает GitHub-синхронизацию)
                             if new_eq >= prev_eq:
                                 s["best"]   = best
