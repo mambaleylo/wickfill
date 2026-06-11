@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.267
+WickFill Optimizer v3.268
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.267
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.268: диагностика trade_best — добавлено подробное логирование выбора trade_best в конце каждого цикла (локальный vs GitHub vfit); _tb теперь берётся как dict(all_time_best) вместо ссылки — исключает мутацию _tb через WF slope penalty; в логах теперь видно почему показывается тот или иной конфиг
 - v3.267: fix дублирующееся сохранение одинакового конфига на GitHub — _auto_save_config теперь пропускает PUT если файл с точно таким же именем уже существует на GitHub (имя содержит equity/sl/tp — идентичный конфиг); раньше при стагнации/WF-пересчёте validated_fitness мог незначительно меняться и снова проходить проверку _last_autosave_vfit > порог, что триггерило повторный PUT того же файла
 - v3.266: fix "Лучшая комбинация" показывала all_time_best (локальный рекорд перебора) вместо trade_best (финальный конфиг с учётом GitHub) — карточка и график теперь всегда показывают один и тот же конфиг; /opt_status теперь отдаёт trade_best, JS-поллинг использует d.trade_best||d.all_time_best||d.best для renderBest и renderValid
 - v3.265: fix расхождение сигналов на графике (SW-тред vs оптимизатор) при включённом HTF-фильтре — _sliding_window_thread принимает htf_index и передаёт его в _simulate; раньше SW передавал только скалярный htf_direction (текущее направление), тогда как оптимизатор передаёт полный htf_index (список ts/dir для bisect), из-за чего SW расставлял сделки с HTF-фильтром на основе текущего направления вместо исторического → сигналы не совпадали с конфигом; исправлено во всех 4 точках запуска SW-треда (single и multi)
@@ -134,7 +135,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.267"
+APP_VERSION = "3.268"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4132,7 +4133,7 @@ def run_optimizer(params):
 
             # GitHub-синхронизация с таймаутом 8с — не блокирует надолго, но и не async
             # Async вызывал гонку: карточка обновлялась новым best сразу, граф — секунды спустя
-            _tb = all_time_best
+            _tb = dict(all_time_best)
             _tp = dict(all_time_params)
             try:
                 from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _GTE
@@ -4143,6 +4144,8 @@ def run_optimizer(params):
                         if _gh_vfit is not None and _gh_best and _gh_vfit > _local_vfit_snap:
                             _tb = _gh_best; _tp = dict(_gh_best["params"])
                             olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit_snap:.2f})", "info")
+                        else:
+                            olog(f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (gh_vfit={_gh_vfit:.2f} local={_local_vfit_snap:.2f})" if _gh_vfit is not None else f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (GitHub пуст)", "info")
                     except _GTE:
                         print(f"{_ts()} [gh] Таймаут 8с при синхронизации торгового конфига", flush=True)
             except Exception as _e:
