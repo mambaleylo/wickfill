@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.254
+WickFill Optimizer v3.255
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.255: fix _live_candle_updater использовал opt_state["best"] (локальный) вместо
+  trade_best (финальный с учётом GitHub) при перезагрузке устаревшего графика;
+  также перезагрузка теперь берёт _sw_candles вместо отдельного _fetch_candles(3д)
 - v3.254: fix граф снова расходится после 1-го цикла — два источника:
   1) SW-тред при старте перезагружал свечи с биржи вместо использования candles оптимизатора;
   2) воркеры не переинициализировались между циклами — считали на стартовых свечах
@@ -82,7 +85,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.254"
+APP_VERSION = "3.255"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -260,7 +263,8 @@ def _live_candle_updater():
                 symbol   = opt_state.get("chart_symbol", "")
                 tf       = opt_state.get("chart_tf", "")
                 cc       = opt_state.get("chart_candles", [])
-                best     = opt_state.get("best", None)
+                # Используем trade_best (финальный — локальный или GitHub) а не best (только локальный)
+                best     = opt_state.get("trade_best") or opt_state.get("best", None)
                 running  = opt_state.get("running", False)
 
             if symbol and tf:
@@ -275,16 +279,12 @@ def _live_candle_updater():
                 if stale and not running and best and (now - _last_refresh) > 60:
                     print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
-                        fresh = _fetch_candles(symbol, tf, 3)
-                        # _fetch_candles уже обрезает незакрытую, но на всякий случай доп. проверка
-                        if fresh:
-                            _sw_now2 = int(time.time())
-                            _sw_iv2  = TF_SECONDS.get(tf, 3600)
-                            if fresh[-1]["t"] + _sw_iv2 > _sw_now2:
-                                _sw_dropped = fresh.pop()
-                                print(f"{_ts()} [SW] ✂ Убрана незакрытая свеча t={_sw_dropped['t']}", flush=True)
+                        # Берём _sw_candles — те же что у оптимизатора/SW-треда, не загружаем отдельно
+                        with opt_lock:
+                            fresh = list(_sw_candles) if _sw_candles else []
+                        if not fresh:
+                            fresh = _fetch_candles(symbol, tf, 3)
                         if fresh and len(fresh) > 10:
-                            # Пересчитываем сигналы с лучшими параметрами
                             best_p = best.get("params", {})
                             if best_p:
                                 sim = _simulate(fresh, best_p, 0, _collect=True)
@@ -294,16 +294,15 @@ def _live_candle_updater():
                             new_cc = [{"t":c["t"],"o":c["open"],"h":c["high"],
                                        "l":c["low"],"c":c["close"]} for c in fresh]
                             with opt_lock:
-                                # Проверяем что символ не сменился пока грузили данные
                                 if opt_state.get("chart_symbol", "") == symbol:
                                     opt_state["chart_candles"] = new_cc
                                     opt_state["chart_signals"]  = sigs
                                     cc = new_cc
                                     _last_refresh = now
                                     _net_errors = 0
-                                    print(f"{_ts()} [SW] ✅ Перезагружено {len(fresh)} свечей", flush=True)
+                                    print(f"{_ts()} [SW] ✅ Обновлено {len(fresh)} свечей из _sw_candles", flush=True)
                                 else:
-                                    print(f"{_ts()} [SW] ⚠ Символ сменился во время загрузки, данные отброшены", flush=True)
+                                    print(f"{_ts()} [SW] ⚠ Символ сменился, данные отброшены", flush=True)
                     except Exception as e:
                         _net_errors += 1
                         print(f"{_ts()} [SW] ❌ Ошибка перезагрузки: {e}", flush=True)
