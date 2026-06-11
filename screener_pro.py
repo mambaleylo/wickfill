@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.258
+WickFill Optimizer v3.259
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.259: настоящий fix подмены сигналов после цикла 1 (мульти-символ). Корень проблемы:
+  на каждом цикле >1 _sw_state[sym]["params"] безусловно перезаписывался best_params
+  ТЕКУЩЕГО цикла (даже если он слабее рекорда и s["best"] не менялся). SW-тред
+  использует эти params для пересчёта chart_signals на каждой новой свече и перетирал
+  сигналы рекорда сразу после v3.258-фикса. Теперь _sw_state[sym]["params"] берётся
+  из s["trade_best"]["params"] — актуального торгового конфига, который соответствует
+  отображаемой "Лучшей комбинации".
 - v3.258: fix подмены сигналов на графике после цикла 1 (мульти-символ): когда новый цикл
   слабее рекорда (s["best"] не обновляется), chart_signals всё равно перезаписывались
   сигналами текущего слабого цикла → "Лучшая комбинация" и график расходились.
@@ -95,7 +102,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.258"
+APP_VERSION = "3.259"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4426,9 +4433,16 @@ def _run_multi_safe(sym_list, base_params):
                     print(f"[multi] ИСКЛЮЧЕНИЕ snapshot {sym}: {e}\n{traceback.format_exc()}", flush=True)
                 # Запускаем per-symbol SW-тред после первого цикла (один раз на символ)
                 try:
-                    if sym_cycles[sym] == 1 and best_params:
+                    # Берём параметры из s["trade_best"] (актуальный торговый конфиг,
+                    # синхронизированный с GitHub и с отображаемой "Лучшей комбинацией"),
+                    # а не сырой best_params текущего (возможно более слабого) цикла —
+                    # иначе SW-тред пересчитывает chart_signals под чужие параметры
+                    # и перетирает только что синхронизированный график.
+                    with opt_states_lock:
+                        sw_params = dict((opt_states.get(sym, {}).get("trade_best") or {}).get("params") or best_params)
+                    if sym_cycles[sym] == 1 and sw_params:
                         with _sw_state_lock:
-                            _sw_state[sym]["params"] = best_params
+                            _sw_state[sym]["params"] = sw_params
                             _sw_state[sym]["risk"]   = risk_pct
                         already = _sw_threads.get(sym)
                         if not already or not already.is_alive():
@@ -4441,10 +4455,10 @@ def _run_multi_safe(sym_list, base_params):
                             _sw_threads[sym] = t
                             t.start()
                             print(f"[multi] SW-тред запущен для {sym}", flush=True)
-                    elif sym_cycles[sym] > 1 and best_params:
+                    elif sym_cycles[sym] > 1 and sw_params:
                         with _sw_state_lock:
                             if sym in _sw_state:
-                                _sw_state[sym]["params"] = best_params
+                                _sw_state[sym]["params"] = sw_params
                 except Exception as e:
                     print(f"[multi] ИСКЛЮЧЕНИЕ SW-тред {sym}: {e}\n{traceback.format_exc()}", flush=True)
     except Exception as e:
