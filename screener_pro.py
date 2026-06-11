@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.251
+WickFill Optimizer v3.252
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.252: fix crash после цикла — NameError: chart_candles_window is not defined (осталась старая ссылка после переименования переменной в v3.250)
 - v3.251: fix зависание перебора на любом параметре (напр. "Гео-1 — возврат N баров") — pmap теперь использует as_completed с таймаутом вместо pool.map без таймаута; если воркер завис (OOM, segfault, Android kill) — батч продолжается с дефолтным результатом для зависших кандидатов, а не висит вечно
 - v3.250: fix расхождение числа сделок на графике vs лучший конфиг (финальный) — граф теперь строится строго на current_candles с days_limit=0, как и воркеры оптимизатора; предыдущий патч v3.247 ошибочно применял days_limit=days внутри _simulate что давало другое окно чем у воркеров; исправлено в одиночном и мультисимвол режимах
 - v3.249: fix конфиги перестали сохраняться на GitHub — у функции _auto_save_config пропала строка def (осталось только тело), из-за чего вызов падал с NameError и сохранения не происходило
@@ -76,7 +77,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.251"
+APP_VERSION = "3.252"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2586,7 +2587,14 @@ def _try_slide_window(symbol, tf, olog):
     Вызывается между циклами оптимизатора. Не блокирует, не ждёт."""
     global _sw_candles
     try:
-        new_c = _fetch_latest_candle(symbol, tf)
+        # Запрашиваем свечу в отдельном потоке с таймаутом — защита от зависшего сокета
+        _nc_holder = [None]
+        def _fetch(): _nc_holder[0] = _fetch_latest_candle(symbol, tf)
+        _t = threading.Thread(target=_fetch, daemon=True); _t.start(); _t.join(timeout=15)
+        if _t.is_alive():
+            print(f"[slide] Таймаут _fetch_latest_candle — пропускаем", flush=True)
+            return False
+        new_c = _nc_holder[0]
         if not new_c:
             return False
         with opt_lock:
@@ -3931,7 +3939,16 @@ def run_optimizer(params):
         if cycle > 1 and infinite and (time.time() - _last_candle_reload) >= _reload_interval_sec:
             olog(f"🔄 Перезагрузка свечей (прошло {int((time.time()-_last_candle_reload)//60)} мин)...", "info")
             try:
-                fresh_reload = _fetch_candles(symbol, tf, days)
+                # Загрузка в потоке с таймаутом — не блокируем цикл при зависшей сети
+                _fr_holder = [None]
+                def _do_reload(): _fr_holder[0] = _fetch_candles(symbol, tf, days)
+                _fr_t = threading.Thread(target=_do_reload, daemon=True); _fr_t.start(); _fr_t.join(timeout=30)
+                if not _fr_t.is_alive() and _fr_holder[0]:
+                    fresh_reload = _fr_holder[0]
+                else:
+                    olog("⚠ Перезагрузка свечей: таймаут 30с, используем старые", "warn")
+                    _last_candle_reload = time.time()
+                    fresh_reload = []
                 if n_candles > 0 and n_candles < len(fresh_reload):
                     fresh_reload = fresh_reload[-n_candles:]
                 if len(fresh_reload) >= 30:
@@ -4026,16 +4043,28 @@ def run_optimizer(params):
             # для торговли используем его, а не локальный all_time_best ---
             _trade_best = all_time_best
             _trade_params = all_time_params
-            try:
-                _gh_vfit, _gh_best = _gh_fetch_best_for_trading(symbol, tf, days, risk_pct)
-                _local_vfit = all_time_best.get("validated_fitness")
-                _local_vfit = _local_vfit if _local_vfit is not None else all_time_best.get("fitness", -1e18)
-                if _gh_vfit is not None and _gh_best and _gh_vfit > _local_vfit:
-                    _trade_best = _gh_best
-                    _trade_params = dict(_gh_best["params"])
-                    olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit:.2f})", "info")
-            except Exception as _e:
-                print(f"{_ts()} [gh] Ошибка синхронизации торгового конфига: {_e}", flush=True)
+            # GitHub-синхронизация торгового конфига — в фоновом потоке, не блокирует цикл
+            _local_vfit_snap = all_time_best.get("validated_fitness")
+            _local_vfit_snap = _local_vfit_snap if _local_vfit_snap is not None else all_time_best.get("fitness", -1e18)
+            _atb_snap = dict(all_time_best)
+            _atp_snap = dict(all_time_params)
+            def _do_gh_trade_sync(_atb=_atb_snap, _atp=_atp_snap, _lv=_local_vfit_snap):
+                global _sw_params
+                try:
+                    _gh_vfit, _gh_best = _gh_fetch_best_for_trading(symbol, tf, days, risk_pct)
+                    if _gh_vfit is not None and _gh_best and _gh_vfit > _lv:
+                        _tb = _gh_best; _tp = dict(_gh_best["params"])
+                        olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_lv:.2f})", "info")
+                    else:
+                        _tb = _atb; _tp = _atp
+                except Exception as _e:
+                    print(f"{_ts()} [gh] Ошибка синхронизации торгового конфига: {_e}", flush=True)
+                    _tb = _atb; _tp = _atp
+                with opt_lock:
+                    _sw_params = _tp
+                    opt_state["trade_best"] = _tb
+            threading.Thread(target=_do_gh_trade_sync, daemon=True).start()
+            # Сразу ставим локальный лучший — фоновый тред перепишет если GitHub лучше
             with opt_lock:
                 _sw_params = _trade_params
                 opt_state["trade_best"] = _trade_best
@@ -4181,7 +4210,7 @@ def run_optimizer(params):
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_src]
             # Добавляем незакрытую свечу только для отображения
             cur_c = _fetch_current_candle(symbol, tf)
-            if cur_c and cur_c["t"] > chart_candles_window[-1]["t"]:
+            if cur_c and cur_c["t"] > chart_candles_src[-1]["t"]:
                 chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
             # На графике всегда лучший прогон — локальный или с GitHub (см. _trade_best выше)
             chart_path = _save_chart(chart_candles_fmt, chart_signals, _trade_best, symbol, tf, risk_pct)
