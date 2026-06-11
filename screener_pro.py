@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.286: fix вертикальный разрыв между свечами после обновления свечей для перебора: (1) в SW-треде при построении chart_candles_fmt open live-свечи теперь берётся из close последней закрытой свечи new_candles[-1], а не с биржи (cur_c2["open"]) — устраняет ценовой разрыв при постмесседж-обновлении после каждого цикла оптимизатора; (2) в _live_candle_updater: live_c.open = last_closed["c"] вместо c["open"]; при обновлении существующей live-свечи обновляются только HLC (open не перезаписывается чтобы не сбить anchored open).
 - v3.285: fix мигание графика и вертикальные разрывы между свечами: (1) rAF-батчинг — введён schedRender() с флагом _rafPending, все вызовы render за один кадр сводятся в один requestAnimationFrame — нет промежуточных пустых кадров; (2) canvas resize только при реальном изменении размера — раньше canvas.width=... при каждом render сбрасывал canvas вызывая мигание; теперь resize пропускается если W/H/dpr не изменились; (3) убран _scheduleZoomReset — прыжок viewport через 5 секунд после зума выглядел как разрыв свечей.
 - v3.284: fix плечо не отображалось в Telegram-уведомлении — _sig_leverage искал поле "leverage" в trade_best/params, но оно там не хранится (leverage не в PARAM_SPACE); теперь вычисляется тем же способом что при открытии сделки на Gate: max(1, round(risk_pct / sl_pct)); убрано условие "> 1" — плечо показывается всегда (включая 1×).
 - v3.283: fix перезагрузка свечей теперь привязана к открытию новой свечи по границе TF, а не к elapsed-таймеру — раньше для 5m-TF перезагрузка случалась через ~5-6 мин с дрейфом (зависела от длины цикла оптимизации); теперь вычисляется _next_candle_boundary = (now//tf_sec+1)*tf_sec и перезагрузка происходит ровно когда открылась новая свеча.
@@ -152,7 +153,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.285"
+APP_VERSION = "3.286"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -414,14 +415,22 @@ def _live_candle_updater():
                         else:
                             cc2 = list(opt_state.get("chart_candles", []))
                             if cc2:
-                                live_c = {"t":c["t"],"o":c["open"],"h":c["high"],
-                                          "l":c["low"],"c":c["close"],"live":True}
                                 last_closed = next((x for x in reversed(cc2) if not x.get("live")), None)
                                 last_closed_t = last_closed["t"] if last_closed else 0
+                                # open live-свечи = close последней закрытой — нет ценового разрыва
+                                _lc_open = last_closed["c"] if last_closed else c["open"]
+                                live_c = {"t":c["t"],"o":_lc_open,
+                                          "h":max(_lc_open, c["high"]),
+                                          "l":min(_lc_open, c["low"]),
+                                          "c":c["close"],"live":True}
                                 if cc2[-1].get("live"):
                                     # Обновляем существующую live-свечу только если t совпадает
                                     if c["t"] == cc2[-1]["t"]:
-                                        cc2[-1] = live_c
+                                        # Только HLC и close обновляем, open не трогаем
+                                        cc2[-1]["h"] = max(cc2[-1]["h"], c["high"])
+                                        cc2[-1]["l"] = min(cc2[-1]["l"], c["low"])
+                                        cc2[-1]["c"] = c["close"]
+                                        cc2[-1] = dict(cc2[-1])
                                         opt_state["chart_candles"] = cc2
                                     elif c["t"] > cc2[-1]["t"]:
                                         # Новый интервал — убираем старую live и добавляем новую
@@ -2994,7 +3003,13 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
             cur_c2 = _fetch_current_candle(symbol, tf)
             if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
-                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
+                # open live-свечи = close последней закрытой — нет ценового разрыва
+                _live_open = new_candles[-1]["close"]
+                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],
+                    "o":_live_open,
+                    "h":max(_live_open, cur_c2["high"]),
+                    "l":min(_live_open, cur_c2["low"]),
+                    "c":cur_c2["close"],"live":True}]
 
             _set_candles(new_candles)
 
