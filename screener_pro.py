@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.268
+WickFill Optimizer v3.269
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.268
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.269: fix исчезновение свечи входа (bar_i) и TP/SL после сдвига скользящего окна (use_next_bar): при пересчёте _simulate на new_candles=candles[1:]+[new_c] свеча входа открытой сделки могла оказаться раньше нового start_i и "теряться" из chart_signals_data. Добавлен _carry_forward_open_signal — переносит ранее открытый сигнал (exit_bar=None) в новый chart_signals_data, пересчитывая TP/SL-закрытие по new_candles, если он не найден после пересчёта.
 - v3.268: диагностика trade_best — добавлено подробное логирование выбора trade_best в конце каждого цикла (локальный vs GitHub vfit); _tb теперь берётся как dict(all_time_best) вместо ссылки — исключает мутацию _tb через WF slope penalty; в логах теперь видно почему показывается тот или иной конфиг
 - v3.267: fix дублирующееся сохранение одинакового конфига на GitHub — _auto_save_config теперь пропускает PUT если файл с точно таким же именем уже существует на GitHub (имя содержит equity/sl/tp — идентичный конфиг); раньше при стагнации/WF-пересчёте validated_fitness мог незначительно меняться и снова проходить проверку _last_autosave_vfit > порог, что триггерило повторный PUT того же файла
 - v3.266: fix "Лучшая комбинация" показывала all_time_best (локальный рекорд перебора) вместо trade_best (финальный конфиг с учётом GitHub) — карточка и график теперь всегда показывают один и тот же конфиг; /opt_status теперь отдаёт trade_best, JS-поллинг использует d.trade_best||d.all_time_best||d.best для renderBest и renderValid
@@ -80,7 +81,7 @@ WickFill Optimizer v3.268
 - v3.203: _find_auto_config — убран локальный фолбек, только GitHub; при пустом GitHub — старт с нуля
 - v3.204: детерминированная граница окна на графике — cutoff по последней свече датасета вместо time.time(); _simulate принимает now_ts для стабильных days_limit
 - v3.205: _clamp_tp зажимает sl_pct/tp_pct к текущим границам UI; seed при загрузке зажимается через _clamp_sl_tp_to_bounds — оптимизатор не выходит за wf_sl_min/max, wf_tp_min/max
-- v3.206: таблица лучшей комбинации и stat-grid показывают «Вход след.св.» (use_next_bar да/нет)
+- v3.268: таблица лучшей комбинации и stat-grid показывают «Вход след.св.» (use_next_bar да/нет)
 - v3.211: _fetch_candles обрезает незакрытую последнюю свечу (t+interval>now); при stale-reload тоже
 - v3.207: Вход ✔ след.св. / ✘ тек.св. вместо да/нет
 - v3.208: убран !important с #recentBody — панель конфигов открывается после стопа
@@ -135,7 +136,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.268"
+APP_VERSION = "3.269"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2406,6 +2407,63 @@ def _write_trade_log(symbol, tf, line):
             print(f"[trade_log] ошибка GitHub: {e}", flush=True)
     threading.Thread(target=_push, daemon=True).start()
 
+def _carry_forward_open_signal(prev_signals, new_signals, new_candles):
+    """
+    При сдвиге скользящего окна (new_candles = candles[1:] + [new_c]) свеча входа открытой
+    сделки может оказаться раньше нового start_i внутри _simulate, и пересчёт _csigs
+    "теряет" эту сделку (бар входа + TP/SL пропадают с графика), хотя в реальности
+    позиция ещё открыта (TP/SL ещё не выбиты).
+
+    Здесь проверяем: был ли в prev_signals открытый сигнал (exit_bar is None, не open_end),
+    и есть ли в new_signals сигнал с тем же временем входа (t). Если нет — переносим
+    старый сигнал, пересчитав возможное закрытие (TP/SL) по новым свечам new_candles.
+    """
+    if not prev_signals:
+        return new_signals
+    prev_open = next((s for s in prev_signals
+                       if s.get("exit_bar") is None and not s.get("open_end")), None)
+    if not prev_open:
+        return new_signals
+    # Уже есть в новых сигналах (по времени входа)?
+    if any(s.get("t") == prev_open.get("t") and s.get("exit_bar") is None and not s.get("open_end")
+           for s in new_signals):
+        return new_signals
+    # Найдём индекс свечи входа в new_candles по timestamp
+    t_in = prev_open.get("t")
+    bar_i = next((i for i, c in enumerate(new_candles) if c.get("t") == t_in), None)
+    if bar_i is None:
+        # Свеча входа уже выпала из окна — отбрасываем сигнал
+        return new_signals
+
+    sig = dict(prev_open)
+    sig["bar_i"] = bar_i
+    if sig.get("signal_bar") is not None:
+        sig["signal_bar"] = max(0, bar_i - 1)
+
+    t_dir = sig["dir"]; t_tp = sig["tp"]; t_sl = sig["sl"]
+    exit_bar = None; win = None; exit_p = None
+    for i in range(bar_i + 1, len(new_candles)):
+        c = new_candles[i]
+        hi, lo, op = c["high"], c["low"], c["open"]
+        hit_tp = (t_dir == 1 and hi >= t_tp) or (t_dir == -1 and lo <= t_tp)
+        hit_sl = (t_dir == 1 and lo <= t_sl) or (t_dir == -1 and hi >= t_sl)
+        if hit_tp or hit_sl:
+            tp_win = hit_tp and not hit_sl
+            if hit_tp and hit_sl:
+                tp_win = abs(op - t_tp) <= abs(op - t_sl)
+            exit_bar = i
+            win = tp_win
+            exit_p = t_tp if tp_win else t_sl
+            break
+
+    sig["exit_bar"] = exit_bar
+    sig["win"] = win
+    if exit_p is not None:
+        sig["exit_p"] = exit_p
+
+    return new_signals + [sig]
+
+
 def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pct=None, sl_pct=None):
     """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
     if not alert_cfg or not prev_signals or not new_signals:
@@ -2800,15 +2858,8 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
         if best_p:
             with htf_lock:
                 _htf_dir = htf_state["direction"]
-            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
-            chart_signals_data = sim["_signals"] if sim else []
-            _sw_pending_bar = sim["pending_signal_bar"] if sim else None
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
-            cur_c2 = _fetch_current_candle(symbol, tf)
-            if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
-                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
 
-            # prev_signals для проверки закрытия сделки
+            # prev_signals для проверки закрытия сделки и для carry-forward открытого сигнала
             prev_signals_for_close = []
             with opt_lock:
                 if not is_multi or symbol == _active_chart_symbol:
@@ -2816,6 +2867,20 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             if is_multi:
                 with opt_states_lock:
                     prev_signals_for_close = list(opt_states.get(symbol, {}).get("chart_signals") or []) or prev_signals_for_close
+
+            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
+            chart_signals_data = sim["_signals"] if sim else []
+            _sw_pending_bar = sim["pending_signal_bar"] if sim else None
+
+            # Carry-forward: если предыдущий открытый сигнал (exit_bar=None / open_end) "вылетел"
+            # из chart_signals_data из-за сдвига окна (start_i), но его свеча t ещё в new_candles
+            # и TP/SL ещё не выбит — переносим его, пересчитав exit на новых свечах.
+            chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles)
+
+            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
+            cur_c2 = _fetch_current_candle(symbol, tf)
+            if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
+                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],"o":cur_c2["open"],"h":cur_c2["high"],"l":cur_c2["low"],"c":cur_c2["close"],"live":True}]
 
             _set_candles(new_candles)
 
