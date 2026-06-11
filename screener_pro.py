@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.279
+WickFill Optimizer v3.280
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.279
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.280: fix вертикальные разрывы на графике при обновлении через postMessage — когда скользящее окно сдвигало массив свечей (убирало старые) и viewStart не у правого края, старый viewStart оставался неизменным и выходил за пределы нового массива → vis обрезался, слева появлялась пустота. Теперь при wasAtEnd=false viewStart корректируется пропорционально изменению длины массива и клампируется в [0, CANDLES.length-viewLen].
 - v3.279: убрана дублирующая кнопка AMOLED (amoledBtnMob) из action-row сайдбара рядом с Restart — она дублировала переключатель AMOLED в шапке.
 - v3.278: убран отдельный блок AMOLED из строки Старт/Стоп/Эко (занимал заметное место рядом с кнопкой запуска); переключатель перенесён в action-row маленькой иконкой-тумблером рядом с Restart.
 - v3.277: убрана отдельная широкая кнопка "AMOLED" под "Запустить оптимизацию" — переехала в компактный переключатель (toggle-sw, как у "Эко") в одной строке со Старт/Стоп/Эко. Action-row теперь содержит только Restart.
@@ -146,7 +147,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.279"
+APP_VERSION = "3.280"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2409,9 +2410,16 @@ window.addEventListener('message', e => {{
       CANDLES.push(prevLive);
     }}
   }}
-  // Сдвигаем viewStart только если были у правого края; viewLen не трогаем
+  // Сдвигаем viewStart: если были у правого края — следуем за правым краем;
+  // иначе — только корректируем чтобы viewStart+viewLen не вышел за новый массив
   if (wasAtEnd) {{
     viewStart = Math.max(0, CANDLES.length - viewLen);
+  }} else {{
+    // Пропорционально сохраняем позицию при изменении длины массива
+    if (oldLen > 0 && CANDLES.length !== oldLen) {{
+      viewStart = Math.round(viewStart * CANDLES.length / oldLen);
+    }}
+    viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
   }}
   render();
 }});
