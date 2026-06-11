@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.261
+WickFill Optimizer v3.262
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.262: fix панель "Недавние конфиги" не возвращалась после "Стоп" — при старте
+  скана recentBody.style.maxHeight принудительно ставился в '0px' и панель скрывалась
+  (display:none); _loadRecentConfigs() при пустом/неудачном ответе GitHub не
+  восстанавливал эти стили. Теперь stopOpt() сразу (до фетча) восстанавливает
+  display:block / maxHeight:240px / стрелку, если конфиги были загружены ранее
+  (recentPanel.dataset.hasConfigs==='1').
 - v3.261: fix список "Недавние конфиги" в десктопной версии — #recentBody имел
   max-height:600px (почти никогда не переполняется на типичной высоте сайдбара),
   из-за чего внутренний overflow-y:auto не активировался и список не скроллился
@@ -117,7 +123,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.261"
+APP_VERSION = "3.262"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -6175,6 +6181,14 @@ function stopOpt(){
   }
   if(window._lastTop20&&window._lastTop20.length) renderTop20(window._lastTop20);
   else if(window._lastBest) renderTop20([window._lastBest]);
+  {
+    const _rp2=document.getElementById('recentPanel');
+    if(_rp2 && _rp2.dataset.hasConfigs==='1'){
+      _rp2.style.display='block';
+      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='240px';
+      const _ra3=document.getElementById('recentArrow');if(_ra3)_ra3.style.transform='rotate(180deg)';
+    }
+  }
   _loadRecentConfigs();
   setTimeout(_loadRecentConfigs, 2500);
   addLogLine('⏹ Остановлен','warn');
