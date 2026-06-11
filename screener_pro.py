@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.276: fix визуальная индикация AMOLED-кнопки "обновляется только после клика в другое место" — :hover-стиль кнопок (.btn-ghost:hover, .tb.btn:hover, оба с !important и идущие в CSS позже) перебивал .green2/.tb.green сразу после тапа, пока палец/курсор оставался на кнопке (hover "залипает" на тач). Добавлены явные .btn-ghost.green2 (с фоном) и .tb.btn.green:hover — состояние включено/выключено теперь видно сразу, без лишнего тапа в сторону.
 - v3.275: fix "тап по AMOLED-кнопке ничего не делает, если экран уже погашен" — оверлей (z-index 99999) перехватывал первый тап целиком: он гасился, но клик на лежащую под ним кнопку не доходил (нужен был второй тап). Теперь wakeFromAmoled определяет элемент под точкой тапа через elementFromPoint и сразу пробрасывает на него .click() — один тап одновременно убирает чёрный экран и срабатывает на кнопку/элемент под ним.
 - v3.274: fix кнопка AMOLED "не нажималась" на мобиле — она лежала в .topbar-meta, который скрыт на мобильных (display:none !important, т.к. там только Restart в сайдбаре). Добавлена дублирующая кнопка ⬤ AMOLED в action-row сайдбара рядом с Restart; _amoledBtnRefresh теперь подсвечивает оба варианта кнопки (десктоп/мобайл) при включённом режиме.
 - v3.273: добавлен AMOLED-режим — кнопка "AMOLED" в шапке (состояние сохраняется в localStorage). При включении: если нет активности (тач/клик/скролл/движение мыши/клавиши) 1 минуту, экран целиком закрывается чёрным оверлеем (полностью гасит пиксели на AMOLED-дисплеях, экономит батарею); любое касание/клик убирает оверлей и сбрасывает таймер.
@@ -142,7 +143,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.275"
+APP_VERSION = "3.276"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5146,6 +5147,7 @@ body>*{position:relative;z-index:1}
 .tb.green{background:var(--green-light)!important;border-color:rgba(74,124,89,.2)!important;color:var(--green)!important}
 .tb.btn:hover{background:var(--cream2)!important;border-color:var(--sand)!important;color:var(--bark)!important}
 .tb.btn:hover svg{opacity:1}
+.tb.btn.green:hover{background:var(--green-light)!important;border-color:rgba(74,124,89,.35)!important;color:var(--green)!important}
 .tb.success{background:var(--green-light)!important;border-color:rgba(74,124,89,.2)!important;color:var(--green)!important}
 .tb.success:hover{filter:brightness(.93)}
 .tb.danger{color:var(--red)!important}
@@ -5293,8 +5295,8 @@ input[type=number]{-moz-appearance:textfield}
 .btn-ghost:hover{background:var(--cream2);border-color:var(--sand2);color:var(--bark)}
 .btn-ghost.red{border-color:rgba(139,58,58,.3);color:var(--red)}
 .btn-ghost.red:hover{background:var(--red-light);border-color:rgba(139,58,58,.4)}
-.btn-ghost.green2{border-color:rgba(74,124,89,.3);color:var(--green)}
-.btn-ghost.green2:hover{background:var(--green-light);border-color:rgba(74,124,89,.4)}
+.btn-ghost.green2{background:var(--green-light);border-color:rgba(74,124,89,.4);color:var(--green);font-weight:600}
+.btn-ghost.green2:hover{background:var(--green-light);border-color:rgba(74,124,89,.5);color:var(--green)}
 
 /* Action buttons row */
 .action-row{display:flex;gap:7px}
