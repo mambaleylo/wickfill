@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.274: fix кнопка AMOLED "не нажималась" на мобиле — она лежала в .topbar-meta, который скрыт на мобильных (display:none !important, т.к. там только Restart в сайдбаре). Добавлена дублирующая кнопка ⬤ AMOLED в action-row сайдбара рядом с Restart; _amoledBtnRefresh теперь подсвечивает оба варианта кнопки (десктоп/мобайл) при включённом режиме.
 - v3.273: добавлен AMOLED-режим — кнопка "AMOLED" в шапке (состояние сохраняется в localStorage). При включении: если нет активности (тач/клик/скролл/движение мыши/клавиши) 1 минуту, экран целиком закрывается чёрным оверлеем (полностью гасит пиксели на AMOLED-дисплеях, экономит батарею); любое касание/клик убирает оверлей и сбрасывает таймер.
 - v3.272: добавлена температура CPU в шапку — новый эндпоинт /cpu_temp читает /sys/class/thermal/thermal_zone*/temp (Termux/Android и Linux), JS опрашивает раз в 15с и показывает плашку с цветовой индикацией (зелёная <60°C, жёлтая 60-75°C, красная >75°C); если датчики недоступны — плашка скрывается.
 - v3.271: fix исчезновение свечи входа при use_next_bar — после v3.269 carry-forward спасал только уже открытые сделки (exit_bar=None), но pending-сигнал (⏳, ещё без записи в _csigs) при сдвиге окна мог "вылетать" целиком: сигнальная свеча уходила за start_i до того, как наступала свеча входа, и вход никогда не появлялся в chart_signals_data → TP/SL не рисовались, а _check_new_candle_signal не находил сигнал на свече входа → автосделки не открывались. Теперь SW-тред хранит chart_pending_info (t+dir последнего ⏳-сигнала); если на новой свече этот сигнал должен был сработать (t == new_candles[-2].t), а в пересчитанных chart_signals_data входа нет — вход синтезируется вручную (ep=close новой свечи, tp/sl из best_p) и добавляется в chart_signals_data, что восстанавливает отображение TP/SL и срабатывание автосделки.
@@ -140,7 +141,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.273"
+APP_VERSION = "3.274"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5802,6 +5803,7 @@ details summary::-webkit-details-marker{display:none}
     <div class="action-row">
 
       <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
+      <button class="btn-ghost" id="amoledBtnMob" onclick="toggleAmoled()" title="AMOLED режим (гасит экран через 1 мин)">⬤ AMOLED</button>
     </div>
 
     <!-- Best result (desktop) -->
@@ -7094,6 +7096,8 @@ const AMOLED_DELAY = 60000; // 1 минута
 function _amoledBtnRefresh(){
   const btn=document.getElementById('amoledBtn');
   if(btn) btn.classList.toggle('green', _amoledOn);
+  const btnMob=document.getElementById('amoledBtnMob');
+  if(btnMob) btnMob.classList.toggle('green2', _amoledOn);
 }
 
 function _resetAmoledTimer(){
