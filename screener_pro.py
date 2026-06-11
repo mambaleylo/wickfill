@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.255
+WickFill Optimizer v3.256
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.256: fix /chart endpoint брал opt_state["best"] (локальный) вместо "trade_best"
+  (финальный с учётом GitHub) → trades=0 и неправильный граф после 1-го цикла
 - v3.255: fix _live_candle_updater использовал opt_state["best"] (локальный) вместо
   trade_best (финальный с учётом GitHub) при перезагрузке устаревшего графика;
   также перезагрузка теперь берёт _sw_candles вместо отдельного _fetch_candles(3д)
@@ -85,7 +87,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.255"
+APP_VERSION = "3.256"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4088,16 +4090,19 @@ def run_optimizer(params):
                 try:
                     with htf_lock:
                         _htf_d = htf_state["direction"]
+                    print(f"{_ts()} [chart] simulate: candles={len(_cc)} tp={_tp.get('tp_pct')} sl={_tp.get('sl_pct')} htf={_htf_d}", flush=True)
                     _sim = _simulate(_cc, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d)
                     _csig = _sim["_signals"] if _sim else []
                     _cpend = _sim["pending_signal_bar"] if _sim else None
+                    print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0}", flush=True)
                     _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _cc]
                     _cur = _fetch_current_candle(symbol, tf)
                     if _cur and _cc and _cur["t"] > _cc[-1]["t"]:
                         _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
                     _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
                 except Exception as _ce:
-                    print(f"{_ts()} [chart] Ошибка построения графика: {_ce}", flush=True)
+                    import traceback
+                    print(f"{_ts()} [chart] Ошибка построения графика: {_ce}\n{traceback.format_exc()}", flush=True)
                     _csig=[]; _cpend=None; _cfmt=[]; _cpath=""
                 with opt_lock:
                     _sw_params = _tp
@@ -6990,7 +6995,7 @@ class Handler(BaseHTTPRequestHandler):
                             chart_signals = list(fallback.get("chart_signals") or [])
                             chart_symbol  = fallback.get("symbol", req_sym)
                             chart_tf      = fallback.get("chart_tf", "")
-                            chart_best    = fallback.get("best")
+                            chart_best    = fallback.get("trade_best") or fallback.get("best")
                             chart_path    = fallback.get("chart_path", "")
                             print(f"[chart] {req_sym}: использован fallback из opt_states snapshot", flush=True)
                     else:
@@ -6998,7 +7003,8 @@ class Handler(BaseHTTPRequestHandler):
                         chart_signals = list(opt_state.get("chart_signals", []))
                         chart_symbol  = opt_state.get("chart_symbol", "")
                         chart_tf      = opt_state.get("chart_tf", "")
-                        chart_best    = opt_state.get("best", None)
+                        # trade_best — финальный конфиг (локальный или GitHub); best — только локальный
+                        chart_best    = opt_state.get("trade_best") or opt_state.get("best", None)
                         chart_path    = opt_state.get("chart_path", "")
             if not chart_best or not chart_candles:
                 self.send_response(200)
