@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.281
+WickFill Optimizer v3.282
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.281
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.282: комплексный фикс разрывов/пропажи свечей на графике: (1) render() теперь клампирует viewLen и viewStart в допустимые пределы до любого рисования — исключает пустой vis при любом состоянии массива; (2) fetchLiveCandle: open новой live-свечи берётся из last.c предыдущей закрытой, а не из биржи — нет ценового разрыва между свечами; (3) postMessage prevLive restore: при восстановлении live-свечи синхронизируем её open с close предыдущей свечи из нового массива; (4) tooltip: защита от деления на 0 если vis пустой.
 - v3.281: стрелки сигналов — лонг теперь зелёный (#2ecc71), шорт красный (#e74c3c) вместо синего/оранжевого; добавлены лейблы «L» / «S» рядом со стрелкой для мгновального распознавания направления.
 - v3.280: fix вертикальные разрывы на графике при обновлении через postMessage — когда скользящее окно сдвигало массив свечей (убирало старые) и viewStart не у правого края, старый viewStart оставался неизменным и выходил за пределы нового массива → vis обрезался, слева появлялась пустота. Теперь при wasAtEnd=false viewStart корректируется пропорционально изменению длины массива и клампируется в [0, CANDLES.length-viewLen].
 - v3.279: убрана дублирующая кнопка AMOLED (amoledBtnMob) из action-row сайдбара рядом с Restart — она дублировала переключатель AMOLED в шапке.
@@ -148,7 +149,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.281"
+APP_VERSION = "3.282"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2044,10 +2045,13 @@ function render(){{
   // Fallback: если wrap ещё не отрисован — используем последние известные размеры
   if(!W||!H){{if(_lastW&&_lastH){{W=_lastW;H=_lastH;}}else return;}}
   _lastW=W;_lastH=H;
+  if(!CANDLES.length) return;
+  // Гарантируем корректность viewport перед каждым рендером
+  viewLen = Math.max(1, Math.min(viewLen, CANDLES.length));
+  viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
   canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';
   ctx.scale(dpr,dpr);
   const end=Math.min(viewStart+viewLen,CANDLES.length),vis=CANDLES.slice(viewStart,end);
-  if(!vis.length) return;
   let mn=Infinity,mx=-Infinity;
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
@@ -2307,7 +2311,9 @@ let _touchActive=false,_tipHideTimer=null;
 function _showTipAt(offsetX,offsetY){{
   const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
   if(offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
-  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart)),cw2=drawW/vis.length;
+  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart));
+  if(!vis.length){{tip.style.display='none';return;}}
+  const cw2=drawW/vis.length;
   const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
   if(i<0||i>=vis.length){{tip.style.display='none';return;}}
   const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>(s.signal_bar!=null?s.signal_bar:s.bar_i)===gi);
@@ -2360,9 +2366,11 @@ function fetchLiveCandle() {{
           last.h = Math.max(last.h, d.h); last.l = Math.min(last.l, d.l); last.c = d.c;
         }} else if (d.t > last.t) {{
           // Новый интервал: закрываем старую live, добавляем новую.
-          // viewStart сдвигаем ровно на 1 — чтобы viewLen остался постоянным и не было разрыва.
+          // open = close предыдущей свечи — нет разрыва между свечами.
+          const prevClose = last.c;
           delete last.live;
-          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+          const newO = prevClose ?? d.o;
+          CANDLES.push({{t:d.t, o:newO, h:Math.max(newO,d.h), l:Math.min(newO,d.l), c:d.c, live:true}});
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }} else {{
@@ -2374,8 +2382,9 @@ function fetchLiveCandle() {{
           last.h = Math.max(last.h, d.h); last.l = Math.min(last.l, d.l); last.c = d.c;
           // длина не изменилась — viewport не трогаем
         }} else if (last && !last.live && d.t > last.t) {{
-          // t больше — новая live-свеча сверх закрытых
-          CANDLES.push({{t:d.t, o:d.o, h:d.h, l:d.l, c:d.c, live:true}});
+          // t больше — новая live-свеча сверх закрытых; open = close последней закрытой
+          const newO = last.c ?? d.o;
+          CANDLES.push({{t:d.t, o:newO, h:Math.max(newO,d.h), l:Math.min(newO,d.l), c:d.c, live:true}});
           if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }}
@@ -2416,6 +2425,13 @@ window.addEventListener('message', e => {{
     const lastT = CANDLES[CANDLES.length-1].t;
     if (prevLive.t >= lastT) {{
       if (prevLive.t === lastT) CANDLES.pop();
+      // Синхронизируем open live-свечи с close предыдущей чтобы не было разрыва
+      const prevClose = CANDLES.length > 0 ? CANDLES[CANDLES.length-1].c : null;
+      if (prevClose != null) {{
+        prevLive.o = prevClose;
+        prevLive.h = Math.max(prevLive.h, prevClose);
+        prevLive.l = Math.min(prevLive.l, prevClose);
+      }}
       CANDLES.push(prevLive);
     }}
   }}
