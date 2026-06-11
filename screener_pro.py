@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.275: fix "тап по AMOLED-кнопке ничего не делает, если экран уже погашен" — оверлей (z-index 99999) перехватывал первый тап целиком: он гасился, но клик на лежащую под ним кнопку не доходил (нужен был второй тап). Теперь wakeFromAmoled определяет элемент под точкой тапа через elementFromPoint и сразу пробрасывает на него .click() — один тап одновременно убирает чёрный экран и срабатывает на кнопку/элемент под ним.
 - v3.274: fix кнопка AMOLED "не нажималась" на мобиле — она лежала в .topbar-meta, который скрыт на мобильных (display:none !important, т.к. там только Restart в сайдбаре). Добавлена дублирующая кнопка ⬤ AMOLED в action-row сайдбара рядом с Restart; _amoledBtnRefresh теперь подсвечивает оба варианта кнопки (десктоп/мобайл) при включённом режиме.
 - v3.273: добавлен AMOLED-режим — кнопка "AMOLED" в шапке (состояние сохраняется в localStorage). При включении: если нет активности (тач/клик/скролл/движение мыши/клавиши) 1 минуту, экран целиком закрывается чёрным оверлеем (полностью гасит пиксели на AMOLED-дисплеях, экономит батарею); любое касание/клик убирает оверлей и сбрасывает таймер.
 - v3.272: добавлена температура CPU в шапку — новый эндпоинт /cpu_temp читает /sys/class/thermal/thermal_zone*/temp (Termux/Android и Linux), JS опрашивает раз в 15с и показывает плашку с цветовой индикацией (зелёная <60°C, жёлтая 60-75°C, красная >75°C); если датчики недоступны — плашка скрывается.
@@ -141,7 +142,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.274"
+APP_VERSION = "3.275"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5663,7 +5664,7 @@ details summary::-webkit-details-marker{display:none}
 
 <div class="app">
 
-<div id="amoledOverlay" onclick="wakeFromAmoled()" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;"></div>
+<div id="amoledOverlay" onclick="wakeFromAmoled(event)" ontouchstart="wakeFromAmoled(event)" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;"></div>
 
 <!-- ── Topbar ── -->
 <header class="topbar">
@@ -7110,10 +7111,27 @@ function _resetAmoledTimer(){
   }
 }
 
-function wakeFromAmoled(){
+let _amoledWoke=false;
+function wakeFromAmoled(ev){
   const ov=document.getElementById('amoledOverlay');
   if(ov) ov.style.display='none';
   _resetAmoledTimer();
+  // Если под оверлеем была кнопка/элемент — "пробрасываем" этот же тап дальше,
+  // чтобы не требовался второй клик для срабатывания кнопки.
+  if(!ev) return;
+  if(ev.type==='click' && _amoledWoke){ _amoledWoke=false; return; } // уже обработали через touchstart
+  const x=(ev.touches&&ev.touches[0]?ev.touches[0].clientX:ev.clientX);
+  const y=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
+  if(typeof x!=='number'||typeof y!=='number') return;
+  const target=document.elementFromPoint(x,y);
+  if(!target || target===ov) return;
+  if(ev.type==='touchstart'){
+    ev.preventDefault();
+    _amoledWoke=true;
+    setTimeout(()=>target.click(), 0);
+  } else {
+    target.click();
+  }
 }
 
 function toggleAmoled(){
