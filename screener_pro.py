@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.262
+WickFill Optimizer v3.263
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.263: переупорядочены поля настроек (.field-row — grid 2 колонки) для логичной
+  группировки на мобильной верстке: Символы (на всю ширину) → Стоп мин/Стоп макс →
+  Тейк мин/Тейк макс → Таймфрейм/История. Раньше из-за flex:N в grid-контейнере
+  пары были случайными (Стоп макс рядом с Тейк мин, Тейк макс — один в ряду).
 - v3.262: fix панель "Недавние конфиги" не возвращалась после "Стоп" — при старте
   скана recentBody.style.maxHeight принудительно ставился в '0px' и панель скрывалась
   (display:none); _loadRecentConfigs() при пустом/неудачном ответе GitHub не
@@ -123,7 +127,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.262"
+APP_VERSION = "3.263"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5545,30 +5549,34 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Settings card -->
     <div class="card">
-      <div class="field-row" style="margin-bottom:6px;align-items:flex-end">
-        <div class="field-inset" style="flex:3">
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset" style="grid-column:1 / -1">
           <label>Символы (через запятую)</label>
           <input type="text" id="wf_symbol" value="DOGE" placeholder="BTC, ETH, SOL" style="width:100%">
         </div>
-        <div class="field-inset" style="flex:1">
+      </div>
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset">
           <label>Стоп мин (%)</label>
           <input type="number" id="wf_sl_min" min="0.1" max="5" step="0.1" value="0.4" style="width:100%">
         </div>
-        <div class="field-inset" style="flex:1">
+        <div class="field-inset">
           <label>Стоп макс (%)</label>
           <input type="number" id="wf_sl_max" min="0.1" max="10" step="0.1" value="0.8" style="width:100%">
         </div>
-        <div class="field-inset" style="flex:1">
+      </div>
+      <div class="field-row" style="margin-bottom:6px">
+        <div class="field-inset">
           <label>Тейк мин (%)</label>
           <input type="number" id="wf_tp_min" min="0.1" max="5" step="0.1" value="0.5" style="width:100%">
         </div>
-        <div class="field-inset" style="flex:1">
+        <div class="field-inset">
           <label>Тейк макс (%)</label>
           <input type="number" id="wf_tp_max" min="0.1" max="20" step="0.1" value="2.0" style="width:100%">
         </div>
       </div>
       <div class="field-row" style="margin-bottom:0">
-        <div class="field-inset" style="flex:3">
+        <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
             <option value="5m">5m</option>
@@ -5579,7 +5587,7 @@ details summary::-webkit-details-marker{display:none}
             <option value="1d">1d</option>
           </select>
         </div>
-        <div class="field-inset" style="flex:1">
+        <div class="field-inset">
           <label>История (дни)</label>
           <input type="number" id="wf_days" min="3" max="90" placeholder="дни" step="1" value="20" style="width:100%">
         </div>
