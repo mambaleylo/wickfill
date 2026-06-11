@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.253
+WickFill Optimizer v3.254
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.254: fix граф снова расходится после 1-го цикла — два источника:
+  1) SW-тред при старте перезагружал свечи с биржи вместо использования candles оптимизатора;
+  2) воркеры не переинициализировались между циклами — считали на стартовых свечах
+     пока SW уже сдвигал окно; теперь перед каждым циклом воркеры получают актуальные current_candles
 - v3.253: fix граф строился по локальному all_time_params вместо финального _trade_params (GitHub мог дать лучший конфиг в фоне, но граф уже был построен по локальному) — построение графика перенесено внутрь _do_gh_trade_sync, теперь всегда использует финальный _tp/_tb после GitHub-синхронизации
 - v3.252: fix crash после цикла — NameError: chart_candles_window is not defined (осталась старая ссылка после переименования переменной в v3.250)
 - v3.251: fix зависание перебора на любом параметре (напр. "Гео-1 — возврат N баров") — pmap теперь использует as_completed с таймаутом вместо pool.map без таймаута; если воркер завис (OOM, segfault, Android kill) — батч продолжается с дефолтным результатом для зависших кандидатов, а не висит вечно
@@ -78,7 +82,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.253"
+APP_VERSION = "3.254"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2681,16 +2685,22 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
 
     _set_running(True)
 
-    # Синхронизируем окно со свежими данными при старте
-    days_needed = max(1, round(n_candles * interval_sec / 86400) + 1)
-    print(f"[sw:{symbol}] Синхронизация свежих свечей ({days_needed}д)...")
-    fresh = _fetch_candles(symbol, tf, days_needed)
-    if fresh and len(fresh) >= n_candles:
-        _set_candles(fresh[-n_candles:])
-        candles_for_log, _ = _get_candles_params()
-        print(f"[sw:{symbol}] Синхронизировано: {len(candles_for_log)} свечей")
+    # При старте берём свечи из уже загруженного оптимизатором _sw_candles/_sw_state.
+    # НЕ перезагружаем с биржи — иначе стартовое окно отличается от current_candles воркеров
+    # → _simulate на SW-свечах даёт другое число сделок чем в best_config.
+    candles_at_start, _ = _get_candles_params()
+    if candles_at_start and len(candles_at_start) >= 10:
+        print(f"[sw:{symbol}] Старт: используем {len(candles_at_start)} свечей из оптимизатора")
     else:
-        print(f"[sw:{symbol}] Синхронизация не удалась, используем старые данные")
+        # Fallback: оптимизатор ещё не положил свечи — загружаем
+        days_needed = max(1, round(n_candles * interval_sec / 86400) + 1)
+        print(f"[sw:{symbol}] Fallback: загружаем свечи с биржи ({days_needed}д)...")
+        fresh = _fetch_candles(symbol, tf, days_needed)
+        if fresh and len(fresh) >= n_candles:
+            _set_candles(fresh[-n_candles:])
+            print(f"[sw:{symbol}] Загружено {n_candles} свечей")
+        else:
+            print(f"[sw:{symbol}] Не удалось загрузить свечи")
 
     while True:
         if not _get_running(): break
@@ -3984,6 +3994,18 @@ def run_optimizer(params):
             _last_shake_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0) if _global_best_ever else -1e18
             olog(f"⚡ ВСТРЯСКА (stagnation={_STAGNATION_THRESH} циклов): рескрамбл stop/tp/bool → расширенный BH", "warn")
         # ────────────────────────────────────────────────────────────────────
+
+        # Переинициализируем воркеры с актуальными current_candles перед каждым циклом.
+        # SW-тред мог сдвинуть окно с прошлого цикла — без этого воркеры считают на старых свечах,
+        # а граф строится на новых → разное число сделок.
+        if cycle > 1 and _shared_pool is not None:
+            try:
+                futs = [_shared_pool.submit(_worker_init, current_candles, 0, risk_pct, _htf_index)
+                        for _ in range(_n_workers)]
+                from concurrent.futures import wait as _fw
+                _fw(futs, timeout=10)
+            except Exception as _pie:
+                print(f"[opt] Ошибка переинит воркеров: {_pie}", flush=True)
 
         final_result, final_params, top20 = _run_one_cycle(
             current_candles, days, risk_pct, olog, t0, tf,
