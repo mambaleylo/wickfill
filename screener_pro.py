@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.273: добавлен AMOLED-режим — кнопка "AMOLED" в шапке (состояние сохраняется в localStorage). При включении: если нет активности (тач/клик/скролл/движение мыши/клавиши) 1 минуту, экран целиком закрывается чёрным оверлеем (полностью гасит пиксели на AMOLED-дисплеях, экономит батарею); любое касание/клик убирает оверлей и сбрасывает таймер.
 - v3.272: добавлена температура CPU в шапку — новый эндпоинт /cpu_temp читает /sys/class/thermal/thermal_zone*/temp (Termux/Android и Linux), JS опрашивает раз в 15с и показывает плашку с цветовой индикацией (зелёная <60°C, жёлтая 60-75°C, красная >75°C); если датчики недоступны — плашка скрывается.
 - v3.271: fix исчезновение свечи входа при use_next_bar — после v3.269 carry-forward спасал только уже открытые сделки (exit_bar=None), но pending-сигнал (⏳, ещё без записи в _csigs) при сдвиге окна мог "вылетать" целиком: сигнальная свеча уходила за start_i до того, как наступала свеча входа, и вход никогда не появлялся в chart_signals_data → TP/SL не рисовались, а _check_new_candle_signal не находил сигнал на свече входа → автосделки не открывались. Теперь SW-тред хранит chart_pending_info (t+dir последнего ⏳-сигнала); если на новой свече этот сигнал должен был сработать (t == new_candles[-2].t), а в пересчитанных chart_signals_data входа нет — вход синтезируется вручную (ep=close новой свечи, tp/sl из best_p) и добавляется в chart_signals_data, что восстанавливает отображение TP/SL и срабатывание автосделки.
 - v3.270: КРИТИЧЕСКИЙ fix автосделок — функция _gate_close_position была "обезглавлена" (потеряна строка `def _gate_close_position(cfg, contract):`, тело осталось как мёртвый код внутри _gate_cleanup_orphan_orders). Из-за этого _gate_execute_signal падал с NameError на первом же шаге (закрытие старой позиции) при каждой новой сделке → сделки переставали открываться автоматически, gate-результат вообще не попадал в trade-лог. Восстановлена def _gate_close_position; вызов _gate_execute_signal обёрнут в try/except с записью исключения в лог.
@@ -139,7 +140,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.272"
+APP_VERSION = "3.273"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5661,6 +5662,8 @@ details summary::-webkit-details-marker{display:none}
 
 <div class="app">
 
+<div id="amoledOverlay" onclick="wakeFromAmoled()" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;"></div>
+
 <!-- ── Topbar ── -->
 <header class="topbar">
   <div class="topbar-logo">
@@ -5688,6 +5691,10 @@ details summary::-webkit-details-marker{display:none}
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       <span id="latencyText">— мс</span>
     </span>
+    <button class="tb btn" id="amoledBtn" onclick="toggleAmoled()" title="AMOLED режим (гасит экран через 1 мин)">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="7" r="6"/></svg>
+      AMOLED
+    </button>
     <button class="tb btn" id="themeBtn" onclick="toggleTheme()" title="Тема">
       <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 1.5A4.5 4.5 0 117 11V2.5z"/></svg>
       Тема
@@ -7078,6 +7085,60 @@ document.addEventListener('DOMContentLoaded',function(){
     if(sp && d.version) sp.textContent='v'+d.version;
   }).catch(()=>{});
 })();
+
+/* ── AMOLED режим ── */
+let _amoledOn = localStorage.getItem('wf_amoled')==='1';
+let _amoledTimer = null;
+const AMOLED_DELAY = 60000; // 1 минута
+
+function _amoledBtnRefresh(){
+  const btn=document.getElementById('amoledBtn');
+  if(btn) btn.classList.toggle('green', _amoledOn);
+}
+
+function _resetAmoledTimer(){
+  if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
+  if(_amoledOn){
+    _amoledTimer=setTimeout(()=>{
+      const ov=document.getElementById('amoledOverlay');
+      if(ov) ov.style.display='block';
+    }, AMOLED_DELAY);
+  }
+}
+
+function wakeFromAmoled(){
+  const ov=document.getElementById('amoledOverlay');
+  if(ov) ov.style.display='none';
+  _resetAmoledTimer();
+}
+
+function toggleAmoled(){
+  _amoledOn=!_amoledOn;
+  localStorage.setItem('wf_amoled', _amoledOn?'1':'0');
+  _amoledBtnRefresh();
+  if(_amoledOn){
+    _resetAmoledTimer();
+  } else {
+    if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
+    const ov=document.getElementById('amoledOverlay');
+    if(ov) ov.style.display='none';
+  }
+}
+
+['click','touchstart','mousemove','keydown','scroll'].forEach(ev=>{
+  document.addEventListener(ev, ()=>{
+    const ov=document.getElementById('amoledOverlay');
+    if(ov && ov.style.display==='block'){
+      // первое касание — только гасим оверлей, не даём провалиться в клик под ним
+      if(ev==='click'||ev==='touchstart'){ ov.style.display='none'; }
+    }
+    _resetAmoledTimer();
+  }, {passive:true});
+});
+
+_amoledBtnRefresh();
+if(_amoledOn) _resetAmoledTimer();
+
 </script></body></html>"""
 
 # ═══════════════════════════════════════════════════════════════
