@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.260
+WickFill Optimizer v3.261
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.261: fix список "Недавние конфиги" в десктопной версии — #recentBody имел
+  max-height:600px (почти никогда не переполняется на типичной высоте сайдбара),
+  из-за чего внутренний overflow-y:auto не активировался и список не скроллился
+  отдельно от сайдбара; уменьшено до 240px (открытое состояние тоггла тоже).
+  Также после "Стоп" панель "Недавние конфиги" иногда не появлялась — единственный
+  fetch /recent_configs мог не успеть/упасть сразу после остановки (GitHub-таймаут);
+  добавлен повторный _loadRecentConfigs() через 2.5с.
 - v3.260: fix главная причина расхождения "Лучшая комбинация" vs график сигналов —
   финальный _simulate() для построения графика после цикла (single- и multi-symbol)
   вызывался БЕЗ htf_index (только со скалярным текущим htf_direction), в то время как
@@ -110,7 +117,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.260"
+APP_VERSION = "3.261"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -5521,11 +5528,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Recent configs quick-select -->
     <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);overflow:hidden">
-      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'260px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'240px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:600px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px">
+      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -6169,6 +6176,7 @@ function stopOpt(){
   if(window._lastTop20&&window._lastTop20.length) renderTop20(window._lastTop20);
   else if(window._lastBest) renderTop20([window._lastBest]);
   _loadRecentConfigs();
+  setTimeout(_loadRecentConfigs, 2500);
   addLogLine('⏹ Остановлен','warn');
 }
 function _loadChartFrame(sym){
@@ -6841,7 +6849,7 @@ function _loadRecentConfigs(){
     // Всегда раскрываем при загрузке
     const rb=document.getElementById('recentBody');
     const ra=document.getElementById('recentArrow');
-    if(rb) rb.style.maxHeight='600px';
+    if(rb) rb.style.maxHeight='240px';
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
