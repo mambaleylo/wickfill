@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.278: убран отдельный блок AMOLED из строки Старт/Стоп/Эко (занимал заметное место рядом с кнопкой запуска); переключатель перенесён в action-row маленькой иконкой-тумблером рядом с Restart.
 - v3.277: убрана отдельная широкая кнопка "AMOLED" под "Запустить оптимизацию" — переехала в компактный переключатель (toggle-sw, как у "Эко") в одной строке со Старт/Стоп/Эко. Action-row теперь содержит только Restart.
 - v3.276: fix визуальная индикация AMOLED-кнопки "обновляется только после клика в другое место" — :hover-стиль кнопок (.btn-ghost:hover, .tb.btn:hover, оба с !important и идущие в CSS позже) перебивал .green2/.tb.green сразу после тапа, пока палец/курсор оставался на кнопке (hover "залипает" на тач). Добавлены явные .btn-ghost.green2 (с фоном) и .tb.btn.green:hover — состояние включено/выключено теперь видно сразу, без лишнего тапа в сторону.
 - v3.275: fix "тап по AMOLED-кнопке ничего не делает, если экран уже погашен" — оверлей (z-index 99999) перехватывал первый тап целиком: он гасился, но клик на лежащую под ним кнопку не доходил (нужен был второй тап). Теперь wakeFromAmoled определяет элемент под точкой тапа через elementFromPoint и сразу пробрасывает на него .click() — один тап одновременно убирает чёрный экран и срабатывает на кнопку/элемент под ним.
@@ -144,7 +145,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.277"
+APP_VERSION = "3.278"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5802,16 +5803,14 @@ details summary::-webkit-details-marker{display:none}
         <div id="ecoSw" class="toggle-sw" style="display:block"></div>
         <div style="font-size:.62rem;color:var(--text3);margin-top:2px">🍃 Эко</div>
       </div>
-      <!-- AMOLED toggle compact -->
-      <div id="amoledBtnMob" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:6px 10px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);cursor:pointer;user-select:none;flex-shrink:0" onclick="toggleAmoled()" title="AMOLED режим (гасит экран через 1 мин)">
-        <div id="amoledSw" class="toggle-sw"></div>
-        <div style="font-size:.62rem;color:var(--text3);margin-top:2px">⬤ AMOLED</div>
-      </div>
     </div>
 
     <div class="action-row">
 
       <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
+      <button class="btn-ghost" id="amoledBtnMob" onclick="toggleAmoled()" title="AMOLED режим (гасит экран через 1 мин)" style="flex:0 0 auto;width:auto;padding:9px 12px">
+        <div id="amoledSw" class="toggle-sw" style="display:inline-block;vertical-align:middle"></div>
+      </button>
     </div>
 
     <!-- Best result (desktop) -->
