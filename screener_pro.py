@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.269
+WickFill Optimizer v3.270
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.269
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.270: КРИТИЧЕСКИЙ fix автосделок — функция _gate_close_position была "обезглавлена" (потеряна строка `def _gate_close_position(cfg, contract):`, тело осталось как мёртвый код внутри _gate_cleanup_orphan_orders). Из-за этого _gate_execute_signal падал с NameError на первом же шаге (закрытие старой позиции) при каждой новой сделке → сделки переставали открываться автоматически, gate-результат вообще не попадал в trade-лог. Восстановлена def _gate_close_position; вызов _gate_execute_signal обёрнут в try/except с записью исключения в лог.
 - v3.269: fix исчезновение свечи входа (bar_i) и TP/SL после сдвига скользящего окна (use_next_bar): при пересчёте _simulate на new_candles=candles[1:]+[new_c] свеча входа открытой сделки могла оказаться раньше нового start_i и "теряться" из chart_signals_data. Добавлен _carry_forward_open_signal — переносит ранее открытый сигнал (exit_bar=None) в новый chart_signals_data, пересчитывая TP/SL-закрытие по new_candles, если он не найден после пересчёта.
 - v3.268: диагностика trade_best — добавлено подробное логирование выбора trade_best в конце каждого цикла (локальный vs GitHub vfit); _tb теперь берётся как dict(all_time_best) вместо ссылки — исключает мутацию _tb через WF slope penalty; в логах теперь видно почему показывается тот или иной конфиг
 - v3.267: fix дублирующееся сохранение одинакового конфига на GitHub — _auto_save_config теперь пропускает PUT если файл с точно таким же именем уже существует на GitHub (имя содержит equity/sl/tp — идентичный конфиг); раньше при стагнации/WF-пересчёте validated_fitness мог незначительно меняться и снова проходить проверку _last_autosave_vfit > порог, что триггерило повторный PUT того же файла
@@ -136,7 +137,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.269"
+APP_VERSION = "3.270"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -1665,6 +1666,7 @@ def _gate_cleanup_orphan_orders(cfg, contract):
     return n, None
 
 
+def _gate_close_position(cfg, contract):
     """Отменяет все ордера и закрывает открытую позицию по контракту (если есть)."""
     # Сначала отменяем все висящие ордера (TP/SL от предыдущей сделки)
     _gate_cancel_all_orders(cfg, contract)
@@ -2668,9 +2670,12 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
             auto_sl_pct = float(alert_cfg.get("gate_auto_sl_pct", 0))
             trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
             trade_sl = round(ep * (1 - auto_sl_pct/100) if direction==1 else ep * (1 + auto_sl_pct/100), 6) if auto_sl_pct > 0 else sl
-            ok_trade, trade_log = _gate_execute_signal(
-                alert_cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct
-            )
+            try:
+                ok_trade, trade_log = _gate_execute_signal(
+                    alert_cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct
+                )
+            except Exception as _ge:
+                ok_trade, trade_log = False, f"Исключение в _gate_execute_signal: {_ge!r}"
             status = "✓" if ok_trade else "✕"
             print(f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'}: {trade_log}", flush=True)
             # Пишем каждую строку отдельно — так ошибка видна даже если лог обрывается
