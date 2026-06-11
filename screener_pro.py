@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.252
+WickFill Optimizer v3.253
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.253: fix граф строился по локальному all_time_params вместо финального _trade_params (GitHub мог дать лучший конфиг в фоне, но граф уже был построен по локальному) — построение графика перенесено внутрь _do_gh_trade_sync, теперь всегда использует финальный _tp/_tb после GitHub-синхронизации
 - v3.252: fix crash после цикла — NameError: chart_candles_window is not defined (осталась старая ссылка после переименования переменной в v3.250)
 - v3.251: fix зависание перебора на любом параметре (напр. "Гео-1 — возврат N баров") — pmap теперь использует as_completed с таймаутом вместо pool.map без таймаута; если воркер завис (OOM, segfault, Android kill) — батч продолжается с дефолтным результатом для зависших кандидатов, а не висит вечно
 - v3.250: fix расхождение числа сделок на графике vs лучший конфиг (финальный) — граф теперь строится строго на current_candles с days_limit=0, как и воркеры оптимизатора; предыдущий патч v3.247 ошибочно применял days_limit=days внутри _simulate что давало другое окно чем у воркеров; исправлено в одиночном и мультисимвол режимах
@@ -77,7 +78,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.252"
+APP_VERSION = "3.253"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4048,7 +4049,9 @@ def run_optimizer(params):
             _local_vfit_snap = _local_vfit_snap if _local_vfit_snap is not None else all_time_best.get("fitness", -1e18)
             _atb_snap = dict(all_time_best)
             _atp_snap = dict(all_time_params)
-            def _do_gh_trade_sync(_atb=_atb_snap, _atp=_atp_snap, _lv=_local_vfit_snap):
+            _cc_src_snap = list(current_candles)  # snapshot свечей для графика — те же что у воркеров
+            def _do_gh_trade_sync(_atb=_atb_snap, _atp=_atp_snap, _lv=_local_vfit_snap,
+                                  _cc=_cc_src_snap, _elapsed=elapsed, _cycle_elapsed=cycle_elapsed):
                 global _sw_params
                 try:
                     _gh_vfit, _gh_best = _gh_fetch_best_for_trading(symbol, tf, days, risk_pct)
@@ -4060,11 +4063,31 @@ def run_optimizer(params):
                 except Exception as _e:
                     print(f"{_ts()} [gh] Ошибка синхронизации торгового конфига: {_e}", flush=True)
                     _tb = _atb; _tp = _atp
+                # Строим граф здесь — _tp/_tb уже финальные (локальный или GitHub)
+                try:
+                    with htf_lock:
+                        _htf_d = htf_state["direction"]
+                    _sim = _simulate(_cc, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d)
+                    _csig = _sim["_signals"] if _sim else []
+                    _cpend = _sim["pending_signal_bar"] if _sim else None
+                    _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _cc]
+                    _cur = _fetch_current_candle(symbol, tf)
+                    if _cur and _cc and _cur["t"] > _cc[-1]["t"]:
+                        _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
+                    _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
+                except Exception as _ce:
+                    print(f"{_ts()} [chart] Ошибка построения графика: {_ce}", flush=True)
+                    _csig=[]; _cpend=None; _cfmt=[]; _cpath=""
                 with opt_lock:
                     _sw_params = _tp
                     opt_state["trade_best"] = _tb
+                    opt_state["chart_candles"]    = _cfmt
+                    opt_state["chart_signals"]    = _csig
+                    opt_state["chart_pending_bar"] = _cpend
+                    opt_state["chart_path"]       = _cpath or ""
+                    opt_state["chart_updated_at"] = int(time.time())
             threading.Thread(target=_do_gh_trade_sync, daemon=True).start()
-            # Сразу ставим локальный лучший — фоновый тред перепишет если GitHub лучше
+            # Сразу ставим локальный лучший — фоновый тред перепишет когда готов
             with opt_lock:
                 _sw_params = _trade_params
                 opt_state["trade_best"] = _trade_best
@@ -4190,44 +4213,17 @@ def run_optimizer(params):
                         print(f"[autosave] ошибка: {_e}", flush=True)
                 threading.Thread(target=_do_autosave, daemon=True).start()
 
-            # Обновляем chart — показываем сигналы за то же окно что и оптимизация
-            # В мультирежиме _sw_candles перезаписывается другим символом — используем локальные candles
-            is_multi_run = len(_multi_symbols) > 1
-            if is_multi_run:
-                chart_candles_src = list(candles)  # локальные свечи текущего символа
-            else:
-                # Единственный источник истины — те же свечи что шли в воркеры в этом цикле.
-                # _sw_candles мог уже сдвинуться (SW-тред добавил новую свечу) → брать оттуда нельзя.
-                chart_candles_src = list(current_candles)
-            # days_limit=0: воркеры тоже работали с days_limit=0 на уже обрезанном наборе.
-            # Любое дополнительное ограничение по времени внутри _simulate даёт другой набор сделок.
-            with htf_lock:
-                _htf_dir_chart = htf_state["direction"]
-            sim = _simulate(chart_candles_src, _trade_params, 0, _collect=True, risk_pct=risk_pct,
-                            htf_direction=_htf_dir_chart)
-            chart_signals = sim["_signals"] if sim else []
-            _opt_pending_bar = sim["pending_signal_bar"] if sim else None
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in chart_candles_src]
-            # Добавляем незакрытую свечу только для отображения
-            cur_c = _fetch_current_candle(symbol, tf)
-            if cur_c and cur_c["t"] > chart_candles_src[-1]["t"]:
-                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c["t"],"o":cur_c["open"],"h":cur_c["high"],"l":cur_c["low"],"c":cur_c["close"],"live":True}]
-            # На графике всегда лучший прогон — локальный или с GitHub (см. _trade_best выше)
-            chart_path = _save_chart(chart_candles_fmt, chart_signals, _trade_best, symbol, tf, risk_pct)
+            # Граф строится в фоновом _do_gh_trade_sync (выше) — там _tp/_tb уже финальные.
+            # Здесь обновляем только мета-данные цикла которые не зависят от конфига.
             with opt_lock:
-                opt_state["chart_candles"]  = chart_candles_fmt
-                opt_state["chart_signals"]  = chart_signals
-                opt_state["chart_pending_bar"] = _opt_pending_bar
-                opt_state["chart_path"]     = chart_path or ""
-                opt_state["chart_updated_at"] = int(time.time())
                 opt_state["best"]           = all_time_best
-                opt_state["all_time_best"]  = all_time_best  # всегда = глобальный рекорд (локальный, для продолжения перебора)
+                opt_state["all_time_best"]  = all_time_best
                 opt_state["top20"]          = prev_top20
                 opt_state["elapsed"]        = elapsed
                 opt_state["done"]           = not infinite
                 ct = opt_state.setdefault("cycle_times", [])
                 ct.append(cycle_elapsed)
-                if len(ct) > 20: ct.pop(0)  # храним последние 20
+                if len(ct) > 20: ct.pop(0)
                 opt_state["avg_cycle_s"] = round(sum(ct) / len(ct), 1)
 
             # Запуск скользящего окна (один раз после первого цикла)
