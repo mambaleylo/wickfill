@@ -1,5 +1,1 @@
-[2026-06-11 15:05:31] alert_cfg обновлён: auto=True key=да
-[2026-06-11 15:27:13] СИГНАЛ ЛОНГ ep=65.06 tp=65.613 sl=64.8648 tg=ok
-[2026-06-11 15:27:13] gate_check key=да secret=да pct=90.0 auto_on=True raw=True
-[2026-06-11 15:27:13]   leverage=33× (risk=10.0% sl=0.3%)
-[2026-06-11 15:58:53] alert_cfg обновлён: auto=True key=да
+[2026-06-11 15:59:18] alert_cfg обновлён: auto=True key=да
