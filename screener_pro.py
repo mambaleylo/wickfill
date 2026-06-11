@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.270
+WickFill Optimizer v3.279
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.270
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.279: убрана дублирующая кнопка AMOLED (amoledBtnMob) из action-row сайдбара рядом с Restart — она дублировала переключатель AMOLED в шапке.
 - v3.278: убран отдельный блок AMOLED из строки Старт/Стоп/Эко (занимал заметное место рядом с кнопкой запуска); переключатель перенесён в action-row маленькой иконкой-тумблером рядом с Restart.
 - v3.277: убрана отдельная широкая кнопка "AMOLED" под "Запустить оптимизацию" — переехала в компактный переключатель (toggle-sw, как у "Эко") в одной строке со Старт/Стоп/Эко. Action-row теперь содержит только Restart.
 - v3.276: fix визуальная индикация AMOLED-кнопки "обновляется только после клика в другое место" — :hover-стиль кнопок (.btn-ghost:hover, .tb.btn:hover, оба с !important и идущие в CSS позже) перебивал .green2/.tb.green сразу после тапа, пока палец/курсор оставался на кнопке (hover "залипает" на тач). Добавлены явные .btn-ghost.green2 (с фоном) и .tb.btn.green:hover — состояние включено/выключено теперь видно сразу, без лишнего тапа в сторону.
@@ -145,7 +146,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.278"
+APP_VERSION = "3.279"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5808,9 +5809,6 @@ details summary::-webkit-details-marker{display:none}
     <div class="action-row">
 
       <button class="btn-ghost success" id="restartBtnMob" onclick="termuxUpdate()" title="pkill → cp → python screener_pro.py из Downloads">↺ Restart</button>
-      <button class="btn-ghost" id="amoledBtnMob" onclick="toggleAmoled()" title="AMOLED режим (гасит экран через 1 мин)" style="flex:0 0 auto;width:auto;padding:9px 12px">
-        <div id="amoledSw" class="toggle-sw" style="display:inline-block;vertical-align:middle"></div>
-      </button>
     </div>
 
     <!-- Best result (desktop) -->
