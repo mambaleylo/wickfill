@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.265
+WickFill Optimizer v3.266
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.265
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.266: fix "Лучшая комбинация" показывала all_time_best (локальный рекорд перебора) вместо trade_best (финальный конфиг с учётом GitHub) — карточка и график теперь всегда показывают один и тот же конфиг; /opt_status теперь отдаёт trade_best, JS-поллинг использует d.trade_best||d.all_time_best||d.best для renderBest и renderValid
 - v3.265: fix расхождение сигналов на графике (SW-тред vs оптимизатор) при включённом HTF-фильтре — _sliding_window_thread принимает htf_index и передаёт его в _simulate; раньше SW передавал только скалярный htf_direction (текущее направление), тогда как оптимизатор передаёт полный htf_index (список ts/dir для bisect), из-за чего SW расставлял сделки с HTF-фильтром на основе текущего направления вместо исторического → сигналы не совпадали с конфигом; исправлено во всех 4 точках запуска SW-треда (single и multi)
 - v3.259: настоящий fix подмены сигналов после цикла 1 (мульти-символ). Корень проблемы:
   на каждом цикле >1 _sw_state[sym]["params"] безусловно перезаписывался best_params
@@ -132,7 +133,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.265"
+APP_VERSION = "3.266"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -6446,10 +6447,10 @@ function poll(){
       for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level,logs[i].ts);
       lastLogCount=logs.length;
     }
-    const _atb=d.all_time_best||d.best;
+    const _atb=d.trade_best||d.all_time_best||d.best;
     if(_atb&&_atb.equity!==undefined){window._lastBest=_atb;window._lastTop20=d.top20||[];renderBest(_atb);}
     if(_atb) renderTop20([_atb]);  // таблица показывает лучший за все прогоны
-    if(d.valid!==undefined) renderValid(d.valid, d.all_time_best||d.best, d.windows||[], d.min_stable_days??null, d.days||30);
+    if(d.valid!==undefined) renderValid(d.valid, d.trade_best||d.all_time_best||d.best, d.windows||[], d.min_stable_days??null, d.days||30);
     if(!useMulti&&d.chart_updated_at>0){
       const _singleSym=_symList[0]||'__single__';
       if(d.chart_updated_at!==(_lastChartTs[_singleSym]||0)){
@@ -6935,6 +6936,7 @@ class Handler(BaseHTTPRequestHandler):
                     "current_param":  opt_state.get("current_param",""),
                     "best":           opt_state.get("all_time_best") or opt_state["best"],
                     "all_time_best":   opt_state.get("all_time_best"),
+                    "trade_best":      opt_state.get("trade_best"),
                     "top20":          opt_state["top20"],
                     "valid":          opt_state.get("valid", None),
                     "windows":        opt_state.get("windows", []),
