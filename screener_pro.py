@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.259
+WickFill Optimizer v3.260
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.260: fix главная причина расхождения "Лучшая комбинация" vs график сигналов —
+  финальный _simulate() для построения графика после цикла (single- и multi-symbol)
+  вызывался БЕЗ htf_index (только со скалярным текущим htf_direction), в то время как
+  воркеры оптимизатора считают all_time_best/cycle_best ВСЕГДА с per-bar htf_index.
+  При активном HTF/EMA-фильтре график без per-bar фильтра показывал намного больше
+  сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
+  Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
+  графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
 - v3.259: настоящий fix подмены сигналов после цикла 1 (мульти-символ). Корень проблемы:
   на каждом цикле >1 _sw_state[sym]["params"] безусловно перезаписывался best_params
   ТЕКУЩЕГО цикла (даже если он слабее рекорда и s["best"] не менялся). SW-тред
@@ -102,7 +110,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.259"
+APP_VERSION = "3.260"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -4111,7 +4119,7 @@ def run_optimizer(params):
             try:
                 with htf_lock:
                     _htf_d = htf_state["direction"]
-                _sim = _simulate(_cc_src_snap, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d)
+                _sim = _simulate(_cc_src_snap, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
                 print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_cc_src_snap)}", flush=True)
@@ -4613,7 +4621,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
 
                 # Обновляем graph данные — те же свечи что у воркеров (local_candles, days_limit=0)
                 try:
-                    sim = _simulate(local_candles, dict(best["params"]), 0, _collect=True, risk_pct=risk_pct)
+                    sim = _simulate(local_candles, dict(best["params"]), 0, _collect=True, risk_pct=risk_pct, htf_index=_htf_index_sym)
                     chart_signals = sim["_signals"] if sim else []
                 except Exception:
                     chart_signals = []
