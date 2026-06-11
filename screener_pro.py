@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.264
+WickFill Optimizer v3.265
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -34,6 +34,7 @@ WickFill Optimizer v3.264
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.265: fix расхождение сигналов на графике (SW-тред vs оптимизатор) при включённом HTF-фильтре — _sliding_window_thread принимает htf_index и передаёт его в _simulate; раньше SW передавал только скалярный htf_direction (текущее направление), тогда как оптимизатор передаёт полный htf_index (список ts/dir для bisect), из-за чего SW расставлял сделки с HTF-фильтром на основе текущего направления вместо исторического → сигналы не совпадали с конфигом; исправлено во всех 4 точках запуска SW-треда (single и multi)
 - v3.259: настоящий fix подмены сигналов после цикла 1 (мульти-символ). Корень проблемы:
   на каждом цикле >1 _sw_state[sym]["params"] безусловно перезаписывался best_params
   ТЕКУЩЕГО цикла (даже если он слабее рекорда и s["best"] не менялся). SW-тред
@@ -131,7 +132,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.264"
+APP_VERSION = "3.265"
 
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
@@ -2666,7 +2667,7 @@ def _try_slide_window(symbol, tf, olog):
         return False
 
 
-def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
+def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index=None):
     """Каждый TF-интервал: загружает последнюю закрытую свечу, добавляет, убирает первую.
     В мультирежиме использует _sw_state[symbol], в одиночном — глобальный opt_state."""
     global _sw_candles, _sw_params, _sw_risk
@@ -2796,7 +2797,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct):
         if best_p:
             with htf_lock:
                 _htf_dir = htf_state["direction"]
-            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir)
+            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
             chart_signals_data = sim["_signals"] if sim else []
             _sw_pending_bar = sim["pending_signal_bar"] if sim else None
             chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
@@ -4309,6 +4310,7 @@ def run_optimizer(params):
                 sw_thread = threading.Thread(
                     target=_sliding_window_thread,
                     args=(symbol, tf, n_sw, alert_cfg, risk_pct),
+                    kwargs={"htf_index": _htf_index},
                     daemon=True
                 )
                 sw_thread.start()
@@ -4325,6 +4327,7 @@ def run_optimizer(params):
             sw_thread = threading.Thread(
                 target=_sliding_window_thread,
                 args=(symbol, tf, n_sw, alert_cfg, risk_pct),
+                kwargs={"htf_index": _htf_index},
                 daemon=True
             )
             sw_thread.start()
@@ -4484,6 +4487,7 @@ def _run_multi_safe(sym_list, base_params):
                             t = threading.Thread(
                                 target=_sliding_window_thread,
                                 args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                                kwargs={"htf_index": _htf_index_sym},
                                 daemon=True
                             )
                             _sw_threads[sym] = t
@@ -4690,6 +4694,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     _sw_t = threading.Thread(
                         target=_sliding_window_thread,
                         args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                        kwargs={"htf_index": _htf_index_sym},
                         daemon=True
                     )
                     _sw_t.start()
