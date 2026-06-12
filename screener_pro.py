@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.314
+WickFill Optimizer v3.315
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.315: fix потеря предпоследней свечи при перерисовке графика после
+  завершения цикла оптимизатора. Причина: график пересобирался из _cc_src_snap
+  — снэпшота _sw_candles, снятого в НАЧАЛЕ цикла, + свежей live-свечи с биржи.
+  Если за время цикла (может занимать десятки секунд — минуты) SW-тред успевал
+  закрыть и сдвинуть окно на новую свечу, эта свеча отсутствовала и в снэпшоте,
+  и не была live (биржа уже вернула следующую) — терялась при перерисовке.
+  Теперь график пересобирается из АКТУАЛЬНЫХ _sw_candles на момент завершения
+  цикла, а не из снэпшота начала цикла.
 - v3.314: дефолтный масштаб графика ÷2: мобайл 60→30 свечей, десктоп 120→60
 - v3.313: дефолтный масштаб графика ÷2: мобайл 120→60 свечей, десктоп 240→120
 - v3.312: дефолтный масштаб графика возвращён к 120/240 (мобайл/десктоп) — по
@@ -197,7 +205,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.314"
+APP_VERSION = "3.315"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4608,17 +4616,24 @@ def run_optimizer(params):
             except Exception as _e:
                 print(f"{_ts()} [gh] Ошибка синхронизации: {_e}", flush=True)
 
-            # Строим граф синхронно — карточка и граф всегда из одного конфига
+            # Строим граф синхронно — карточка и граф всегда из одного конфига.
+            # ВАЖНО: используем АКТУАЛЬНЫЕ _sw_candles (на момент завершения цикла),
+            # а не _cc_src_snap (снятый в начале цикла) — за время долгого цикла
+            # SW-тред/_live_candle_updater могли сдвинуть окно (закрылась новая
+            # свеча), и пересборка графика по старому снэпшоту "съедала"
+            # предпоследнюю свечу, которая успела закрыться во время цикла.
+            with opt_lock:
+                _chart_src = list(_sw_candles) if _sw_candles else list(_cc_src_snap)
             try:
                 with htf_lock:
                     _htf_d = htf_state["direction"]
-                _sim = _simulate(_cc_src_snap, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
+                _sim = _simulate(_chart_src, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
-                print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_cc_src_snap)}", flush=True)
-                _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _cc_src_snap]
+                print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
+                _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _chart_src]
                 _cur = _fetch_current_candle(symbol, tf)
-                if _cur and _cc_src_snap and _cur["t"] > _cc_src_snap[-1]["t"]:
+                if _cur and _chart_src and _cur["t"] > _chart_src[-1]["t"]:
                     _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
                 _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
             except Exception as _ce:
