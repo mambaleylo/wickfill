@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.297: fix 2 свечи перед live пропадают — корень: viewStart не обновлялся когда live-свеча добавлялась асинхронно через fetchLiveCandle после postMessage. Введён _atRightEdge — глобальный флаг «пользователь у правого края», обновляется при каждом render() и всех ручных взаимодействиях (wheel/drag/pinch); render() теперь сам подтягивает viewStart = CANDLES.length - viewLen при _atRightEdge=true до клампирования — любое добавление свечей (push live, postMessage, gap-fill) автоматически двигает viewport. fetchLiveCandle: убран wasAtEnd — viewStart=CANDLES.length-viewLen при push всегда (была ошибка: viewStart не двигался когда postMessage добавлял массив без live а fetchLiveCandle асинхронно добавлял live после).
 - v3.296: добавлена панель отладки свечей 🕯 (кнопка в шапке графика): показывает последние 3 свечи с биржи (t открытия, close_at закрытия, OHLC, статус live/closed) vs последние 3 свечи нашего графика + live-cache; авто-обновление каждые 3 сек; автоматически выявляет расхождения в OHLC между биржей и графиком; новый endpoint /candle_debug.
 - v3.295: fix предпоследняя свеча периодически пропадает и live сливается с закрытой: (1) postMessage wasAtEnd теперь с порогом -2 (был -1) — корректно держит viewStart у правого края и при наличии live и без неё; (2) после замены массива через postMessage немедленно вызывается fetchLiveCandle (отменяя 2с таймер) — live-свеча восстанавливается мгновенно, без 2с паузы когда предпоследняя «пропадала».
 - v3.294: fix live-свеча сливается с предыдущей закрытой — при d.t === last.t (Gate ещё не сдвинул интервал) код ошибочно помечал закрытую свечу как live, она рисовалась дважды; теперь в этом случае ничего не делаем — live появится только когда d.t > last.t.
@@ -163,7 +164,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.296"
+APP_VERSION = "3.297"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2065,6 +2066,10 @@ const _isMob=window.innerWidth<=700;
 const _defaultViewLen=_isMob?60:120;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
+// Отслеживаем: был ли пользователь у правого края при последнем render()
+// Используется чтобы любое увеличение CANDLES (push live, postMessage) автоматически
+// сдвигало viewStart — независимо от того, кто добавил свечи.
+let _atRightEdge = true;
 // rAF batching: несколько вызовов schedRender() за один кадр сводятся в один render()
 let _rafPending=false;
 function schedRender(){{
@@ -2081,9 +2086,13 @@ function render(){{
   if(!W||!H){{if(_lastW&&_lastH){{W=_lastW;H=_lastH;}}else return;}}
   _lastW=W;_lastH=H;
   if(!CANDLES.length) return;
+  // Если были у правого края — следуем за ним (свечи могли добавиться асинхронно)
+  if (_atRightEdge) viewStart = Math.max(0, CANDLES.length - viewLen);
   // Гарантируем корректность viewport перед каждым рендером
   viewLen = Math.max(1, Math.min(viewLen, CANDLES.length));
   viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
+  // Запоминаем: находимся ли у правого края сейчас (с запасом 1 — live может ещё не быть)
+  _atRightEdge = (viewStart + viewLen >= CANDLES.length - 1);
   // Resize canvas только если реально изменился размер — иначе сброс вызывает мигание
   if(W!==_lastDpr||H!==canvas._lastH||dpr!==_lastDpr||canvas.width!==Math.round(W*dpr)||canvas.height!==Math.round(H*dpr)){{
     canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);
@@ -2311,9 +2320,9 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));schedRender();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
-window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));schedRender();}});
+window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}});
 window.addEventListener('mouseup',()=>isDragging=false);
 // Touch support
 let _t1x=0,_t1VS=0,_tPinchD=0,_tPinchVL=0,_tPinchVS=0;
@@ -2329,12 +2338,12 @@ wrap.addEventListener('touchmove',e=>{{
   e.preventDefault();
   if(e.touches.length===1){{
     const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.touches[0].clientX-_t1x)/cw2);
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
   }} else if(e.touches.length===2){{
     const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
     const d=Math.sqrt(dx*dx+dy*dy),scale=_tPinchD/d;
     viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(_tPinchVL*scale)));
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
@@ -2463,32 +2472,27 @@ function fetchLiveCandle() {{
       _liveFailCount = 0;
       if (!d.ok) return;
       const last = CANDLES[CANDLES.length - 1];
-      // Был ли пользователь у правого края ДО изменений
-      const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
       if (last && last.live) {{
         if (d.t === last.t) {{
           // Та же свеча — обновляем HLC, open не трогаем (чтобы не было разрыва)
           last.h = Math.max(last.h, d.h); last.l = Math.min(last.l, d.l); last.c = d.c;
         }} else if (d.t > last.t) {{
           // Новый интервал: закрываем старую live, добавляем новую.
-          // open = close предыдущей свечи — нет разрыва между свечами.
           const prevClose = last.c;
           delete last.live;
           const newO = prevClose ?? d.o;
           CANDLES.push({{t:d.t, o:newO, h:Math.max(newO,d.h), l:Math.min(newO,d.l), c:d.c, live:true}});
-          if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
+          viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }} else {{
         // Первое появление live-свечи
         if (last && !last.live && d.t === last.t) {{
-          // t совпадает с последней закрытой — это та же свеча, Gate ещё не сдвинул интервал.
-          // НЕ помечаем её live и не добавляем новую — просто ничего не делаем.
-          // (обновлять HLC тоже не нужно — свеча уже закрыта)
+          // t совпадает с последней закрытой — Gate ещё не сдвинул интервал, не трогаем
         }} else if (last && !last.live && d.t > last.t) {{
-          // t больше — новая live-свеча сверх закрытых; open = close последней закрытой
+          // t больше — новая live сверх закрытых
           const newO = last.c ?? d.o;
           CANDLES.push({{t:d.t, o:newO, h:Math.max(newO,d.h), l:Math.min(newO,d.l), c:d.c, live:true}});
-          if (wasAtEnd) viewStart = Math.max(0, CANDLES.length - viewLen);
+          viewStart = Math.max(0, CANDLES.length - viewLen);
         }}
       }}
       // Badge
@@ -2541,17 +2545,12 @@ window.addEventListener('message', e => {{
   // Немедленно обновляем live-свечу после замены массива — не ждём 2с таймера
   if (_liveTimer) {{ clearTimeout(_liveTimer); _liveTimer = null; }}
   fetchLiveCandle();
-  // Сдвигаем viewStart: если были у правого края — следуем за правым краем;
-  // иначе — только корректируем чтобы viewStart+viewLen не вышел за новый массив
-  if (wasAtEnd) {{
-    viewStart = Math.max(0, CANDLES.length - viewLen);
-  }} else {{
-    // Пропорционально сохраняем позицию при изменении длины массива
-    if (oldLen > 0 && CANDLES.length !== oldLen) {{
-      viewStart = Math.round(viewStart * CANDLES.length / oldLen);
-    }}
+  // Если не у правого края — пропорционально корректируем позицию при изменении длины
+  if (!_atRightEdge && oldLen > 0 && CANDLES.length !== oldLen) {{
+    viewStart = Math.round(viewStart * CANDLES.length / oldLen);
     viewStart = Math.max(0, Math.min(viewStart, CANDLES.length - viewLen));
   }}
+  // Если у правого края — render() подтянет viewStart сам через _atRightEdge
   schedRender();
 }});
 
