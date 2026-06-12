@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.316
+WickFill Optimizer v3.317
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.317: HTF-фильтр — сводная статистика эффективности за период перебора.
+  После каждого цикла дополнительно прогоняется _simulate на том же окне свечей
+  и тех же параметрах, но БЕЗ HTF-фильтра (htf_index=None); результат (Депозит/
+  WR/Сделок/DD/PF) с фильтром и без фильтра сравнивается и выводится в новой
+  карточке "HTF-фильтр" + строкой в логе. opt_state["htf_stats"] /
+  /opt_status поле htf_stats.
 - v3.316: fix не работал скролл списка "Недавние конфиги" на планшетах —
   у #recentBody (overflow-y:auto) отсутствовал свой touch-action, и тач-жест
   внутри вложенного скролл-контейнера перехватывался page-скроллом (html/body/
@@ -210,7 +216,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.316"
+APP_VERSION = "3.317"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -369,6 +375,8 @@ opt_state = {
     "last_signal_t": 0,   # timestamp последней свечи с сигналом (чтобы не дублировать)
     # fetch progress (0-100, -1 = не идёт)
     "fetch_pct": -1, "fetch_symbol": "",
+    # HTF-фильтр: сводная статистика эффективности (с/без фильтра на окне перебора)
+    "htf_stats": None,
 }
 opt_lock = threading.Lock()
 
@@ -4301,7 +4309,7 @@ def run_optimizer(params):
             "chart_path": "", "chart_updated_at": -1,
             "chart_candles": [], "chart_signals": [],
             "sw_last_update": 0, "sw_candle_count": 0,
-            "last_signal_t": 0,
+            "last_signal_t": 0, "htf_stats": None,
         })
         # Восстанавливаем флаг если тред скользящего окна уже жив
         if sw_was_running:
@@ -4629,6 +4637,7 @@ def run_optimizer(params):
             # предпоследнюю свечу, которая успела закрыться во время цикла.
             with opt_lock:
                 _chart_src = list(_sw_candles) if _sw_candles else list(_cc_src_snap)
+            _htf_stats = None
             try:
                 with htf_lock:
                     _htf_d = htf_state["direction"]
@@ -4636,6 +4645,35 @@ def run_optimizer(params):
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
                 print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
+
+                # --- HTF-фильтр: сводная статистика эффективности ---
+                # Сравниваем результат "с фильтром" (выше) и "без фильтра" на ТОМ ЖЕ
+                # окне свечей и тех же параметрах — разница и есть эффект HTF-фильтра
+                # за выбранный для перебора период.
+                _htf_stats = None
+                if _htf_index:
+                    try:
+                        _sim_no_htf = _simulate(_chart_src, _tp, 0, _collect=False, risk_pct=risk_pct,
+                                                 htf_direction=0, htf_index=None)
+                        if _sim_no_htf:
+                            _htf_stats = {
+                                "with":    {"equity": _sim["equity"], "trades": _sim["trades"],
+                                             "winrate": _sim["winrate"], "max_dd": _sim["max_dd"],
+                                             "profit_factor": _sim["profit_factor"]},
+                                "without": {"equity": _sim_no_htf["equity"], "trades": _sim_no_htf["trades"],
+                                             "winrate": _sim_no_htf["winrate"], "max_dd": _sim_no_htf["max_dd"],
+                                             "profit_factor": _sim_no_htf["profit_factor"]},
+                                "htf_tf": HTF_MAP.get(tf, ""),
+                                "blocked_trades": max(0, _sim_no_htf["trades"] - _sim["trades"]),
+                            }
+                            olog(f"📐 HTF-фильтр ({_htf_stats['htf_tf']}): с фильтром ${_sim['equity']:.2f} "
+                                 f"({_sim['trades']} сд, WR {_sim['winrate']:.1f}%) vs без фильтра "
+                                 f"${_sim_no_htf['equity']:.2f} ({_sim_no_htf['trades']} сд, "
+                                 f"WR {_sim_no_htf['winrate']:.1f}%) — отфильтровано "
+                                 f"{_htf_stats['blocked_trades']} сд.", "info")
+                    except Exception as _hse:
+                        print(f"{_ts()} [htf_stats] Ошибка: {_hse}", flush=True)
+
                 _cfmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in _chart_src]
                 _cur = _fetch_current_candle(symbol, tf)
                 if _cur and _chart_src and _cur["t"] > _chart_src[-1]["t"]:
@@ -4644,7 +4682,7 @@ def run_optimizer(params):
             except Exception as _ce:
                 import traceback
                 print(f"{_ts()} [chart] Ошибка: {_ce}\n{traceback.format_exc()}", flush=True)
-                _csig=[]; _cpend=None; _cfmt=[]; _cpath=""
+                _csig=[]; _cpend=None; _cfmt=[]; _cpath=""; _htf_stats=None
 
             with opt_lock:
                 _sw_params = _tp
@@ -4654,6 +4692,7 @@ def run_optimizer(params):
                 opt_state["chart_pending_bar"] = _cpend
                 opt_state["chart_path"]        = _cpath or ""
                 opt_state["chart_updated_at"]  = int(time.time())
+                opt_state["htf_stats"]         = _htf_stats
 
             # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
             now_ts = time.time()
@@ -6311,6 +6350,24 @@ details summary::-webkit-details-marker{display:none}
       </table>
     </div>
 
+    <!-- HTF filter effectiveness card -->
+    <div class="table-panel in-strip" id="htfStatsWrap" style="display:none">
+      <div class="table-hdr">HTF-фильтр (<span id="htfStatsTf">—</span>) — за период перебора</div>
+      <table>
+        <thead>
+          <tr>
+            <th></th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
+          <tr><td>Без фильтра</td><td id="htfWoEq">—</td><td id="htfWoWr">—</td><td id="htfWoTr">—</td><td id="htfWoDd">—</td><td id="htfWoPf">—</td></tr>
+        </tbody>
+      </table>
+      <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span></div>
+    </div>
+
+
     <!-- Chart — fills remaining space -->
     <div class="chart-area">
       <div id="symSwitcher" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:20;display:none;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto;background:var(--cream2);border:1px solid var(--border2);border-radius:20px;padding:4px 8px;max-width:90%"></div>
@@ -6974,6 +7031,29 @@ function poll(){
       htfPill.style.display='none';
     }
 
+    // HTF-фильтр: сводная статистика эффективности (с/без фильтра за период перебора)
+    const htfStatsWrap=document.getElementById('htfStatsWrap');
+    if(htfStatsWrap){
+      const hs=d.htf_stats;
+      if(hs && hs.with && hs.without){
+        htfStatsWrap.style.display='block';
+        document.getElementById('htfStatsTf').textContent=hs.htf_tf||'—';
+        document.getElementById('htfWithEq').textContent='$'+hs.with.equity.toFixed(2);
+        document.getElementById('htfWithWr').textContent=hs.with.winrate.toFixed(1);
+        document.getElementById('htfWithTr').textContent=hs.with.trades;
+        document.getElementById('htfWithDd').textContent=hs.with.max_dd.toFixed(1);
+        document.getElementById('htfWithPf').textContent=hs.with.profit_factor.toFixed(2);
+        document.getElementById('htfWoEq').textContent='$'+hs.without.equity.toFixed(2);
+        document.getElementById('htfWoWr').textContent=hs.without.winrate.toFixed(1);
+        document.getElementById('htfWoTr').textContent=hs.without.trades;
+        document.getElementById('htfWoDd').textContent=hs.without.max_dd.toFixed(1);
+        document.getElementById('htfWoPf').textContent=hs.without.profit_factor.toFixed(2);
+        document.getElementById('htfBlocked').textContent=hs.blocked_trades;
+      } else {
+        htfStatsWrap.style.display='none';
+      }
+    }
+
 
     const logs=d.logs||[];
     if(logs.length>lastLogCount){
@@ -7590,6 +7670,7 @@ class Handler(BaseHTTPRequestHandler):
                     "htf_direction":  htf_state.get("direction", 0),
                     "htf_tf":         htf_state.get("tf", ""),
                     "htf_last_update": htf_state.get("last_update", 0),
+                    "htf_stats":      opt_state.get("htf_stats"),
                 }
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
