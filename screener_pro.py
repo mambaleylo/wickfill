@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.302: fix пропадание/искажение свечи при закрытии интервала (расхождение с биржей по high/low) — в _live_candle_updater при смене интервала (c["t"] > cc2[-1]["t"]) старая live-свеча с накопленным OHLC (включая wick'и) просто отбрасывалась через cc2.pop() без сохранения; теперь она конвертируется в обычную закрытую свечу (live=False) и остаётся в массиве — её реальные high/low не теряются.
 - v3.301: fix ГРАФИК НЕ ОТКРЫВАЛСЯ — найдена истинная причина (v3.298 фикс был неполным). Внутри f-строки _build_chart_html все '\n' в loadCandleDebug() были одиночным backslash — f-string интерпретировал их как ПЕРЕВОД СТРОКИ внутри JS string-литерала, разбивая return-выражение на 2 строки и ломая весь <script> синтаксической ошибкой (SyntaxError: Invalid or unexpected token, chart:438) → весь JS на странице /chart не выполнялся → пустой холст. Заменены все 22 вхождения '\n' на '\\n' (экранированный backslash, чтобы в выводе получался JS-escape \n, а не реальный перевод строки).
 - v3.300: debug — добавлен глобальный window.onerror на странице /chart, выводящий JS-ошибку прямо на экран (для диагностики пустого графика).
 - v3.299: fix график не открывается / запросы к серверу зависают — HTTPServer был однопоточным (один request — один поток), и долгий запрос (/chart или poll во время цикла) блокировал все остальные соединения, включая повторные открытия /chart. Заменён на ThreadingHTTPServer (daemon_threads=True) — запросы обрабатываются параллельно.
@@ -168,7 +169,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.301"
+APP_VERSION = "3.302"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -457,8 +458,12 @@ def _live_candle_updater():
                                         cc2[-1] = dict(cc2[-1])
                                         opt_state["chart_candles"] = cc2
                                     elif c["t"] > cc2[-1]["t"]:
-                                        # Новый интервал — убираем старую live и добавляем новую
-                                        cc2.pop()
+                                        # Новый интервал — старая live-свеча закрылась.
+                                        # Сохраняем её накопленный OHLC как закрытую свечу (не теряем хвосты/wick),
+                                        # вместо того чтобы просто отбросить (cc2.pop() без сохранения).
+                                        closed_prev = dict(cc2[-1])
+                                        closed_prev.pop("live", None)
+                                        cc2[-1] = closed_prev
                                         opt_state["chart_candles"] = cc2 + [live_c]
                                 elif c["t"] > last_closed_t:
                                     # Строго больше: не дублируем закрытую свечу
