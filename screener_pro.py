@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.288: fix сделки не открываются когда баланс меньше стоимости 1 контракта — убран принудительный max(1, ...) при расчёте size; если round(margin/(ep*qm)) < 1 — возвращается понятная ошибка "Недостаточно средств" с указанием минимальной маржи и советом пополнить или снизить плечо.
 - v3.287: fix пропадание 1-2 свечей перед live и гонка записи chart_candles: (1) _live_candle_updater пропускает запись в opt_state["chart_candles"] когда sw_running=True — SW-тред сам управляет массивом, нет гонки; (2) postMessage handler: prevLive восстанавливается только если prevLive.t СТРОГО больше t последней закрытой свечи (было >=) — при равенстве SW уже закрыл свечу, старая live не нужна; (3) /chart_data: если в chart_candles нет live-свечи — инжектируем из _live_candle_cache напрямую (SW мог не успеть добавить до запроса).
 - v3.286: fix вертикальный разрыв между свечами после обновления свечей для перебора: (1) в SW-треде при построении chart_candles_fmt open live-свечи теперь берётся из close последней закрытой свечи new_candles[-1], а не с биржи (cur_c2["open"]) — устраняет ценовой разрыв при постмесседж-обновлении после каждого цикла оптимизатора; (2) в _live_candle_updater: live_c.open = last_closed["c"] вместо c["open"]; при обновлении существующей live-свечи обновляются только HLC (open не перезаписывается чтобы не сбить anchored open).
 - v3.285: fix мигание графика и вертикальные разрывы между свечами: (1) rAF-батчинг — введён schedRender() с флагом _rafPending, все вызовы render за один кадр сводятся в один requestAnimationFrame — нет промежуточных пустых кадров; (2) canvas resize только при реальном изменении размера — раньше canvas.width=... при каждом render сбрасывал canvas вызывая мигание; теперь resize пропускается если W/H/dpr не изменились; (3) убран _scheduleZoomReset — прыжок viewport через 5 секунд после зума выглядел как разрыв свечей.
@@ -154,7 +155,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.287"
+APP_VERSION = "3.288"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1941,12 +1942,19 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         except Exception:
             _qm = 0
     if _qm > 0:
-        size = max(1, round(margin / (ep * _qm)))
+        size = round(margin / (ep * _qm))
         log_lines.append(f"  [debug] margin={margin:.2f} ep={ep:.2f} qm={_qm} → size={size}")
     else:
         # Последний фоллбэк: предполагаем 1 контракт = 1 USD (маржа)
-        size = max(1, round(margin))
+        size = round(margin)
         log_lines.append(f"  [debug] qm=0 fallback: margin={margin:.2f} → size={size}")
+    if size < 1:
+        cost_min = (ep * _qm) if _qm > 0 else 1.0
+        return False, ("\n".join(log_lines) +
+                       f"\n✕ Недостаточно средств: баланс {balance:.2f} USDT, "
+                       f"минимум 1 контракт = {cost_min:.2f} USDT маржи "
+                       f"(ep={ep:.4g} qm={_qm} lev={applied_leverage}×). "
+                       f"Пополните счёт или снизьте плечо/риск.")
     log_lines.append(f"✓ Размер: {size} контр. | маржа {size*ep*_qm:.2f} USDT | позиция {size*ep*_qm*applied_leverage:.2f} USDT ({applied_leverage}×)")
     # 5. Выставляем ордер
     ok, order_log = _gate_place_order(cfg, contract, direction, size, tp, sl)
