@@ -1,0 +1,24 @@
+v3.297 - 2026-06-12 07:47 UTC
+
+Корень проблемы пропадания 2 свечей перед live:
+
+viewStart не обновлялся когда live-свеча добавлялась асинхронно
+через fetchLiveCandle ПОСЛЕ postMessage.
+
+Сценарий:
+1. postMessage: CANDLES заменён (N свечей, без live)
+2. fetchLiveCandle() вызван — но это async, ответ придёт через ~200-500мс
+3. render() → viewStart = N - viewLen (корректно для N свечей)
+4. через 300мс fetchLiveCandle добавляет live → CANDLES.length = N+1
+5. viewStart НЕ обновился → vis = slice(viewStart, viewStart+viewLen) = N свечей
+   начиная с viewStart, live на позиции N за пределами viewport → не видна
+6. Без live предпоследняя (N-1) тоже «пропадала» визуально
+
+Решение: _atRightEdge — глобальный boolean флаг.
+- render() обновляет его: _atRightEdge = (viewStart+viewLen >= CANDLES.length-1)
+- render() в начале: if (_atRightEdge) viewStart = CANDLES.length - viewLen
+  → ЛЮБОЕ добавление свечей (push, postMessage) автоматически подтягивает viewport
+- Все ручные взаимодействия (wheel, drag, pinch, touch) обновляют флаг
+- fetchLiveCandle: убран wasAtEnd, viewStart=CANDLES.length-viewLen при push всегда
+  (render() всё равно подтянет, дублирование безвредно)
+- postMessage: убрана явная логика viewStart, только пропорциональный сдвиг для не-края
