@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.291: wick_dir ограничен только bounce — убраны both/upper/lower из PARAM_SPACE; оптимизатор больше не будет выбирать верхний/нижний фитиль как лонг/шорт сигнал.
 - v3.290: fix цвет лейблов TP/SL на шкале — фон затемнён (тёмно-зелёный/тёмно-оранжевый/тёмно-коричневый), текст светлый пастельный вместо белого → хорошая читаемость на любом фоне.
 - v3.289: fix критический баг расчёта size позиции — формула была size=margin/(ep*qm) вместо size=(margin*leverage)/(ep*qm); при leverage=25 размер занижался в 25 раз и округлялся до 0 → сделки не открывались. Теперь notional = margin × leverage, size = notional / (ep * qm), что соответствует тому как Gate считает маржу.
 - v3.288: fix сделки не открываются когда баланс меньше стоимости 1 контракта — убран принудительный max(1, ...) при расчёте size; если round(margin/(ep*qm)) < 1 — возвращается понятная ошибка "Недостаточно средств" с указанием минимальной маржи и советом пополнить или снизить плечо.
@@ -157,7 +158,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.290"
+APP_VERSION = "3.291"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -202,7 +203,7 @@ PARAM_SPACE = {
     "tp_pct":             {"min": 0.5,  "max": 2,  "step": 0.05, "type": "float", "label": "Тейк-профит (%)"},
     "min_wick_pct":       {"min": 30.0, "max": 90.0, "step": 5.0,  "type": "float", "label": "Мин. фитиль (% диапазона)"},
     "min_wick_pct_price": {"min": 0.05, "max": 0.5,  "step": 0.05, "type": "float", "label": "Мин. фитиль (% цены)"},
-    "wick_dir":           {"values": ["both", "upper", "lower", "bounce"], "type": "cat",  "label": "Направление фитиля"},
+    "wick_dir":           {"values": ["bounce"], "type": "cat",  "label": "Направление фитиля"},
     "filter_body_rat":    {"values": [True, False], "type": "bool", "label": "Фильтр: тело < фитиль"},
     "filter_consec":      {"values": [False, True], "type": "bool", "label": "Фильтр: не 2 сигнала подряд"},
     "use_confirm_candle": {"values": [True, False], "type": "bool", "label": "Подтверждающая свеча"},
