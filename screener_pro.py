@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.295: fix предпоследняя свеча периодически пропадает и live сливается с закрытой: (1) postMessage wasAtEnd теперь с порогом -2 (был -1) — корректно держит viewStart у правого края и при наличии live и без неё; (2) после замены массива через postMessage немедленно вызывается fetchLiveCandle (отменяя 2с таймер) — live-свеча восстанавливается мгновенно, без 2с паузы когда предпоследняя «пропадала».
 - v3.294: fix live-свеча сливается с предыдущей закрытой — при d.t === last.t (Gate ещё не сдвинул интервал) код ошибочно помечал закрытую свечу как live, она рисовалась дважды; теперь в этом случае ничего не делаем — live появится только когда d.t > last.t.
 - v3.293: fix периодическое пропадание 3 свечей с конца — оптимизатор перезаписывал chart_candles в opt_states[sym] данными из local_candles (исторический срез), затирая более свежие свечи SW-треда; теперь оптимизатор не трогает chart_candles если sw_running=True — только обновляет chart_signals и метрики. То же в multi-mode snapshot.
 - v3.292: fix вертикальный разрыв между свечами: (1) при построении chart_candles_fmt в SW-треде и оптимизаторе — если между соседними свечами пропущен интервал, вставляются flat-синтетические свечи (gap=True) чтобы не было пустого пространства; (2) gap-свечи рисуются как тонкая пунктирная горизонтальная линия с alpha=0.25 — не привлекают внимания но заполняют пустоту; (3) уменьшен межсвечный gap: Math.min(cw*0.12, 2.5) вместо cw*0.15.
@@ -161,7 +162,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.294"
+APP_VERSION = "3.295"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2442,7 +2443,8 @@ setTimeout(() => {{ if (viewStart + viewLen >= CANDLES.length - 2) location.relo
 // postMessage — обновляем CANDLES/SIGNALS без перезагрузки страницы
 window.addEventListener('message', e => {{
   if (!e.data || e.data.type !== 'chart_update') return;
-  const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 1);
+  // -2 чтобы wasAtEnd=true и при наличии live (-1) и без неё (последняя закрытая)
+  const wasAtEnd = (viewStart + viewLen >= CANDLES.length - 2);
   const oldLen = CANDLES.length;
   // Сохраняем текущую live-свечу чтобы не было моргания при замене массива
   const prevLive = CANDLES.length > 0 && CANDLES[CANDLES.length-1].live
@@ -2464,6 +2466,9 @@ window.addEventListener('message', e => {{
     }}
     // prevLive.t === lastT — SW закрыл эту свечу, данные уже в массиве, live не восстанавливаем
   }}
+  // Немедленно обновляем live-свечу после замены массива — не ждём 2с таймера
+  if (_liveTimer) {{ clearTimeout(_liveTimer); _liveTimer = null; }}
+  fetchLiveCandle();
   // Сдвигаем viewStart: если были у правого края — следуем за правым краем;
   // иначе — только корректируем чтобы viewStart+viewLen не вышел за новый массив
   if (wasAtEnd) {{
