@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.292: fix вертикальный разрыв между свечами: (1) при построении chart_candles_fmt в SW-треде и оптимизаторе — если между соседними свечами пропущен интервал, вставляются flat-синтетические свечи (gap=True) чтобы не было пустого пространства; (2) gap-свечи рисуются как тонкая пунктирная горизонтальная линия с alpha=0.25 — не привлекают внимания но заполняют пустоту; (3) уменьшен межсвечный gap: Math.min(cw*0.12, 2.5) вместо cw*0.15.
 - v3.291: wick_dir ограничен только bounce — убраны both/upper/lower из PARAM_SPACE; оптимизатор больше не будет выбирать верхний/нижний фитиль как лонг/шорт сигнал.
 - v3.290: fix цвет лейблов TP/SL на шкале — фон затемнён (тёмно-зелёный/тёмно-оранжевый/тёмно-коричневый), текст светлый пастельный вместо белого → хорошая читаемость на любом фоне.
 - v3.289: fix критический баг расчёта size позиции — формула была size=margin/(ep*qm) вместо size=(margin*leverage)/(ep*qm); при leverage=25 размер занижался в 25 раз и округлялся до 0 → сделки не открывались. Теперь notional = margin × leverage, size = notional / (ep * qm), что соответствует тому как Gate считает маржу.
@@ -158,7 +159,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.291"
+APP_VERSION = "3.292"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2080,7 +2081,7 @@ function render(){{
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
   const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;if(mx<=mn)mx=mn+1;
   const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=54,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
-  const cw=drawW/vis.length,gap=Math.max(0.5,cw*0.15);
+  const cw=drawW/vis.length,gap=Math.max(0.5,Math.min(cw*0.12, 2.5));
   const py=price=>PAD_T+(mx-price)/(mx-mn)*drawH;
   const cx=i=>PAD_L+(i+0.5)*cw;
   // Theme-aware colors
@@ -2209,7 +2210,13 @@ function render(){{
     }}
   }}
   for(let i=0;i<vis.length;i++){{
-    const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true;
+    const c=vis[i],x=cx(i),bull=c.c>=c.o,isLive=c.live===true,isGap=c.gap===true;
+    if(isGap){{
+      // Синтетическая свеча-заполнитель: рисуем только горизонтальную линию
+      ctx.globalAlpha=0.25;ctx.strokeStyle='#888';ctx.lineWidth=1;
+      ctx.setLineDash([2,3]);ctx.beginPath();ctx.moveTo(x-cw*0.3,py(c.c));ctx.lineTo(x+cw*0.3,py(c.c));ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1.0;continue;
+    }}
     const col=bull?'#A3BF6F':'#FF8234';
     ctx.globalAlpha=isLive?0.55:1.0;
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,cw*0.1);
@@ -3008,7 +3015,18 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             _sw_pending_info = ({"t": _sw_pending_t, "dir": _sw_pending_dir}
                                  if _sw_pending_bar is not None else None)
 
-            chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
+            # Строим chart_candles_fmt с заполнением временных пропусков
+            # (если в new_candles пропущен интервал — вставляем flat-свечу чтобы не было визуального разрыва)
+            _raw_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
+            chart_candles_fmt = []
+            for _fi, _fc in enumerate(_raw_fmt):
+                if _fi > 0:
+                    _prev = chart_candles_fmt[-1]
+                    _gap_n = round((_fc["t"] - _prev["t"]) / interval_sec) - 1
+                    for _gi in range(min(_gap_n, 10)):  # не более 10 синтетических
+                        _gt = _prev["t"] + interval_sec * (_gi + 1)
+                        chart_candles_fmt.append({"t":_gt,"o":_prev["c"],"h":_prev["c"],"l":_prev["c"],"c":_prev["c"],"gap":True})
+                chart_candles_fmt.append(_fc)
             cur_c2 = _fetch_current_candle(symbol, tf)
             if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
                 # open live-свечи = close последней закрытой — нет ценового разрыва
@@ -4868,7 +4886,17 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     chart_signals = sim["_signals"] if sim else []
                 except Exception:
                     chart_signals = []
-                chart_candles_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in local_candles]
+                _raw_fmt2 = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in local_candles]
+                chart_candles_fmt = []
+                _ivsec = TF_SECONDS.get(tf, 3600)
+                for _fi2, _fc2 in enumerate(_raw_fmt2):
+                    if _fi2 > 0:
+                        _prev2 = chart_candles_fmt[-1]
+                        _gap_n2 = round((_fc2["t"] - _prev2["t"]) / _ivsec) - 1
+                        for _gi2 in range(min(_gap_n2, 10)):
+                            _gt2 = _prev2["t"] + _ivsec * (_gi2 + 1)
+                            chart_candles_fmt.append({"t":_gt2,"o":_prev2["c"],"h":_prev2["c"],"l":_prev2["c"],"c":_prev2["c"],"gap":True})
+                    chart_candles_fmt.append(_fc2)
 
                 with opt_states_lock:
                     s = opt_states.setdefault(sym, {})
