@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.287: fix пропадание 1-2 свечей перед live и гонка записи chart_candles: (1) _live_candle_updater пропускает запись в opt_state["chart_candles"] когда sw_running=True — SW-тред сам управляет массивом, нет гонки; (2) postMessage handler: prevLive восстанавливается только если prevLive.t СТРОГО больше t последней закрытой свечи (было >=) — при равенстве SW уже закрыл свечу, старая live не нужна; (3) /chart_data: если в chart_candles нет live-свечи — инжектируем из _live_candle_cache напрямую (SW мог не успеть добавить до запроса).
 - v3.286: fix вертикальный разрыв между свечами после обновления свечей для перебора: (1) в SW-треде при построении chart_candles_fmt open live-свечи теперь берётся из close последней закрытой свечи new_candles[-1], а не с биржи (cur_c2["open"]) — устраняет ценовой разрыв при постмесседж-обновлении после каждого цикла оптимизатора; (2) в _live_candle_updater: live_c.open = last_closed["c"] вместо c["open"]; при обновлении существующей live-свечи обновляются только HLC (open не перезаписывается чтобы не сбить anchored open).
 - v3.285: fix мигание графика и вертикальные разрывы между свечами: (1) rAF-батчинг — введён schedRender() с флагом _rafPending, все вызовы render за один кадр сводятся в один requestAnimationFrame — нет промежуточных пустых кадров; (2) canvas resize только при реальном изменении размера — раньше canvas.width=... при каждом render сбрасывал canvas вызывая мигание; теперь resize пропускается если W/H/dpr не изменились; (3) убран _scheduleZoomReset — прыжок viewport через 5 секунд после зума выглядел как разрыв свечей.
 - v3.284: fix плечо не отображалось в Telegram-уведомлении — _sig_leverage искал поле "leverage" в trade_best/params, но оно там не хранится (leverage не в PARAM_SPACE); теперь вычисляется тем же способом что при открытии сделки на Gate: max(1, round(risk_pct / sl_pct)); убрано условие "> 1" — плечо показывается всегда (включая 1×).
@@ -153,7 +154,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.286"
+APP_VERSION = "3.287"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -412,6 +413,8 @@ def _live_candle_updater():
                         # Проверяем что символ не сменился пока шёл запрос к API
                         if opt_state.get("chart_symbol", "") != symbol:
                             pass  # символ сменился — пропускаем, в следующей итерации возьмём новый
+                        elif opt_state.get("sw_running", False):
+                            pass  # SW-тред активен — он сам управляет chart_candles, не конкурируем
                         else:
                             cc2 = list(opt_state.get("chart_candles", []))
                             if cc2:
@@ -2434,20 +2437,19 @@ window.addEventListener('message', e => {{
   CANDLES.length = 0; e.data.candles.forEach(c => CANDLES.push(c));
   SIGNALS.length = 0; e.data.signals.forEach(s => SIGNALS.push(s));
   PENDING_BAR = e.data.pending_bar ?? null;
-  // Если последняя свеча в новых данных — закрытая, а у нас была live актуальная — добавляем обратно
+  // Если последняя свеча в новых данных — закрытая, а у нас была live НОВЕЕ — добавляем обратно.
+  // prevLive.t === lastT означает что SW закрыл эту свечу — live уже не нужна, не добавляем.
   if (prevLive && CANDLES.length > 0 && !CANDLES[CANDLES.length-1].live) {{
     const lastT = CANDLES[CANDLES.length-1].t;
-    if (prevLive.t >= lastT) {{
-      if (prevLive.t === lastT) CANDLES.pop();
-      // Синхронизируем open live-свечи с close предыдущей чтобы не было разрыва
-      const prevClose = CANDLES.length > 0 ? CANDLES[CANDLES.length-1].c : null;
-      if (prevClose != null) {{
-        prevLive.o = prevClose;
-        prevLive.h = Math.max(prevLive.h, prevClose);
-        prevLive.l = Math.min(prevLive.l, prevClose);
-      }}
+    if (prevLive.t > lastT) {{
+      // live-свеча новее последней закрытой — добавляем
+      const prevClose = CANDLES[CANDLES.length-1].c;
+      prevLive.o = prevClose;
+      prevLive.h = Math.max(prevLive.h, prevClose);
+      prevLive.l = Math.min(prevLive.l, prevClose);
       CANDLES.push(prevLive);
     }}
+    // prevLive.t === lastT — SW закрыл эту свечу, данные уже в массиве, live не восстанавливаем
   }}
   // Сдвигаем viewStart: если были у правого края — следуем за правым краем;
   // иначе — только корректируем чтобы viewStart+viewLen не вышел за новый массив
@@ -7446,6 +7448,25 @@ class Handler(BaseHTTPRequestHandler):
                         cc = list(opt_state.get("chart_candles", []))
                         cs = list(opt_state.get("chart_signals", []))
                         cpb = opt_state.get("chart_pending_bar")
+            # Если в массиве нет live-свечи — добавляем из кеша (SW мог не успеть)
+            sym_for_live = req_sym or ""
+            if not sym_for_live:
+                with opt_lock:
+                    sym_for_live = opt_state.get("chart_symbol", "")
+            if cc and sym_for_live:
+                with opt_lock:
+                    _tf_for_live = opt_state.get("chart_tf", "")
+                if _tf_for_live:
+                    _lc_key = f"{sym_for_live}_{_tf_for_live}"
+                    with _live_candle_lock:
+                        _lc = _live_candle_cache.get(_lc_key)
+                    if _lc and not cc[-1].get("live") and _lc.get("t", 0) > cc[-1]["t"]:
+                        _last_c = cc[-1]["c"]
+                        _lc_o = _last_c
+                        cc = cc + [{"t": _lc["t"], "o": _lc_o,
+                                    "h": max(_lc_o, _lc.get("high", _lc_o)),
+                                    "l": min(_lc_o, _lc.get("low", _lc_o)),
+                                    "c": _lc.get("close", _lc_o), "live": True}]
             self._json({"ok": True, "candles": cc, "signals": cs, "pending_bar": cpb})
         elif parsed.path == "/live_candle":
             qs = parse_qs(parsed.query)
