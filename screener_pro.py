@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.298: fix SyntaxError f-string в loadCandleDebug — JS template literals с ${} конфликтовали с Python f-string парсером; заменены на конкатенацию строк.
 - v3.297: fix 2 свечи перед live пропадают — корень: viewStart не обновлялся когда live-свеча добавлялась асинхронно через fetchLiveCandle после postMessage. Введён _atRightEdge — глобальный флаг «пользователь у правого края», обновляется при каждом render() и всех ручных взаимодействиях (wheel/drag/pinch); render() теперь сам подтягивает viewStart = CANDLES.length - viewLen при _atRightEdge=true до клампирования — любое добавление свечей (push live, postMessage, gap-fill) автоматически двигает viewport. fetchLiveCandle: убран wasAtEnd — viewStart=CANDLES.length-viewLen при push всегда (была ошибка: viewStart не двигался когда postMessage добавлял массив без live а fetchLiveCandle асинхронно добавлял live после).
 - v3.296: добавлена панель отладки свечей 🕯 (кнопка в шапке графика): показывает последние 3 свечи с биржи (t открытия, close_at закрытия, OHLC, статус live/closed) vs последние 3 свечи нашего графика + live-cache; авто-обновление каждые 3 сек; автоматически выявляет расхождения в OHLC между биржей и графиком; новый endpoint /candle_debug.
 - v3.295: fix предпоследняя свеча периодически пропадает и live сливается с закрытой: (1) postMessage wasAtEnd теперь с порогом -2 (был -1) — корректно держит viewStart у правого края и при наличии live и без неё; (2) после замены массива через postMessage немедленно вызывается fetchLiveCandle (отменяя 2с таймер) — live-свеча восстанавливается мгновенно, без 2с паузы когда предпоследняя «пропадала».
@@ -164,7 +165,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.297"
+APP_VERSION = "3.298"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2413,49 +2414,49 @@ function toggleCandleDebug() {{
 function loadCandleDebug() {{
   const el = document.getElementById('candleDebugContent');
   if (!el) return;
-  el.textContent = 'Загрузка…';
+  el.textContent = 'Загрузка...';
   fetch('/candle_debug?symbol=' + encodeURIComponent(LIVE_SYMBOL) + '&tf=' + encodeURIComponent(LIVE_TF) + '&_=' + Date.now())
     .then(r => r.json())
     .then(d => {{
       if (!d.ok) {{ el.textContent = 'Ошибка: ' + JSON.stringify(d); return; }}
       const fmt = (c, label) => {{
-        const flag = c.is_live ? ' 🔴LIVE' : (c.is_gap ? ' ·gap' : ' ✅closed');
-        return `  ${label}: t=${c.t_human}  close_at=${c.close_at_human}${flag}\n` +
-               `         O=${c.o} H=${c.h} L=${c.l} C=${c.c}`;
+        const flag = c.is_live ? ' LIVE' : (c.is_gap ? ' gap' : ' closed');
+        return '  [' + label + '] t=' + c.t_human + '  close_at=' + c.close_at_human + flag + '\n' +
+               '         O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
       }};
       const fmtEx = (c) => {{
-        const flag = c.is_closed ? '✅closed' : `🔴LIVE (закр через ${c.secs_until_close}с)`;
-        return `  t=${c.t_human}  close_at=${c.close_at_human}  ${flag}\n` +
-               `  O=${c.o} H=${c.h} L=${c.l} C=${c.c}`;
+        const flag = c.is_closed ? 'closed' : ('LIVE закр через ' + c.secs_until_close + 'с');
+        return '  t=' + c.t_human + '  close_at=' + c.close_at_human + '  ' + flag + '\n' +
+               '  O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
       }};
-      let txt = `Сервер: ${d.server_now_human}  TF=${d.tf}  interval=${d.interval_sec}с\n`;
-      txt += `\n── БИРЖА (последние 3) ──────────────────────────\n`;
-      if (d.exchange_err) {{ txt += `  Ошибка: ${d.exchange_err}\n`; }}
-      else {{ d.exchange_last3.forEach((c, i) => {{ txt += fmtEx(c) + '\n'; if(i<d.exchange_last3.length-1) txt+='\n'; }}); }}
-      txt += `\n── НАШ ГРАФИК (последние 3 из ${d.chart_total_candles}) ────────────\n`;
+      let txt = 'Сервер: ' + d.server_now_human + '  TF=' + d.tf + '  interval=' + d.interval_sec + 'с\n';
+      txt += '\n-- БИРЖА (последние 3) --\n';
+      if (d.exchange_err) {{ txt += '  Ошибка: ' + d.exchange_err + '\n'; }}
+      else {{ d.exchange_last3.forEach(function(c, i) {{ txt += fmtEx(c) + '\n'; if(i<d.exchange_last3.length-1) txt+='\n'; }}); }}
+      txt += '\n-- НАШ ГРАФИК (последние 3 из ' + d.chart_total_candles + ') --\n';
       if (!d.chart_last3.length) {{ txt += '  нет данных\n'; }}
-      else {{ d.chart_last3.forEach((c, i) => {{ txt += fmt(c, `[${i-d.chart_last3.length+d.chart_last3.length-i-1 < 0 ? i : i}]`) + '\n'; if(i<d.chart_last3.length-1) txt+='\n'; }}); }}
+      else {{ d.chart_last3.forEach(function(c, i) {{ txt += fmt(c, i) + '\n'; if(i<d.chart_last3.length-1) txt+='\n'; }}); }}
       if (d.live_cache) {{
         const lc = d.live_cache;
-        txt += `\n── LIVE CACHE ────────────────────────────────────\n`;
-        txt += `  t=${lc.t_human}  close_at=${lc.close_at_human}\n`;
-        txt += `  C=${lc.c}  возраст=${lc.age_sec}с\n`;
+        txt += '\n-- LIVE CACHE --\n';
+        txt += '  t=' + lc.t_human + '  close_at=' + lc.close_at_human + '\n';
+        txt += '  C=' + lc.c + '  возраст=' + lc.age_sec + 'с\n';
       }}
       if (d.discrepancies && d.discrepancies.length) {{
-        txt += `\n⚠ РАСХОЖДЕНИЯ (${d.discrepancies.length}) ──────────────────────\n`;
-        d.discrepancies.forEach(x => {{
-          txt += `  ${x.t_human}: ${x.issue}\n`;
-          if (x.diffs) Object.entries(x.diffs).forEach(([k,v]) => {{
-            txt += `    ${k}: график=${v.chart}  биржа=${v.exchange}\n`;
+        txt += '\nРАСХОЖДЕНИЯ (' + d.discrepancies.length + '):\n';
+        d.discrepancies.forEach(function(x) {{
+          txt += '  ' + x.t_human + ': ' + x.issue + '\n';
+          if (x.diffs) Object.entries(x.diffs).forEach(function(e2) {{
+            txt += '    ' + e2[0] + ': график=' + e2[1].chart + '  биржа=' + e2[1].exchange + '\n';
           }});
         }});
       }} else if (!d.exchange_err) {{
-        txt += `\n✅ Расхождений не обнаружено\n`;
+        txt += '\nРасхождений не обнаружено\n';
       }}
-      txt += `\n[обновлено: ${new Date().toLocaleTimeString()}]`;
+      txt += '\n[обновлено: ' + new Date().toLocaleTimeString() + ']';
       el.textContent = txt;
     }})
-    .catch(e => {{ if(el) el.textContent = 'fetch error: ' + e; }});
+    .catch(function(e) {{ if(el) el.textContent = 'fetch error: ' + e; }});
 }}
 // Авто-обновление дебаг-панели раз в 3 сек пока открыта
 setInterval(() => {{ if (_debugOpen) loadCandleDebug(); }}, 3000);
