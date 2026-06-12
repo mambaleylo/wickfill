@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.299: fix график не открывается / запросы к серверу зависают — HTTPServer был однопоточным (один request — один поток), и долгий запрос (/chart или poll во время цикла) блокировал все остальные соединения, включая повторные открытия /chart. Заменён на ThreadingHTTPServer (daemon_threads=True) — запросы обрабатываются параллельно.
 - v3.298: fix SyntaxError f-string в loadCandleDebug — JS template literals с ${} конфликтовали с Python f-string парсером; заменены на конкатенацию строк.
 - v3.297: fix 2 свечи перед live пропадают — корень: viewStart не обновлялся когда live-свеча добавлялась асинхронно через fetchLiveCandle после postMessage. Введён _atRightEdge — глобальный флаг «пользователь у правого края», обновляется при каждом render() и всех ручных взаимодействиях (wheel/drag/pinch); render() теперь сам подтягивает viewStart = CANDLES.length - viewLen при _atRightEdge=true до клампирования — любое добавление свечей (push live, postMessage, gap-fill) автоматически двигает viewport. fetchLiveCandle: убран wasAtEnd — viewStart=CANDLES.length-viewLen при push всегда (была ошибка: viewStart не двигался когда postMessage добавлял массив без live а fetchLiveCandle асинхронно добавлял live после).
 - v3.296: добавлена панель отладки свечей 🕯 (кнопка в шапке графика): показывает последние 3 свечи с биржи (t открытия, close_at закрытия, OHLC, статус live/closed) vs последние 3 свечи нашего графика + live-cache; авто-обновление каждые 3 сек; автоматически выявляет расхождения в OHLC между биржей и графиком; новый endpoint /candle_debug.
@@ -150,7 +151,7 @@ WickFill Optimizer v3.284
 import json, time, threading, random, math, os, base64
 import math as _math  # используется в fitness внутри _simulate
 import multiprocessing
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import sys as _sys
@@ -165,7 +166,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.298"
+APP_VERSION = "3.299"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -8168,7 +8169,8 @@ if __name__ == "__main__":
             s.connect(("8.8.8.8",80)); ip=s.getsockname()[0]; s.close(); return ip
         except: return "?.?.?.?"
     local_ip=_get_local_ip()
-    class ReusableHTTPServer(HTTPServer):
+    class ReusableHTTPServer(ThreadingHTTPServer):
+        daemon_threads=True
         allow_reuse_address=True
         def server_bind(self):
             import socket
