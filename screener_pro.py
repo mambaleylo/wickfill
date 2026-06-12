@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.296: добавлена панель отладки свечей 🕯 (кнопка в шапке графика): показывает последние 3 свечи с биржи (t открытия, close_at закрытия, OHLC, статус live/closed) vs последние 3 свечи нашего графика + live-cache; авто-обновление каждые 3 сек; автоматически выявляет расхождения в OHLC между биржей и графиком; новый endpoint /candle_debug.
 - v3.295: fix предпоследняя свеча периодически пропадает и live сливается с закрытой: (1) postMessage wasAtEnd теперь с порогом -2 (был -1) — корректно держит viewStart у правого края и при наличии live и без неё; (2) после замены массива через postMessage немедленно вызывается fetchLiveCandle (отменяя 2с таймер) — live-свеча восстанавливается мгновенно, без 2с паузы когда предпоследняя «пропадала».
 - v3.294: fix live-свеча сливается с предыдущей закрытой — при d.t === last.t (Gate ещё не сдвинул интервал) код ошибочно помечал закрытую свечу как live, она рисовалась дважды; теперь в этом случае ничего не делаем — live появится только когда d.t > last.t.
 - v3.293: fix периодическое пропадание 3 свечей с конца — оптимизатор перезаписывал chart_candles в opt_states[sym] данными из local_candles (исторический срез), затирая более свежие свечи SW-треда; теперь оптимизатор не трогает chart_candles если sw_running=True — только обновляет chart_signals и метрики. То же в multi-mode snapshot.
@@ -162,7 +163,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.295"
+APP_VERSION = "3.296"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -193,6 +194,13 @@ def _get_cpu_temp():
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
     return time.strftime("[%H:%M:%S]")
+
+def _dt(ts):
+    """Unix timestamp → читаемая строка UTC: YYYY-MM-DD HH:MM:SS"""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ts))) + " UTC"
+    except Exception:
+        return str(ts)
 
 TF_SECONDS = {
     "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
@@ -2029,6 +2037,11 @@ canvas{{display:block;width:100%;height:100%}}
       <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
       <span>{len(candles)} св. · {trades} сд.</span>
       <span style="color:#7a6e68">{(__import__('datetime').datetime.utcfromtimestamp(candles[0]['t'])+__import__('datetime').timedelta(hours=3)).strftime('%d.%m %H:%M')} — {(__import__('datetime').datetime.utcfromtimestamp(candles[-1]['t'])+__import__('datetime').timedelta(hours=3)).strftime('%d.%m %H:%M')}</span>
+      <span id="candleDebugBtn" onclick="toggleCandleDebug()" style="cursor:pointer;padding:1px 6px;border-radius:4px;background:rgba(120,110,100,.18);color:#b0a090;user-select:none" title="Сравнить свечи с биржей">🕯</span>
+    </div>
+    <div id="candleDebugPanel" style="display:none;position:absolute;top:36px;left:10px;z-index:99;background:var(--bg2,#f5f0ea);border:1px solid var(--border,#ccc);border-radius:8px;padding:10px 14px;font-size:.68rem;color:var(--fg,#3a3028);max-width:520px;max-height:70vh;overflow:auto;box-shadow:0 4px 18px rgba(0,0,0,.18)">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>🕯 Сравнение свечей с биржей</b><span onclick="toggleCandleDebug()" style="cursor:pointer;font-size:.9rem">✕</span></div>
+      <div id="candleDebugContent" style="white-space:pre-wrap;font-family:monospace;font-size:.64rem">Загрузка…</div>
     </div>
   </div>
 </div>
@@ -2378,6 +2391,65 @@ const LIVE_SYMBOL = '{symbol}';
 const LIVE_TF     = '{tf}';
 let _liveFailCount = 0;
 let _liveTimer = null;
+
+// ── Candle Debug Panel ────────────────────────────────────────────────────────
+let _debugOpen = false;
+function toggleCandleDebug() {{
+  _debugOpen = !_debugOpen;
+  const panel = document.getElementById('candleDebugPanel');
+  if (!panel) return;
+  panel.style.display = _debugOpen ? 'block' : 'none';
+  if (_debugOpen) loadCandleDebug();
+}}
+function loadCandleDebug() {{
+  const el = document.getElementById('candleDebugContent');
+  if (!el) return;
+  el.textContent = 'Загрузка…';
+  fetch('/candle_debug?symbol=' + encodeURIComponent(LIVE_SYMBOL) + '&tf=' + encodeURIComponent(LIVE_TF) + '&_=' + Date.now())
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{ el.textContent = 'Ошибка: ' + JSON.stringify(d); return; }}
+      const fmt = (c, label) => {{
+        const flag = c.is_live ? ' 🔴LIVE' : (c.is_gap ? ' ·gap' : ' ✅closed');
+        return `  ${label}: t=${c.t_human}  close_at=${c.close_at_human}${flag}\n` +
+               `         O=${c.o} H=${c.h} L=${c.l} C=${c.c}`;
+      }};
+      const fmtEx = (c) => {{
+        const flag = c.is_closed ? '✅closed' : `🔴LIVE (закр через ${c.secs_until_close}с)`;
+        return `  t=${c.t_human}  close_at=${c.close_at_human}  ${flag}\n` +
+               `  O=${c.o} H=${c.h} L=${c.l} C=${c.c}`;
+      }};
+      let txt = `Сервер: ${d.server_now_human}  TF=${d.tf}  interval=${d.interval_sec}с\n`;
+      txt += `\n── БИРЖА (последние 3) ──────────────────────────\n`;
+      if (d.exchange_err) {{ txt += `  Ошибка: ${d.exchange_err}\n`; }}
+      else {{ d.exchange_last3.forEach((c, i) => {{ txt += fmtEx(c) + '\n'; if(i<d.exchange_last3.length-1) txt+='\n'; }}); }}
+      txt += `\n── НАШ ГРАФИК (последние 3 из ${d.chart_total_candles}) ────────────\n`;
+      if (!d.chart_last3.length) {{ txt += '  нет данных\n'; }}
+      else {{ d.chart_last3.forEach((c, i) => {{ txt += fmt(c, `[${i-d.chart_last3.length+d.chart_last3.length-i-1 < 0 ? i : i}]`) + '\n'; if(i<d.chart_last3.length-1) txt+='\n'; }}); }}
+      if (d.live_cache) {{
+        const lc = d.live_cache;
+        txt += `\n── LIVE CACHE ────────────────────────────────────\n`;
+        txt += `  t=${lc.t_human}  close_at=${lc.close_at_human}\n`;
+        txt += `  C=${lc.c}  возраст=${lc.age_sec}с\n`;
+      }}
+      if (d.discrepancies && d.discrepancies.length) {{
+        txt += `\n⚠ РАСХОЖДЕНИЯ (${d.discrepancies.length}) ──────────────────────\n`;
+        d.discrepancies.forEach(x => {{
+          txt += `  ${x.t_human}: ${x.issue}\n`;
+          if (x.diffs) Object.entries(x.diffs).forEach(([k,v]) => {{
+            txt += `    ${k}: график=${v.chart}  биржа=${v.exchange}\n`;
+          }});
+        }});
+      }} else if (!d.exchange_err) {{
+        txt += `\n✅ Расхождений не обнаружено\n`;
+      }}
+      txt += `\n[обновлено: ${new Date().toLocaleTimeString()}]`;
+      el.textContent = txt;
+    }})
+    .catch(e => {{ if(el) el.textContent = 'fetch error: ' + e; }});
+}}
+// Авто-обновление дебаг-панели раз в 3 сек пока открыта
+setInterval(() => {{ if (_debugOpen) loadCandleDebug(); }}, 3000);
 
 function fetchLiveCandle() {{
   // Отменяем предыдущий таймер и ставим новый — защита от накопления
@@ -7535,6 +7607,99 @@ class Handler(BaseHTTPRequestHandler):
                             "age": round(time.time() - c.get("_fetched_at", time.time()))})
             else:
                 self._json({"ok": False, "msg": "нет данных"})
+        elif parsed.path == "/candle_debug":
+            qs = parse_qs(parsed.query)
+            symbol = qs.get("symbol", [""])[0]
+            tf     = qs.get("tf", [""])[0]
+            if not symbol or not tf:
+                with opt_lock:
+                    symbol = symbol or opt_state.get("chart_symbol", "BTC_USDT")
+                    tf     = tf     or opt_state.get("chart_tf", "1h")
+            interval_sec = TF_SECONDS.get(tf, 3600)
+            now = int(time.time())
+            exchange_raw = []
+            exchange_err = None
+            try:
+                r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+                    params={"contract": symbol, "interval": tf, "limit": 5}, timeout=8)
+                if r.status_code == 200:
+                    raw = r.json()
+                    for c in raw[-3:]:
+                        t = int(c.get("t", 0))
+                        close_t = t + interval_sec
+                        exchange_raw.append({
+                            "t": t,
+                            "t_human": _dt(t),
+                            "close_at": close_t,
+                            "close_at_human": _dt(close_t),
+                            "is_closed": now >= close_t,
+                            "secs_until_close": max(0, close_t - now),
+                            "o": float(c.get("o", 0)),
+                            "h": float(c.get("h", 0)),
+                            "l": float(c.get("l", 0)),
+                            "c": float(c.get("c", 0)),
+                        })
+                else:
+                    exchange_err = f"HTTP {r.status_code}"
+            except Exception as e:
+                exchange_err = str(e)
+            # Наш chart_candles — последние 3 свечи
+            with opt_lock:
+                cc_all = list(opt_state.get("chart_candles", []))
+            chart_last3 = []
+            for c in cc_all[-3:]:
+                t = c.get("t", 0)
+                close_t = t + interval_sec
+                chart_last3.append({
+                    "t": t,
+                    "t_human": _dt(t),
+                    "close_at": close_t,
+                    "close_at_human": _dt(close_t),
+                    "is_live": bool(c.get("live")),
+                    "is_gap": bool(c.get("gap")),
+                    "o": c.get("o", c.get("open", 0)),
+                    "h": c.get("h", c.get("high", 0)),
+                    "l": c.get("l", c.get("low", 0)),
+                    "c": c.get("c", c.get("close", 0)),
+                })
+            # Сравнение: последние закрытые (не live, не gap)
+            discrepancies = []
+            ex_closed = [x for x in exchange_raw if x["is_closed"]]
+            ch_closed = [x for x in chart_last3 if not x["is_live"] and not x["is_gap"]]
+            for ex in ex_closed:
+                match = next((c for c in ch_closed if c["t"] == ex["t"]), None)
+                if match is None:
+                    discrepancies.append({"t": ex["t"], "t_human": ex["t_human"], "issue": "отсутствует на графике"})
+                else:
+                    diffs = {}
+                    for field in ("o", "h", "l", "c"):
+                        if abs(match[field] - ex[field]) > 1e-8:
+                            diffs[field] = {"chart": match[field], "exchange": ex[field]}
+                    if diffs:
+                        discrepancies.append({"t": ex["t"], "t_human": ex["t_human"], "issue": "расхождение OHLC", "diffs": diffs})
+            live_cache_key = f"{symbol}_{tf}"
+            with _live_candle_lock:
+                lc = dict(_live_candle_cache.get(live_cache_key, {}))
+            live_cache_info = None
+            if lc:
+                lt = lc.get("t", 0)
+                live_cache_info = {
+                    "t": lt, "t_human": _dt(lt),
+                    "close_at": lt + interval_sec, "close_at_human": _dt(lt + interval_sec),
+                    "c": lc.get("close", 0),
+                    "age_sec": round(now - lc.get("_fetched_at", now)),
+                }
+            self._json({
+                "ok": True, "symbol": symbol, "tf": tf,
+                "server_now": now, "server_now_human": _dt(now),
+                "interval_sec": interval_sec,
+                "exchange_last3": exchange_raw,
+                "exchange_err": exchange_err,
+                "chart_last3": chart_last3,
+                "chart_total_candles": len(cc_all),
+                "live_cache": live_cache_info,
+                "discrepancies": discrepancies,
+            })
         elif parsed.path == "/live_price":
             qs = parse_qs(parsed.query)
             symbol = qs.get("symbol", ["BTC_USDT"])[0]
