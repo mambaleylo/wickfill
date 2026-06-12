@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.303
+WickFill Optimizer v3.304
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.304: (1) авто-возврат к правому краю: через 5 сек после зума/скролла _schedAutoReturn() сбрасывает viewLen=_defaultViewLen и viewStart к последней свече; работает для wheel/drag/pinch/touch; (2) увеличен дефолтный масштаб: мобайл 60→80 свечей, десктоп 120→160
 - v3.303: fix пропадание свечи перед live при перезагрузке на границе TF — три причины:
   (1) _fetch_candles обрезал незакрытую свечу по t+interval>now (строгое >); при точном совпадении now==boundary свеча оставалась в массиве и потом пропадала; исправлено на >=;
   (2) _live_candle_updater stale-check брал cc[-1]["t"] вместо последней ЗАКРЫТОЙ свечи — при наличии live-свечи stale никогда не срабатывал; исправлено через поиск last closed;
@@ -173,7 +174,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.303"
+APP_VERSION = "3.304"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2090,13 +2091,24 @@ const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
 const _isMob=window.innerWidth<=700;
-const _defaultViewLen=_isMob?60:120;
+const _defaultViewLen=_isMob?80:160;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 // Отслеживаем: был ли пользователь у правого края при последнем render()
 // Используется чтобы любое увеличение CANDLES (push live, postMessage) автоматически
 // сдвигало viewStart — независимо от того, кто добавил свечи.
 let _atRightEdge = true;
+// Авто-возврат к правому краю: через 5 сек бездействия — reset к live-свече с дефолтным масштабом
+let _autoReturnTimer = null;
+function _schedAutoReturn() {{
+  if (_autoReturnTimer) clearTimeout(_autoReturnTimer);
+  _autoReturnTimer = setTimeout(() => {{
+    viewLen = Math.min(_defaultViewLen, CANDLES.length);
+    viewStart = Math.max(0, CANDLES.length - viewLen);
+    _atRightEdge = true;
+    schedRender();
+  }}, 5000);
+}}
 // rAF batching: несколько вызовов schedRender() за один кадр сводятся в один render()
 let _rafPending=false;
 function schedRender(){{
@@ -2347,9 +2359,9 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
-window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}});
+window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();}});
 window.addEventListener('mouseup',()=>isDragging=false);
 // Touch support
 let _t1x=0,_t1VS=0,_tPinchD=0,_tPinchVL=0,_tPinchVS=0;
@@ -2365,12 +2377,12 @@ wrap.addEventListener('touchmove',e=>{{
   e.preventDefault();
   if(e.touches.length===1){{
     const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.touches[0].clientX-_t1x)/cw2);
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();
   }} else if(e.touches.length===2){{
     const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
     const d=Math.sqrt(dx*dx+dy*dy),scale=_tPinchD/d;
     viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(_tPinchVL*scale)));
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
