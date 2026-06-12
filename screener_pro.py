@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.311
+WickFill Optimizer v3.312
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.312: дефолтный масштаб графика возвращён к 120/240 (мобайл/десктоп) — по
+  скриншоту v3.311 (480/960) показывал слишком широкий диапазон, нужная область
+  ~1/4 от него
 - v3.311: дефолтный масштаб графика ×2: мобайл 240→480 свечей, десктоп 480→960
 - v3.310: дефолтный масштаб графика ×2: мобайл 120→240 свечей, десктоп 240→480
 - v3.309: fix перезагрузка свечей "случайным" интервалом + кривая отрисовка
@@ -192,7 +195,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.311"
+APP_VERSION = "3.312"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2198,7 +2201,7 @@ const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
 const _isMob=window.innerWidth<=700;
-const _defaultViewLen=_isMob?480:960;
+const _defaultViewLen=_isMob?120:240;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 // Отслеживаем: был ли пользователь у правого края при последнем render()
