@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.317
+WickFill Optimizer v3.318
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.318: fix скролл списка Недавних конфигов на мобиле — убран overflow:hidden с панели,
+  max-height увеличен 240→320px, добавлен overscroll-behavior-y:contain.
 - v3.317: HTF-фильтр — сводная статистика эффективности за период перебора.
   После каждого цикла дополнительно прогоняется _simulate на том же окне свечей
   и тех же параметрах, но БЕЗ HTF-фильтра (htf_index=None); результат (Депозит/
@@ -216,7 +218,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.317"
+APP_VERSION = "3.318"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5981,6 +5983,9 @@ details summary::-webkit-details-marker{display:none}
   /* ── Недавние конфиги — свёрнуты по умолчанию на мобиле ── */
   #recentBody{max-height:0px}
   #recentArrow{transform:rotate(0deg)}
+  /* overflow:hidden на recentPanel режет скролл на тач — убираем */
+  #recentPanel{overflow:visible}
+  /* При раскрытии JS ставит max-height:320px — достаточно для ~5 конфигов */
 
   /* ── ПРАВАЯ ПАНЕЛЬ — порядок элементов на мобиле ── */
   .right{flex:1;min-height:0;overflow:visible;display:flex;flex-direction:column}
@@ -6106,11 +6111,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Recent configs quick-select -->
     <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);overflow:hidden">
-      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'240px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'320px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">
+      <div id="recentBody" style="max-height:320px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overscroll-behavior-y:contain">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -6798,7 +6803,7 @@ function stopOpt(){
     const _rp2=document.getElementById('recentPanel');
     if(_rp2 && _rp2.dataset.hasConfigs==='1'){
       _rp2.style.display='block';
-      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='240px';
+      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='320px';
       const _ra3=document.getElementById('recentArrow');if(_ra3)_ra3.style.transform='rotate(180deg)';
     }
   }
@@ -7499,7 +7504,7 @@ function _loadRecentConfigs(){
     // Всегда раскрываем при загрузке
     const rb=document.getElementById('recentBody');
     const ra=document.getElementById('recentArrow');
-    if(rb) rb.style.maxHeight='240px';
+    if(rb) rb.style.maxHeight='320px';
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
