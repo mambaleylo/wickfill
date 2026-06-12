@@ -1,0 +1,19 @@
+WickFill perf-log  symbol=XAU_USDT  tf=5m  saved=2026-06-12 19:09:48
+   время  событие                       детали
+--------------------------------------------------------------------------------
+     0.0s  start                         symbol=XAU_USDT  tf=5m  days=8  risk=10.0  pool=process  cpus=8
+    11.6s  pool_create                   workers=8  pool_type=process  n_candles=2304  ⚠ +11.6s
+    12.2s  pool_ready                    sec=12.2  workers=8
+    12.2s  cycle_start                   cycle=1  n_candles=2304
+    12.2s  phase1_start                  start=1  label=Старт #1
+    13.3s  pmap                          n=1  workers=8  sec=1.118  sec_per_cand=1.118
+    14.3s  pmap                          n=2  workers=8  sec=0.987  sec_per_cand=0.4935
+    14.3s  param                         key=use_be  n_cands=2  sec=0.987  pass_n=1  start=Старт #1
+    15.3s  pmap                          n=6  workers=8  sec=0.968  sec_per_cand=0.1613
+    15.3s  param                         key=use_repeat_filter  n_cands=6  sec=0.968  pass_n=1  start=Старт #1
+    18.1s  pmap                          n=19  workers=8  sec=2.762  sec_per_cand=0.1454
+    18.1s  param                         key=use_level_filter  n_cands=19  sec=2.762  pass_n=1  start=Старт #1
+    18.1s  pass_done                     pass_n=1  sec=4.717  improved=False  start=Старт #1
+    18.1s  phase1_done                   start=1  sec=5.8  equity=100.0  wr=0
+    18.1s  cycle_end                     cycle=1  sec=5.8  stopped=True  has_result=False
+    18.1s  optimizer_done                reason=stop_flag
