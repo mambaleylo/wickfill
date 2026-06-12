@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.315
+WickFill Optimizer v3.316
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.316: fix не работал скролл списка "Недавние конфиги" на планшетах —
+  у #recentBody (overflow-y:auto) отсутствовал свой touch-action, и тач-жест
+  внутри вложенного скролл-контейнера перехватывался page-скроллом (html/body/
+  .sidebar имеют touch-action:pan-y); добавлены touch-action:pan-y,
+  -webkit-overflow-scrolling:touch, overscroll-behavior:contain на #recentBody.
 - v3.315: fix потеря предпоследней свечи при перерисовке графика после
   завершения цикла оптимизатора. Причина: график пересобирался из _cc_src_snap
   — снэпшота _sw_candles, снятого в НАЧАЛЕ цикла, + свежей live-свечи с биржи.
@@ -205,7 +210,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.315"
+APP_VERSION = "3.316"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6066,7 +6071,7 @@ details summary::-webkit-details-marker{display:none}
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px">
+      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
