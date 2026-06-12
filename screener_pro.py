@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.301: fix ГРАФИК НЕ ОТКРЫВАЛСЯ — найдена истинная причина (v3.298 фикс был неполным). Внутри f-строки _build_chart_html все '\n' в loadCandleDebug() были одиночным backslash — f-string интерпретировал их как ПЕРЕВОД СТРОКИ внутри JS string-литерала, разбивая return-выражение на 2 строки и ломая весь <script> синтаксической ошибкой (SyntaxError: Invalid or unexpected token, chart:438) → весь JS на странице /chart не выполнялся → пустой холст. Заменены все 22 вхождения '\n' на '\\n' (экранированный backslash, чтобы в выводе получался JS-escape \n, а не реальный перевод строки).
 - v3.300: debug — добавлен глобальный window.onerror на странице /chart, выводящий JS-ошибку прямо на экран (для диагностики пустого графика).
 - v3.299: fix график не открывается / запросы к серверу зависают — HTTPServer был однопоточным (один request — один поток), и долгий запрос (/chart или poll во время цикла) блокировал все остальные соединения, включая повторные открытия /chart. Заменён на ThreadingHTTPServer (daemon_threads=True) — запросы обрабатываются параллельно.
 - v3.298: fix SyntaxError f-string в loadCandleDebug — JS template literals с ${} конфликтовали с Python f-string парсером; заменены на конкатенацию строк.
@@ -167,7 +168,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.300"
+APP_VERSION = "3.301"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2433,39 +2434,39 @@ function loadCandleDebug() {{
       if (!d.ok) {{ el.textContent = 'Ошибка: ' + JSON.stringify(d); return; }}
       const fmt = (c, label) => {{
         const flag = c.is_live ? ' LIVE' : (c.is_gap ? ' gap' : ' closed');
-        return '  [' + label + '] t=' + c.t_human + '  close_at=' + c.close_at_human + flag + '\n' +
+        return '  [' + label + '] t=' + c.t_human + '  close_at=' + c.close_at_human + flag + '\\n' +
                '         O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
       }};
       const fmtEx = (c) => {{
         const flag = c.is_closed ? 'closed' : ('LIVE закр через ' + c.secs_until_close + 'с');
-        return '  t=' + c.t_human + '  close_at=' + c.close_at_human + '  ' + flag + '\n' +
+        return '  t=' + c.t_human + '  close_at=' + c.close_at_human + '  ' + flag + '\\n' +
                '  O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
       }};
-      let txt = 'Сервер: ' + d.server_now_human + '  TF=' + d.tf + '  interval=' + d.interval_sec + 'с\n';
-      txt += '\n-- БИРЖА (последние 3) --\n';
-      if (d.exchange_err) {{ txt += '  Ошибка: ' + d.exchange_err + '\n'; }}
-      else {{ d.exchange_last3.forEach(function(c, i) {{ txt += fmtEx(c) + '\n'; if(i<d.exchange_last3.length-1) txt+='\n'; }}); }}
-      txt += '\n-- НАШ ГРАФИК (последние 3 из ' + d.chart_total_candles + ') --\n';
-      if (!d.chart_last3.length) {{ txt += '  нет данных\n'; }}
-      else {{ d.chart_last3.forEach(function(c, i) {{ txt += fmt(c, i) + '\n'; if(i<d.chart_last3.length-1) txt+='\n'; }}); }}
+      let txt = 'Сервер: ' + d.server_now_human + '  TF=' + d.tf + '  interval=' + d.interval_sec + 'с\\n';
+      txt += '\\n-- БИРЖА (последние 3) --\\n';
+      if (d.exchange_err) {{ txt += '  Ошибка: ' + d.exchange_err + '\\n'; }}
+      else {{ d.exchange_last3.forEach(function(c, i) {{ txt += fmtEx(c) + '\\n'; if(i<d.exchange_last3.length-1) txt+='\\n'; }}); }}
+      txt += '\\n-- НАШ ГРАФИК (последние 3 из ' + d.chart_total_candles + ') --\\n';
+      if (!d.chart_last3.length) {{ txt += '  нет данных\\n'; }}
+      else {{ d.chart_last3.forEach(function(c, i) {{ txt += fmt(c, i) + '\\n'; if(i<d.chart_last3.length-1) txt+='\\n'; }}); }}
       if (d.live_cache) {{
         const lc = d.live_cache;
-        txt += '\n-- LIVE CACHE --\n';
-        txt += '  t=' + lc.t_human + '  close_at=' + lc.close_at_human + '\n';
-        txt += '  C=' + lc.c + '  возраст=' + lc.age_sec + 'с\n';
+        txt += '\\n-- LIVE CACHE --\\n';
+        txt += '  t=' + lc.t_human + '  close_at=' + lc.close_at_human + '\\n';
+        txt += '  C=' + lc.c + '  возраст=' + lc.age_sec + 'с\\n';
       }}
       if (d.discrepancies && d.discrepancies.length) {{
-        txt += '\nРАСХОЖДЕНИЯ (' + d.discrepancies.length + '):\n';
+        txt += '\\nРАСХОЖДЕНИЯ (' + d.discrepancies.length + '):\\n';
         d.discrepancies.forEach(function(x) {{
-          txt += '  ' + x.t_human + ': ' + x.issue + '\n';
+          txt += '  ' + x.t_human + ': ' + x.issue + '\\n';
           if (x.diffs) Object.entries(x.diffs).forEach(function(e2) {{
-            txt += '    ' + e2[0] + ': график=' + e2[1].chart + '  биржа=' + e2[1].exchange + '\n';
+            txt += '    ' + e2[0] + ': график=' + e2[1].chart + '  биржа=' + e2[1].exchange + '\\n';
           }});
         }});
       }} else if (!d.exchange_err) {{
-        txt += '\nРасхождений не обнаружено\n';
+        txt += '\\nРасхождений не обнаружено\\n';
       }}
-      txt += '\n[обновлено: ' + new Date().toLocaleTimeString() + ']';
+      txt += '\\n[обновлено: ' + new Date().toLocaleTimeString() + ']';
       el.textContent = txt;
     }})
     .catch(function(e) {{ if(el) el.textContent = 'fetch error: ' + e; }});
