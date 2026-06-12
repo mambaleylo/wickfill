@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.305
+WickFill Optimizer v3.306
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.306: fix пропадание свечи перед live — корень в _fetch_latest_candle: функция всегда брала data[-2] (предпоследнюю), считая data[-1] незакрытой; но Gate.io в момент смены интервала возвращает две закрытые свечи → data[-1] (самая свежая закрытая) терялась; исправлено: теперь перебираем с конца и берём первую у которой now >= t + interval_sec (календарная граница); также добавлен лог времени следующей перезагрузки свечей
 - v3.305: AMOLED + Fullscreen API — при включении AMOLED вызывается requestFullscreen({navigationUI:'hide'}) (прячет адресную строку Chrome), при выключении — exitFullscreen(); если пользователь вышел из фуллскрина свайпом/кнопкой браузера — AMOLED автоматически выключается
 - v3.304: (1) авто-возврат к правому краю: через 5 сек после зума/скролла _schedAutoReturn() сбрасывает viewLen=_defaultViewLen и viewStart к последней свече; работает для wheel/drag/pinch/touch; (2) увеличен дефолтный масштаб: мобайл 60→80 свечей, десктоп 120→160
 - v3.303: fix пропадание свечи перед live при перезагрузке на границе TF — три причины:
@@ -175,7 +176,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.305"
+APP_VERSION = "3.306"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1346,17 +1347,28 @@ def _fetch_candles(symbol, tf, days):
     return result
 
 def _fetch_latest_candle(symbol, tf):
-    """Загружает последние 2 свечи, возвращает последнюю закрытую."""
+    """Загружает последние 3 свечи, возвращает самую свежую ЗАКРЫТУЮ по календарной границе.
+
+    Gate.io возвращает свечи отсортированные по возрастанию t.
+    data[-1] может быть незакрытой (live) — проверяем по now < t + interval_sec.
+    Берём первую с конца у которой now >= t + interval_sec (т.е. уже закрыта).
+    Это исключает потерю свечи N-1 когда data[-2] ошибочно выбирается вместо закрытой data[-1].
+    """
     try:
+        interval_sec = TF_SECONDS.get(tf, 3600)
         r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
-            params={"contract":symbol,"interval":tf,"limit":2}, timeout=8)
+            params={"contract":symbol,"interval":tf,"limit":3}, timeout=8)
         if r.status_code != 200: return None
         data = r.json()
         if not data or len(data) < 1: return None
-        # Берём предпоследнюю (она гарантированно закрыта)
-        c = data[-2] if len(data) >= 2 else data[-1]
-        return {"t":int(c.get("t",0)),"open":float(c["o"]),
-                "high":float(c["h"]),"low":float(c["l"]),"close":float(c["c"])}
+        now = int(time.time())
+        # Ищем самую свежую закрытую свечу (с конца)
+        for c in reversed(data):
+            t = int(c.get("t", 0))
+            if now >= t + interval_sec:  # свеча закрыта
+                return {"t":t,"open":float(c["o"]),
+                        "high":float(c["h"]),"low":float(c["l"]),"close":float(c["c"])}
+        return None  # все свечи ещё незакрыты (не должно случаться)
     except:
         return None
 
@@ -4262,7 +4274,7 @@ def run_optimizer(params):
         # +3 сек grace period: Gate.io может не сразу закрыть свечу на ровной границе
         return (int(time.time()) // _tf_sec_reload + 1) * _tf_sec_reload + 3
     _next_reload_at = _next_candle_boundary()
-    olog(f"🔄 Автообновление свечей: на открытии каждой новой {tf}-свечи", "info")
+    olog(f"🔄 Автообновление свечей: следующая перезагрузка в {__import__('datetime').datetime.utcfromtimestamp(_next_reload_at).strftime('%H:%M:%S')} UTC", "info")
     # Сразу заполняем из seed если он есть
     if seed and seed.get("best") and seed["best"].get("params"):
         _s = dict(seed["best"])
@@ -4371,6 +4383,7 @@ def run_optimizer(params):
                 olog(f"⚠ Ошибка перезагрузки свечей: {_re}", "warn")
             # Следующая перезагрузка — на открытии следующей свечи
             _next_reload_at = _next_candle_boundary()
+            olog(f"🔄 Следующая перезагрузка: {__import__('datetime').datetime.utcfromtimestamp(_next_reload_at).strftime('%H:%M:%S')} UTC", "info")
 
         # Между циклами — проверяем появление новой свечи и бесшовно сдвигаем окно
         if cycle > 1:
