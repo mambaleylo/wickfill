@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.293: fix периодическое пропадание 3 свечей с конца — оптимизатор перезаписывал chart_candles в opt_states[sym] данными из local_candles (исторический срез), затирая более свежие свечи SW-треда; теперь оптимизатор не трогает chart_candles если sw_running=True — только обновляет chart_signals и метрики. То же в multi-mode snapshot.
 - v3.292: fix вертикальный разрыв между свечами: (1) при построении chart_candles_fmt в SW-треде и оптимизаторе — если между соседними свечами пропущен интервал, вставляются flat-синтетические свечи (gap=True) чтобы не было пустого пространства; (2) gap-свечи рисуются как тонкая пунктирная горизонтальная линия с alpha=0.25 — не привлекают внимания но заполняют пустоту; (3) уменьшен межсвечный gap: Math.min(cw*0.12, 2.5) вместо cw*0.15.
 - v3.291: wick_dir ограничен только bounce — убраны both/upper/lower из PARAM_SPACE; оптимизатор больше не будет выбирать верхний/нижний фитиль как лонг/шорт сигнал.
 - v3.290: fix цвет лейблов TP/SL на шкале — фон затемнён (тёмно-зелёный/тёмно-оранжевый/тёмно-коричневый), текст светлый пастельный вместо белого → хорошая читаемость на любом фоне.
@@ -159,7 +160,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.292"
+APP_VERSION = "3.293"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4658,13 +4659,16 @@ def _run_multi_safe(sym_list, base_params):
                         new_eq  = round((best or {}).get("equity", 100), 2) if best else -1
                         record_kept = best and new_eq < prev_eq and "best" in s  # рекорд из прошлого цикла важнее текущего
                         # Обновляем данные графика: берём лучшее что есть
+                        # chart_candles НЕ перезаписываем если SW уже владеет свечами
+                        _sw_owns = s.get("sw_running", False) and s.get("chart_candles")
                         if chart_upd > 0:
                             # Полный снапшот с готовым графиком
                             s["chart_updated_at"] = chart_upd
-                            s["chart_candles"]    = chart_candles
+                            if not _sw_owns:
+                                s["chart_candles"]    = chart_candles
                             s["chart_signals"]    = chart_signals
                             s["chart_path"]       = chart_path
-                        elif chart_candles:
+                        elif chart_candles and not _sw_owns:
                             # Свечи есть но chart_updated_at не выставлен (прерван цикл)
                             # Сохраняем свечи — /chart построит график на лету
                             s["chart_candles"] = chart_candles
@@ -4908,11 +4912,15 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                     s["pf"]               = round(min(best.get("profit_factor", 0), 999), 2)
                     s["sl"]               = best.get("params", {}).get("sl_pct")
                     s["tp"]               = best.get("params", {}).get("tp_pct")
-                    s["chart_candles"]    = chart_candles_fmt
+                    # chart_candles НЕ перезаписываем — SW-тред владеет актуальными свечами.
+                    # Оптимизатор обновляет только сигналы (пересчитаны на тех же local_candles).
                     s["chart_signals"]    = chart_signals
                     s["chart_tf"]         = tf
                     s["chart_updated_at"] = int(_time.time())
                     s["symbol"]           = sym
+                    # Свечи пишем только если SW ещё не стартовал (нет sw_running)
+                    if not s.get("sw_running") and not s.get("chart_candles"):
+                        s["chart_candles"] = chart_candles_fmt
 
                 # Автосохранение — фоновый поток чтобы не блокировать перебор
                 try:
