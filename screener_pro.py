@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.289: fix критический баг расчёта size позиции — формула была size=margin/(ep*qm) вместо size=(margin*leverage)/(ep*qm); при leverage=25 размер занижался в 25 раз и округлялся до 0 → сделки не открывались. Теперь notional = margin × leverage, size = notional / (ep * qm), что соответствует тому как Gate считает маржу.
 - v3.288: fix сделки не открываются когда баланс меньше стоимости 1 контракта — убран принудительный max(1, ...) при расчёте size; если round(margin/(ep*qm)) < 1 — возвращается понятная ошибка "Недостаточно средств" с указанием минимальной маржи и советом пополнить или снизить плечо.
 - v3.287: fix пропадание 1-2 свечей перед live и гонка записи chart_candles: (1) _live_candle_updater пропускает запись в opt_state["chart_candles"] когда sw_running=True — SW-тред сам управляет массивом, нет гонки; (2) postMessage handler: prevLive восстанавливается только если prevLive.t СТРОГО больше t последней закрытой свечи (было >=) — при равенстве SW уже закрыл свечу, старая live не нужна; (3) /chart_data: если в chart_candles нет live-свечи — инжектируем из _live_candle_cache напрямую (SW мог не успеть добавить до запроса).
 - v3.286: fix вертикальный разрыв между свечами после обновления свечей для перебора: (1) в SW-треде при построении chart_candles_fmt open live-свечи теперь берётся из close последней закрытой свечи new_candles[-1], а не с биржи (cur_c2["open"]) — устраняет ценовой разрыв при постмесседж-обновлении после каждого цикла оптимизатора; (2) в _live_candle_updater: live_c.open = last_closed["c"] вместо c["open"]; при обновлении существующей live-свечи обновляются только HLC (open не перезаписывается чтобы не сбить anchored open).
@@ -155,7 +156,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.288"
+APP_VERSION = "3.289"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1904,13 +1905,9 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         applied_leverage = actual
         log_lines.append(f"✓ Плечо: {actual}× (запрошено {leverage}×)")
     # 4. Рассчитываем размер позиции
-    # Gate сам применяет плечо аккаунта к ордеру.
-    # Мы задаём size в контрактах исходя из МАРЖИ:
-    #   margin   = balance * pct%
-    #   size     = margin / (ep * qm)
-    # Gate видит size контрактов и сам умножает notional на leverage аккаунта.
-    # НЕ умножаем на leverage здесь — иначе Gate требует margin = notional (без деления),
-    # что превышает баланс и вызывает ошибку "margin X while available Y".
+    # Gate USDT Futures: маржа = notional / leverage, notional = size * ep * qm
+    # Из этого: size = (margin * leverage) / (ep * qm)
+    # Плечо УЖЕ учтено в размере — Gate берёт маржу = notional / leverage.
     if fixed_notional_usdt is not None:
         # В этом режиме notional задан явно; размер как обычно
         margin = fixed_notional_usdt / max(applied_leverage, 1)
@@ -1942,12 +1939,11 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
         except Exception:
             _qm = 0
     if _qm > 0:
-        size = round(margin / (ep * _qm))
-        log_lines.append(f"  [debug] margin={margin:.2f} ep={ep:.2f} qm={_qm} → size={size}")
+        size = round((margin * applied_leverage) / (ep * _qm))
+        log_lines.append(f"  [debug] margin={margin:.2f} × lev={applied_leverage} / (ep={ep:.2f} × qm={_qm}) → size={size}")
     else:
-        # Последний фоллбэк: предполагаем 1 контракт = 1 USD (маржа)
-        size = round(margin)
-        log_lines.append(f"  [debug] qm=0 fallback: margin={margin:.2f} → size={size}")
+        size = round(margin * applied_leverage)
+        log_lines.append(f"  [debug] qm=0 fallback: margin={margin:.2f} × lev={applied_leverage} → size={size}")
     if size < 1:
         cost_min = (ep * _qm) if _qm > 0 else 1.0
         return False, ("\n".join(log_lines) +
