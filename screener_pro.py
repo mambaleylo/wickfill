@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.309
+WickFill Optimizer v3.310
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.310: дефолтный масштаб графика ×2: мобайл 120→240 свечей, десктоп 240→480
 - v3.309: fix перезагрузка свечей "случайным" интервалом + кривая отрисовка
   последних свечей после неё. Причина: автоперезагрузка по границе TF раньше
   выполнялась между циклами оптимизатора — момент проверки зависел от длины
@@ -190,7 +191,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.309"
+APP_VERSION = "3.310"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2196,7 +2197,7 @@ const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
 const _isMob=window.innerWidth<=700;
-const _defaultViewLen=_isMob?120:240;
+const _defaultViewLen=_isMob?240:480;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 // Отслеживаем: был ли пользователь у правого края при последнем render()
