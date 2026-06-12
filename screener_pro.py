@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.308
+WickFill Optimizer v3.309
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.309: fix "случайная" перезагрузка свечей и искажение последних свечей после неё —
+  _live_candle_updater имел отдельный stale-reload блок (если последняя закрытая свеча
+  старше 2 интервалов и (now-_last_refresh)>60с — перезагрузить chart_candles снапшотом
+  _sw_candles). Условие проверяло только opt_state["running"] (флаг оптимизатора), но НЕ
+  sw_running — поэтому при активном SW-треде (живая свеча, нормальная работа) этот блок
+  тоже мог сработать на любом 3с-поллинге, где stale=True (что неизбежно бывает прямо
+  перед границей TF), затирая chart_candles снапшотом другого окна свечей в момент,
+  не совпадающий с TF-границей SW-треда → визуально воспринималось как "рандомная"
+  перезагрузка с искажёнными последними свечами. Добавлена проверка sw_running.
 - v3.308: fix задержка обновления свечи на ~2 мин в SW-треде — вместо фиксированного
   sleep_total = wait_sec + 15 (из-за чего тред мог ждать до следующей границы + 15с)
   теперь вычисляется точное время пробуждения wake_at = next_close + 5с grace;
@@ -181,7 +190,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.308"
+APP_VERSION = "3.309"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -407,7 +416,12 @@ def _live_candle_updater():
                 stale = (now - last_t) > interval_sec * 2  # старше 2 интервалов
 
                 # Если данные устарели и оптимизатор не бежит — перегружаем историю
-                if stale and not running and best and (now - _last_refresh) > 60:
+                # (но не при активном SW-треде — он сам управляет chart_candles на границах TF;
+                #  иначе этот блок срабатывает в "случайные" моменты (раз в 3с-поллинг при stale=True)
+                #  и затирает chart_candles снапшотом _sw_candles, рассинхронизируя последние свечи)
+                with opt_lock:
+                    _sw_active = opt_state.get("sw_running", False)
+                if stale and not running and not _sw_active and best and (now - _last_refresh) > 60:
                     print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
                         # Берём _sw_candles — те же что у оптимизатора/SW-треда, не загружаем отдельно
