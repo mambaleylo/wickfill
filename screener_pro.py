@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.284
+WickFill Optimizer v3.303
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.303: fix пропадание свечи перед live при перезагрузке на границе TF — три причины:
+  (1) _fetch_candles обрезал незакрытую свечу по t+interval>now (строгое >); при точном совпадении now==boundary свеча оставалась в массиве и потом пропадала; исправлено на >=;
+  (2) _live_candle_updater stale-check брал cc[-1]["t"] вместо последней ЗАКРЫТОЙ свечи — при наличии live-свечи stale никогда не срабатывал; исправлено через поиск last closed;
+  (3) _next_candle_boundary() теперь добавляет +3 сек grace period — Gate.io не всегда успевает закрыть свечу ровно в 0 сек, без задержки fetch получал «горячую» незакрытую свечу
 - v3.264: fitness — больше приоритета конфигам с бОльшим числом сделок (даже в ущерб
   WR на ~5%): trade_bonus усилен (1.5→2.2) и диапазон поощрения расширен 15-40→15-60
   сделок (штраф начинается с 60, а не с 40); wr_bonus снижен 0.08→0.06. Цель — больше
@@ -389,7 +393,9 @@ def _live_candle_updater():
                 now = int(time.time())
 
                 # Проверяем свежесть исторических данных
-                last_t = cc[-1]["t"] if cc else 0
+                # Берём последнюю ЗАКРЫТУЮ свечу — live-свеча имеет текущий t и не говорит об устарелости
+                _last_closed_for_stale = next((x for x in reversed(cc) if not x.get("live")), None) if cc else None
+                last_t = _last_closed_for_stale["t"] if _last_closed_for_stale else (cc[-1]["t"] if cc else 0)
                 stale = (now - last_t) > interval_sec * 2  # старше 2 интервалов
 
                 # Если данные устарели и оптимизатор не бежит — перегружаем историю
@@ -1318,9 +1324,11 @@ def _fetch_candles(symbol, tf, days):
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
         if c["t"] not in seen: seen.add(c["t"]); result.append(c)
-    # Обрезаем незакрытую последнюю свечу: t + interval_sec > now значит свеча ещё не закрыта
+    # Обрезаем незакрытую последнюю свечу: t + interval_sec >= now значит свеча ещё не закрыта
+    # Используем >= (не >) — при точном совпадении границы (now == t+interval_sec) свеча
+    # формально только что закрылась, но Gate.io ещё может не иметь следующей — обрезаем.
     _fetch_now = int(time.time())
-    if result and result[-1]["t"] + interval_sec > _fetch_now:
+    if result and result[-1]["t"] + interval_sec >= _fetch_now:
         _dropped = result.pop()
         print(f"\n{_ts()} [fetch] ✂ Обрезана незакрытая свеча t={_dropped['t']}, now={_fetch_now}", flush=True)
     print(f"\n{_ts()} [fetch] ✅ Готово: {len(result)} свечей (ожидалось ~{total_needed})", flush=True)
@@ -4238,7 +4246,8 @@ def run_optimizer(params):
     # Автоперезагрузка свечей: на открытии каждой новой свечи (по границе TF)
     _tf_sec_reload = TF_SECONDS.get(tf, 3600)
     def _next_candle_boundary():
-        return (int(time.time()) // _tf_sec_reload + 1) * _tf_sec_reload
+        # +3 сек grace period: Gate.io может не сразу закрыть свечу на ровной границе
+        return (int(time.time()) // _tf_sec_reload + 1) * _tf_sec_reload + 3
     _next_reload_at = _next_candle_boundary()
     olog(f"🔄 Автообновление свечей: на открытии каждой новой {tf}-свечи", "info")
     # Сразу заполняем из seed если он есть
