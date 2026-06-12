@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.317
+WickFill Optimizer v3.318
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.318: dual-HTF multi-timeframe confluence фильтр — второй уровень HTF (HTF_MAP2: 5m→1h, 15m→4h и т.д.);
+  AND-логика в _simulate (оба уровня должны разрешать направление); второй _htf_worker и _htf_index2;
+  HTF-карточка расширена до 3 сценариев: A (оба фильтра), B (только HTF1), C (без фильтров);
+  логи с вердиктом 'HTF2 полезен / снижает доходность' и Δeq/кол-во сделок.
 - v3.317: HTF-фильтр — сводная статистика эффективности за период перебора.
   После каждого цикла дополнительно прогоняется _simulate на том же окне свечей
   и тех же параметрах, но БЕЗ HTF-фильтра (htf_index=None); результат (Депозит/
@@ -383,7 +387,8 @@ opt_lock = threading.Lock()
 # ── HTF (Higher TimeFrame) trend filter state ───────────────────
 # Фоновый поток загружает свечи старшего ТФ, прогоняет _simulate,
 # определяет направление тренда и пишет сюда.
-HTF_MAP = {"1m": "5m", "5m": "15m", "15m": "1h", "30m": "1h", "1h": "4h", "4h": "1d"}
+HTF_MAP  = {"1m": "5m", "5m": "15m", "15m": "1h",  "30m": "1h",  "1h": "4h", "4h": "1d"}
+HTF_MAP2 = {"1m": "1h", "5m": "1h",  "15m": "4h",  "30m": "4h",  "1h": "1d"}  # второй уровень HTF
 htf_state = {
     "direction": 0,      # 1=лонг-тренд, -1=шорт-тренд, 0=нейтрально/нет данных
     "tf": "",            # HTF таймфрейм
@@ -394,8 +399,19 @@ htf_state = {
     "n_signals": 0,      # кол-во сигналов в последнем прогоне
     "running": False,
 }
-htf_lock = threading.Lock()
-_htf_stop_flag = threading.Event()
+htf_state2 = {          # второй уровень HTF (напр. 1h для 5m, 4h для 15m)
+    "direction": 0,
+    "tf": "",
+    "symbol": "",
+    "last_update": 0,
+    "ema_val": 0.0,
+    "last_price": 0.0,
+    "running": False,
+}
+htf_lock  = threading.Lock()
+htf_lock2 = threading.Lock()
+_htf_stop_flag  = threading.Event()
+_htf_stop_flag2 = threading.Event()
 
 
 # opt_states[symbol] — per-symbol snapshot updated after each cycle
@@ -649,7 +665,8 @@ import bisect as _bisect_module  # импортируем один раз на �
 
 def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
               max_pos=6000.0, _collect=False, trade_from_ts=None, now_ts=None,
-              htf_direction=0, htf_index=None, _htf_ts=None, _htf_dir=None):
+              htf_direction=0, htf_index=None, _htf_ts=None, _htf_dir=None,
+              htf_direction2=0, htf_index2=None, _htf_ts2=None, _htf_dir2=None):
     sl_p=p["sl_pct"]; tp_p=p["tp_pct"]; mwp=p["min_wick_pct"]; mwpp=p["min_wick_pct_price"]
     wd=p["wick_dir"]; fbr=p["filter_body_rat"]; fcon=p["filter_consec"]
     ucc=p["use_confirm_candle"]; cbp=p["confirm_body_pct"]
@@ -877,6 +894,23 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             _pos = _br(_ts_l, candles_list[_hi].get("t", 0)) - 1
             if _pos >= 0: _htf_dir_arr[_hi] = _di_l[_pos]
 
+    # Второй уровень HTF (напр. 1h для 5m, 4h для 15m)
+    _htf_dir_arr2 = None
+    if _htf_ts2 is not None and _htf_dir2 is not None:
+        _htf_dir_arr2 = [0] * n
+        _br2 = _bisect_module.bisect_right
+        for _hi in range(n):
+            _pos = _br2(_htf_ts2, candles_list[_hi].get("t", 0)) - 1
+            if _pos >= 0: _htf_dir_arr2[_hi] = _htf_dir2[_pos]
+    elif htf_index2:
+        _ts_l2 = [x[0] for x in htf_index2]
+        _di_l2 = [x[1] for x in htf_index2]
+        _htf_dir_arr2 = [0] * n
+        _br2 = _bisect_module.bisect_right
+        for _hi in range(n):
+            _pos = _br2(_ts_l2, candles_list[_hi].get("t", 0)) - 1
+            if _pos >= 0: _htf_dir_arr2[_hi] = _di_l2[_pos]
+
     # trade_from_ts: не торговать до этого timestamp (индикаторы всё равно прогреваются)
     if trade_from_ts is not None:
         for _ti in range(start_i, n):
@@ -1080,6 +1114,13 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         # HTF-фильтр: если старший ТФ показывает тренд — блокируем противотрендовые сигналы
         # На истории используем htf_index (direction по timestamp), иначе глобальный htf_direction
         _cur_htf_dir = _htf_dir_arr[i] if _htf_dir_arr is not None else htf_direction
+        # Второй уровень HTF (AND: оба должны разрешать направление)
+        _cur_htf_dir2 = _htf_dir_arr2[i] if _htf_dir_arr2 is not None else htf_direction2
+        # AND-логика: если второй уровень указывает на шорт — запрещаем лонг, и наоборот
+        if _cur_htf_dir2 == -1 and long_sig_base:
+            long_sig_base = False
+        elif _cur_htf_dir2 == 1 and short_sig_base:
+            short_sig_base = False
         if _cur_htf_dir == 1:    # HTF лонг-тренд → только лонги
             short_sig_base = False
         elif _cur_htf_dir == -1: # HTF шорт-тренд → только шорты
@@ -1284,23 +1325,27 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 _worker_candles   = None
 _worker_days      = None
 _worker_risk      = 20.0
-_worker_htf_index = None   # список (ts, direction) для HTF на истории — None = без фильтра
-_worker_htf_ts    = None   # предвычисленный список timestamps (для bisect в _simulate)
-_worker_htf_dir   = None   # предвычисленный список directions
+_worker_htf_index  = None   # список (ts, direction) для HTF на истории — None = без фильтра
+_worker_htf_ts     = None   # предвычисленный список timestamps (для bisect в _simulate)
+_worker_htf_dir    = None   # предвычисленный список directions
+_worker_htf_index2 = None   # второй уровень HTF
+_worker_htf_ts2    = None
+_worker_htf_dir2   = None
 # Предвычисленные массивы (закэшированы один раз на процесс)
 _worker_opens   = None
 _worker_highs   = None
 _worker_lows    = None
 _worker_closes  = None
 
-def _worker_init(candles, days, risk, htf_index=None):
+def _worker_init(candles, days, risk, htf_index=None, htf_index2=None):
     global _worker_candles, _worker_days, _worker_risk, _worker_htf_index
     global _worker_opens, _worker_highs, _worker_lows, _worker_closes
-    global _worker_htf_ts, _worker_htf_dir
-    _worker_candles   = candles
-    _worker_days      = days
-    _worker_risk      = risk
-    _worker_htf_index = htf_index
+    global _worker_htf_ts, _worker_htf_dir, _worker_htf_index2, _worker_htf_ts2, _worker_htf_dir2
+    _worker_candles    = candles
+    _worker_days       = days
+    _worker_risk       = risk
+    _worker_htf_index  = htf_index
+    _worker_htf_index2 = htf_index2
     # Предвычисляем ts/dir списки один раз чтобы не аллоцировать их внутри каждого _simulate
     if htf_index:
         import bisect as _bisect_init
@@ -1309,6 +1354,12 @@ def _worker_init(candles, days, risk, htf_index=None):
     else:
         _worker_htf_ts  = None
         _worker_htf_dir = None
+    if htf_index2:
+        _worker_htf_ts2  = [x[0] for x in htf_index2]
+        _worker_htf_dir2 = [x[1] for x in htf_index2]
+    else:
+        _worker_htf_ts2  = None
+        _worker_htf_dir2 = None
     # Предвычисляем массивы цен один раз — не надо делать list comprehension в каждой симуляции
     _worker_opens  = [c["open"]  for c in candles]
     _worker_highs  = [c["high"]  for c in candles]
@@ -1318,7 +1369,9 @@ def _worker_init(candles, days, risk, htf_index=None):
 def _worker_evaluate(ind):
     r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk,
                   htf_index=_worker_htf_index,
-                  _htf_ts=_worker_htf_ts, _htf_dir=_worker_htf_dir)
+                  _htf_ts=_worker_htf_ts, _htf_dir=_worker_htf_dir,
+                  htf_index2=_worker_htf_index2,
+                  _htf_ts2=_worker_htf_ts2, _htf_dir2=_worker_htf_dir2)
     if r: return r
     return {"fitness":-9999.0,"equity":100.0,"trades":0,"wins":0,"losses":0,
             "winrate":0,"max_dd":0,"profit_factor":0,"avg_pnl":0,"params":ind}
@@ -3090,7 +3143,7 @@ def _try_slide_window(symbol, tf, olog):
         return False
 
 
-def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index=None):
+def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index=None, htf_index2=None):
     """Каждый TF-интервал: загружает последнюю закрытую свечу, добавляет, убирает первую.
     В мультирежиме использует _sw_state[symbol], в одиночном — глобальный opt_state."""
     global _sw_candles, _sw_params, _sw_risk
@@ -3239,7 +3292,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                     prev_signals_for_close = list(_sym_st.get("chart_signals") or []) or prev_signals_for_close
                     prev_pending_info = _sym_st.get("chart_pending_info") or prev_pending_info
 
-            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
+            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index, htf_index2=htf_index2)
             chart_signals_data = sim["_signals"] if sim else []
             _sw_pending_bar = sim["pending_signal_bar"] if sim else None
             _sw_pending_dir = sim["pending_signal_dir"] if sim else None
@@ -3417,7 +3470,7 @@ def _perf_save(symbol, tf):
 
 def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                    prev_best_params=None, prev_top20=None, pool=None, n_workers=1,
-                   shake=False, htf_index=None):
+                   shake=False, htf_index=None, htf_index2=None):
     """Запускает один полный цикл оптимизации. Возвращает (final_result, final_params, top20)."""
     global _sw_params
 
@@ -3630,7 +3683,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         cutoff_t = now_ts_cycle - d_to * 86400
         sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
         if len(sl) < 8: return None
-        return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=htf_index)
+        return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=htf_index, htf_index2=htf_index2)
     window_size_c = days / 3.0
     ok_windows = 0; total_windows = 0
     for wi in range(3):
@@ -4068,20 +4121,28 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
 # ═══════════════════════════════════════════════════════════════
 # HTF TREND FILTER — фоновый поток
 # ═══════════════════════════════════════════════════════════════
-def _htf_worker(symbol, base_tf, days):
+def _htf_worker(symbol, base_tf, days, _explicit_htf_tf=None, _state_dict=None, _lock_obj=None, _stop_flag=None):
     """Фоновый поток: каждые N секунд подгружает свечи HTF,
-    определяет направление тренда (EMA + momentum) и пишет в htf_state.
-    НЕ трогает opt_state — использует отдельную тихую загрузку свечей."""
-    htf_tf = HTF_MAP.get(base_tf)
+    определяет направление тренда (EMA + momentum) и пишет в state_dict.
+    НЕ трогает opt_state — использует отдельную тихую загрузку свечей.
+    _explicit_htf_tf — явный TF вместо HTF_MAP (для второго уровня).
+    _state_dict/_lock_obj/_stop_flag — для запуска нескольких воркеров независимо."""
+    if _explicit_htf_tf:
+        htf_tf = _explicit_htf_tf
+    else:
+        htf_tf = HTF_MAP.get(base_tf)
     if not htf_tf:
         return
+    state  = _state_dict  if _state_dict  is not None else htf_state
+    lock   = _lock_obj    if _lock_obj    is not None else htf_lock
+    stop   = _stop_flag   if _stop_flag   is not None else _htf_stop_flag
     interval_sec = TF_SECONDS.get(htf_tf, 3600)
     refresh_sec = max(60, interval_sec * 2)
 
-    with htf_lock:
-        htf_state["tf"] = htf_tf
-        htf_state["symbol"] = symbol
-        htf_state["running"] = True
+    with lock:
+        state["tf"] = htf_tf
+        state["symbol"] = symbol
+        state["running"] = True
 
     print(f"[HTF] Запущен фильтр {base_tf}→{htf_tf} для {symbol}, обновление каждые {refresh_sec//60}мин")
 
@@ -4112,7 +4173,7 @@ def _htf_worker(symbol, base_tf, days):
                     break
                 cur = nxt
                 time.sleep(0.05)
-                if _htf_stop_flag.is_set():
+                if stop.is_set():
                     break
         except Exception as e:
             print(f"[HTF] fetch error: {e}")
@@ -4125,7 +4186,7 @@ def _htf_worker(symbol, base_tf, days):
             result.pop()
         return result
 
-    while not _htf_stop_flag.is_set():
+    while not stop.is_set():
         try:
             candles = _fetch_htf_silent(symbol, htf_tf, days)
             if candles and len(candles) >= 50:
@@ -4144,36 +4205,37 @@ def _htf_worker(symbol, base_tf, days):
                         direction = 0
                     elif direction == -1 and up_bars >= 2:
                         direction = 0
-                with htf_lock:
-                    htf_state["direction"]   = direction
-                    htf_state["ema_val"]     = round(ema_val, 8)
-                    htf_state["last_price"]  = round(last_close, 8)
-                    htf_state["last_update"] = int(time.time())
+                with lock:
+                    state["direction"]   = direction
+                    state["ema_val"]     = round(ema_val, 8)
+                    state["last_price"]  = round(last_close, 8)
+                    state["last_update"] = int(time.time())
                 dir_str = "↑ Лонг" if direction == 1 else ("↓ Шорт" if direction == -1 else "↔ Нейтр")
                 print(f"[HTF] {htf_tf} {symbol}: {dir_str}  price={last_close:.4g}  EMA{ema_per}={ema_val:.4g}  ({len(candles)} св.)")
             else:
                 print(f"[HTF] Мало свечей {htf_tf}: {len(candles) if candles else 0}")
-                with htf_lock:
-                    htf_state["direction"] = 0
+                with lock:
+                    state["direction"] = 0
         except Exception as e:
             print(f"[HTF] Ошибка: {e}")
-            with htf_lock:
-                htf_state["direction"] = 0
+            with lock:
+                state["direction"] = 0
 
-        _htf_stop_flag.wait(timeout=refresh_sec)
+        stop.wait(timeout=refresh_sec)
 
-    with htf_lock:
-        htf_state["running"] = False
-        htf_state["direction"] = 0
+    with lock:
+        state["running"] = False
+        state["direction"] = 0
     print(f"[HTF] Остановлен {htf_tf} {symbol}")
 
 
-def _build_htf_index(symbol, base_tf, days):
+def _build_htf_index(symbol, base_tf, days, _explicit_htf_tf=None):
     """Строит список (ts, direction) по HTF-свечам для использования в историческом бэктесте.
     Каждый элемент: (timestamp закрытия HTF-свечи, direction в тот момент).
     direction = 1/−1/0 по тем же правилам что и _htf_worker (EMA + momentum).
+    _explicit_htf_tf — явный TF вместо HTF_MAP (для второго уровня).
     Возвращает отсортированный список или None если HTF недоступен."""
-    htf_tf = HTF_MAP.get(base_tf)
+    htf_tf = _explicit_htf_tf if _explicit_htf_tf else HTF_MAP.get(base_tf)
     if not htf_tf:
         return None
     try:
@@ -4277,12 +4339,29 @@ def run_optimizer(params):
 
     # Запускаем HTF-фильтр если есть старший ТФ (только для коротких ТФ < 1h)
     _htf_stop_flag.clear()
+    _htf_stop_flag2.clear()
     if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
         threading.Thread(target=_htf_worker, args=(symbol, tf, days), daemon=True).start()
+        # Второй уровень HTF (напр. 1h для 5m, 4h для 15m)
+        _htf2_tf = HTF_MAP2.get(tf)
+        if _htf2_tf:
+            threading.Thread(target=_htf_worker,
+                             kwargs={"symbol": symbol, "base_tf": tf, "days": days,
+                                     "_explicit_htf_tf": _htf2_tf,
+                                     "_state_dict": htf_state2, "_lock_obj": htf_lock2,
+                                     "_stop_flag": _htf_stop_flag2},
+                             daemon=True).start()
+        else:
+            with htf_lock2:
+                htf_state2["direction"] = 0
+                htf_state2["running"] = False
     else:
         with htf_lock:
             htf_state["direction"] = 0
             htf_state["running"] = False
+        with htf_lock2:
+            htf_state2["direction"] = 0
+            htf_state2["running"] = False
 
     # Сохраняем alert_cfg в opt_state — SW-тред читает его динамически
     with opt_lock:
@@ -4336,16 +4415,27 @@ def run_optimizer(params):
         return
 
     # Строим HTF-index для исторического бэктеста (только для коротких ТФ)
-    _htf_index = None
+    _htf_index  = None
+    _htf_index2 = None
     if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
         olog(f"📐 Загрузка HTF ({HTF_MAP[tf]}) для исторического фильтра...", "info")
         _htf_index = _build_htf_index(symbol, tf, days)
         if _htf_index:
             longs  = sum(1 for _, d in _htf_index if d == 1)
             shorts = sum(1 for _, d in _htf_index if d == -1)
-            olog(f"✅ HTF-index: {len(_htf_index)} точек · лонг={longs} шорт={shorts}", "ok")
+            olog(f"✅ HTF-index ({HTF_MAP[tf]}): {len(_htf_index)} точек · лонг={longs} шорт={shorts}", "ok")
         else:
             olog(f"⚠ HTF-index недоступен — бэктест без фильтра старшего ТФ", "warn")
+        _htf2_tf_idx = HTF_MAP2.get(tf)
+        if _htf2_tf_idx:
+            olog(f"📐 Загрузка HTF2 ({_htf2_tf_idx}) для второго уровня фильтра...", "info")
+            _htf_index2 = _build_htf_index(symbol, tf, days, _explicit_htf_tf=_htf2_tf_idx)
+            if _htf_index2:
+                l2 = sum(1 for _, d in _htf_index2 if d == 1)
+                s2 = sum(1 for _, d in _htf_index2 if d == -1)
+                olog(f"✅ HTF-index2 ({_htf2_tf_idx}): {len(_htf_index2)} точек · лонг={l2} шорт={s2}", "ok")
+            else:
+                olog(f"⚠ HTF-index2 недоступен — второй уровень отключён", "warn")
     # Считаем сколько свечей реально попадёт в бэктест (те же условия что в _simulate)
     cutoff_check = time.time() - days * 86400
     candles_in_window = [c for c in candles if c.get("t", 0) >= cutoff_check]
@@ -4390,7 +4480,7 @@ def run_optimizer(params):
         _shared_pool_holder[0] = PoolExecutor(
             max_workers=_n_workers,
             initializer=_worker_init,
-            initargs=(candles, 0, risk_pct, _htf_index)
+            initargs=(candles, 0, risk_pct, _htf_index, _htf_index2)
         )
         _pool_ready.set()
 
@@ -4463,7 +4553,7 @@ def run_optimizer(params):
         # Сразу строим график по загруженному конфигу — не ждём конца первого цикла
         try:
             olog(f"📊 Строю предварительный график из конфига...", "info")
-            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct, htf_index=_htf_index)
+            sim_pre = _simulate(candles, prev_best_params, 0, _collect=True, risk_pct=risk_pct, htf_index=_htf_index, htf_index2=_htf_index2)
             if sim_pre:
                 sigs_pre = sim_pre["_signals"] or []
                 cc_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in candles]
@@ -4536,7 +4626,7 @@ def run_optimizer(params):
         # а граф строится на новых → разное число сделок.
         if cycle > 1 and _shared_pool is not None:
             try:
-                futs = [_shared_pool.submit(_worker_init, current_candles, 0, risk_pct, _htf_index)
+                futs = [_shared_pool.submit(_worker_init, current_candles, 0, risk_pct, _htf_index, _htf_index2)
                         for _ in range(_n_workers)]
                 from concurrent.futures import wait as _fw
                 _fw(futs, timeout=10)
@@ -4548,7 +4638,7 @@ def run_optimizer(params):
             prev_best_params=prev_best_params if infinite else None,
             prev_top20=prev_top20 if infinite else None,
             pool=_shared_pool, n_workers=_n_workers,
-            shake=_shake_now, htf_index=_htf_index)
+            shake=_shake_now, htf_index=_htf_index, htf_index2=_htf_index2)
         _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
@@ -4640,37 +4730,60 @@ def run_optimizer(params):
             _htf_stats = None
             try:
                 with htf_lock:
-                    _htf_d = htf_state["direction"]
-                _sim = _simulate(_chart_src, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
+                    _htf_d  = htf_state["direction"]
+                with htf_lock2:
+                    _htf_d2 = htf_state2["direction"]
+                _sim = _simulate(_chart_src, _tp, 0, _collect=True, risk_pct=risk_pct,
+                                 htf_direction=_htf_d, htf_index=_htf_index,
+                                 htf_direction2=_htf_d2, htf_index2=_htf_index2)
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
                 print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
 
-                # --- HTF-фильтр: сводная статистика эффективности ---
-                # Сравниваем результат "с фильтром" (выше) и "без фильтра" на ТОМ ЖЕ
-                # окне свечей и тех же параметрах — разница и есть эффект HTF-фильтра
-                # за выбранный для перебора период.
+                # --- HTF-фильтр: сводная статистика эффективности (3 сценария) ---
+                # Сценарий A: оба фильтра (уже есть в _sim выше)
+                # Сценарий B: только первый HTF (без второго)
+                # Сценарий C: без фильтров
                 _htf_stats = None
                 if _htf_index:
                     try:
+                        _htf1_tf = HTF_MAP.get(tf, "")
+                        _htf2_tf = HTF_MAP2.get(tf, "")
+                        # Сценарий B: только первый HTF
+                        _sim_htf1_only = _simulate(_chart_src, _tp, 0, _collect=False, risk_pct=risk_pct,
+                                                    htf_direction=_htf_d, htf_index=_htf_index,
+                                                    htf_direction2=0, htf_index2=None)
+                        # Сценарий C: без фильтров
                         _sim_no_htf = _simulate(_chart_src, _tp, 0, _collect=False, risk_pct=risk_pct,
                                                  htf_direction=0, htf_index=None)
-                        if _sim_no_htf:
+                        if _sim_no_htf and _sim_htf1_only:
+                            def _ss(s):
+                                return {"equity": s["equity"], "trades": s["trades"],
+                                        "winrate": s["winrate"], "max_dd": s["max_dd"],
+                                        "profit_factor": s["profit_factor"]}
                             _htf_stats = {
-                                "with":    {"equity": _sim["equity"], "trades": _sim["trades"],
-                                             "winrate": _sim["winrate"], "max_dd": _sim["max_dd"],
-                                             "profit_factor": _sim["profit_factor"]},
-                                "without": {"equity": _sim_no_htf["equity"], "trades": _sim_no_htf["trades"],
-                                             "winrate": _sim_no_htf["winrate"], "max_dd": _sim_no_htf["max_dd"],
-                                             "profit_factor": _sim_no_htf["profit_factor"]},
-                                "htf_tf": HTF_MAP.get(tf, ""),
-                                "blocked_trades": max(0, _sim_no_htf["trades"] - _sim["trades"]),
+                                "with":       _ss(_sim),
+                                "htf1_only":  _ss(_sim_htf1_only),
+                                "without":    _ss(_sim_no_htf),
+                                "htf_tf":     _htf1_tf,
+                                "htf_tf2":    _htf2_tf,
+                                "has_htf2":   bool(_htf_index2),
+                                "blocked_trades":  max(0, _sim_no_htf["trades"] - _sim["trades"]),
+                                "blocked_by_htf2": max(0, _sim_htf1_only["trades"] - _sim["trades"]),
                             }
-                            olog(f"📐 HTF-фильтр ({_htf_stats['htf_tf']}): с фильтром ${_sim['equity']:.2f} "
-                                 f"({_sim['trades']} сд, WR {_sim['winrate']:.1f}%) vs без фильтра "
-                                 f"${_sim_no_htf['equity']:.2f} ({_sim_no_htf['trades']} сд, "
-                                 f"WR {_sim_no_htf['winrate']:.1f}%) — отфильтровано "
-                                 f"{_htf_stats['blocked_trades']} сд.", "info")
+                            # Лог для анализа эффективности каждого уровня
+                            _lbl_a = f"{_htf1_tf}+{_htf2_tf}" if _htf_index2 else _htf1_tf
+                            olog(f"📐 HTF-фильтр сценарии (цикл {cycle}):", "info")
+                            olog(f"  A [{_lbl_a}]:   ${_sim['equity']:.2f}  {_sim['trades']}сд  WR{_sim['winrate']:.1f}%  PF{_sim['profit_factor']:.2f}  DD{_sim['max_dd']:.1f}%", "info")
+                            if _htf_index2:
+                                olog(f"  B [{_htf1_tf}]:       ${_sim_htf1_only['equity']:.2f}  {_sim_htf1_only['trades']}сд  WR{_sim_htf1_only['winrate']:.1f}%  PF{_sim_htf1_only['profit_factor']:.2f}  DD{_sim_htf1_only['max_dd']:.1f}%  (+{max(0,_sim_htf1_only['trades']-_sim['trades'])} сд от HTF2 снято)", "info")
+                            olog(f"  C [без]:        ${_sim_no_htf['equity']:.2f}  {_sim_no_htf['trades']}сд  WR{_sim_no_htf['winrate']:.1f}%  PF{_sim_no_htf['profit_factor']:.2f}  DD{_sim_no_htf['max_dd']:.1f}%  (всего {_htf_stats['blocked_trades']} сд отфильтровано)", "info")
+                            # Рекомендация в лог: нужен ли HTF2 реально?
+                            _gain_htf2 = _sim["equity"] - _sim_htf1_only["equity"]
+                            _cost_htf2 = _htf_stats["blocked_by_htf2"]
+                            if _htf_index2 and _cost_htf2 > 0:
+                                _verdict = "✅ HTF2 полезен" if _gain_htf2 > 0 else "⚠ HTF2 снижает доходность"
+                                olog(f"  → {_verdict}: Δeq={_gain_htf2:+.2f}$ за -{_cost_htf2} сделок от HTF2", "info")
                     except Exception as _hse:
                         print(f"{_ts()} [htf_stats] Ошибка: {_hse}", flush=True)
 
@@ -4722,7 +4835,7 @@ def run_optimizer(params):
                     sl = list(_fresh_candles)
                 if len(sl) < 10: return None
                 return _simulate(sl, all_time_params, 0, risk_pct=risk_pct,
-                                 trade_from_ts=cutoff_from, htf_index=_htf_index)
+                                 trade_from_ts=cutoff_from, htf_index=_htf_index, htf_index2=_htf_index2)
 
             # 1) Валидация на последних 30%
             valid_sim = _wf_sim(valid_days, 0)
@@ -4835,7 +4948,7 @@ def run_optimizer(params):
                 sw_thread = threading.Thread(
                     target=_sliding_window_thread,
                     args=(symbol, tf, n_sw, alert_cfg, risk_pct),
-                    kwargs={"htf_index": _htf_index},
+                    kwargs={"htf_index": _htf_index, "htf_index2": _htf_index2},
                     daemon=True
                 )
                 sw_thread.start()
@@ -4852,7 +4965,7 @@ def run_optimizer(params):
             sw_thread = threading.Thread(
                 target=_sliding_window_thread,
                 args=(symbol, tf, n_sw, alert_cfg, risk_pct),
-                kwargs={"htf_index": _htf_index},
+                kwargs={"htf_index": _htf_index, "htf_index2": _htf_index2},
                 daemon=True
             )
             sw_thread.start()
@@ -6360,11 +6473,12 @@ details summary::-webkit-details-marker{display:none}
           </tr>
         </thead>
         <tbody>
-          <tr><td>С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
+          <tr><td id="htfRowALabel">С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
+          <tr id="htfRowB" style="display:none"><td id="htfRowBLabel">Только HTF1</td><td id="htfH1Eq">—</td><td id="htfH1Wr">—</td><td id="htfH1Tr">—</td><td id="htfH1Dd">—</td><td id="htfH1Pf">—</td></tr>
           <tr><td>Без фильтра</td><td id="htfWoEq">—</td><td id="htfWoWr">—</td><td id="htfWoTr">—</td><td id="htfWoDd">—</td><td id="htfWoPf">—</td></tr>
         </tbody>
       </table>
-      <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span></div>
+      <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span> <span id="htfBlocked2"></span></div>
     </div>
 
 
@@ -7037,18 +7151,36 @@ function poll(){
       const hs=d.htf_stats;
       if(hs && hs.with && hs.without){
         htfStatsWrap.style.display='block';
-        document.getElementById('htfStatsTf').textContent=hs.htf_tf||'—';
+        // Заголовок: показываем оба TF если есть второй уровень
+        const tfLabel = hs.has_htf2 && hs.htf_tf2 ? hs.htf_tf+'+'+hs.htf_tf2 : hs.htf_tf||'—';
+        document.getElementById('htfStatsTf').textContent=tfLabel;
+        document.getElementById('htfRowALabel').textContent = hs.has_htf2 ? (hs.htf_tf||'')+'+'+(hs.htf_tf2||'') : 'С фильтром';
         document.getElementById('htfWithEq').textContent='$'+hs.with.equity.toFixed(2);
         document.getElementById('htfWithWr').textContent=hs.with.winrate.toFixed(1);
         document.getElementById('htfWithTr').textContent=hs.with.trades;
         document.getElementById('htfWithDd').textContent=hs.with.max_dd.toFixed(1);
         document.getElementById('htfWithPf').textContent=hs.with.profit_factor.toFixed(2);
+        // Строка B (только HTF1) — только если есть второй уровень
+        const rowB=document.getElementById('htfRowB');
+        if(rowB){
+          if(hs.has_htf2 && hs.htf1_only){
+            rowB.style.display='';
+            document.getElementById('htfRowBLabel').textContent='Только '+hs.htf_tf;
+            document.getElementById('htfH1Eq').textContent='$'+hs.htf1_only.equity.toFixed(2);
+            document.getElementById('htfH1Wr').textContent=hs.htf1_only.winrate.toFixed(1);
+            document.getElementById('htfH1Tr').textContent=hs.htf1_only.trades;
+            document.getElementById('htfH1Dd').textContent=hs.htf1_only.max_dd.toFixed(1);
+            document.getElementById('htfH1Pf').textContent=hs.htf1_only.profit_factor.toFixed(2);
+          } else { rowB.style.display='none'; }
+        }
         document.getElementById('htfWoEq').textContent='$'+hs.without.equity.toFixed(2);
         document.getElementById('htfWoWr').textContent=hs.without.winrate.toFixed(1);
         document.getElementById('htfWoTr').textContent=hs.without.trades;
         document.getElementById('htfWoDd').textContent=hs.without.max_dd.toFixed(1);
         document.getElementById('htfWoPf').textContent=hs.without.profit_factor.toFixed(2);
         document.getElementById('htfBlocked').textContent=hs.blocked_trades;
+        const b2el=document.getElementById('htfBlocked2');
+        if(b2el) b2el.textContent = hs.has_htf2 && hs.blocked_by_htf2>0 ? '(из них '+hs.blocked_by_htf2+' от HTF2)' : '';
       } else {
         htfStatsWrap.style.display='none';
       }
@@ -8039,8 +8171,9 @@ class Handler(BaseHTTPRequestHandler):
             # Останавливаем все _sw_threads (multi-symbol режим)
             for _sym, _st in list(_sw_state.items()):
                 _st["running"] = False
-            # Останавливаем HTF-фильтр
+            # Останавливаем HTF-фильтр (оба уровня)
             _htf_stop_flag.set()
+            _htf_stop_flag2.set()
             self._json({"ok":True})
         elif parsed.path == "/recent_configs":
             # Читаем список конфигов с GitHub (configs/), локалка — только fallback
