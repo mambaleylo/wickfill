@@ -5,15 +5,15 @@ WickFill Optimizer v3.309
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
-- v3.309: fix "случайная" перезагрузка свечей и искажение последних свечей после неё —
-  _live_candle_updater имел отдельный stale-reload блок (если последняя закрытая свеча
-  старше 2 интервалов и (now-_last_refresh)>60с — перезагрузить chart_candles снапшотом
-  _sw_candles). Условие проверяло только opt_state["running"] (флаг оптимизатора), но НЕ
-  sw_running — поэтому при активном SW-треде (живая свеча, нормальная работа) этот блок
-  тоже мог сработать на любом 3с-поллинге, где stale=True (что неизбежно бывает прямо
-  перед границей TF), затирая chart_candles снапшотом другого окна свечей в момент,
-  не совпадающий с TF-границей SW-треда → визуально воспринималось как "рандомная"
-  перезагрузка с искажёнными последними свечами. Добавлена проверка sw_running.
+- v3.309: fix перезагрузка свечей "случайным" интервалом + кривая отрисовка
+  последних свечей после неё. Причина: автоперезагрузка по границе TF раньше
+  выполнялась между циклами оптимизатора — момент проверки зависел от длины
+  цикла (часто десятки сек — минуты), отсюда дрейф интервалов; кроме того
+  chart_candles/chart_signals не пересобирались синхронно с новым _sw_candles,
+  из-за чего последние свечи на графике рисовались по старому окну до
+  следующего тика SW-треда. Теперь перезагрузка вынесена в _live_candle_updater
+  (проверка границы TF каждые ~3с, без дрейфа) и сразу синхронно пересобирает
+  chart_candles/chart_signals/pending-сигнал на новом окне свечей.
 - v3.308: fix задержка обновления свечи на ~2 мин в SW-треде — вместо фиксированного
   sleep_total = wait_sec + 15 (из-за чего тред мог ждать до следующей границы + 15с)
   теперь вычисляется точное время пробуждения wake_at = next_close + 5с grace;
@@ -391,6 +391,7 @@ def _live_candle_updater():
     Если chart_candles устарели (последняя свеча > 2 интервалов назад) —
     перегружает исторические свечи с API.
     При сетевых ошибках делает паузу с экспоненциальным backoff (до 60с)."""
+    global _sw_candles, _reload_state
     _last_refresh = 0  # время последней полной перезагрузки истории
     _net_errors = 0    # счётчик последовательных сетевых ошибок
 
@@ -416,12 +417,7 @@ def _live_candle_updater():
                 stale = (now - last_t) > interval_sec * 2  # старше 2 интервалов
 
                 # Если данные устарели и оптимизатор не бежит — перегружаем историю
-                # (но не при активном SW-треде — он сам управляет chart_candles на границах TF;
-                #  иначе этот блок срабатывает в "случайные" моменты (раз в 3с-поллинг при stale=True)
-                #  и затирает chart_candles снапшотом _sw_candles, рассинхронизируя последние свечи)
-                with opt_lock:
-                    _sw_active = opt_state.get("sw_running", False)
-                if stale and not running and not _sw_active and best and (now - _last_refresh) > 60:
+                if stale and not running and best and (now - _last_refresh) > 60:
                     print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
                         # Берём _sw_candles — те же что у оптимизатора/SW-треда, не загружаем отдельно
@@ -452,7 +448,84 @@ def _live_candle_updater():
                         _net_errors += 1
                         print(f"{_ts()} [SW] ❌ Ошибка перезагрузки: {e}", flush=True)
 
-                # Обновляем незакрытую свечу
+                # ── Точная перезагрузка свечей по границе TF (без дрейфа) ──
+                # Раньше эта перезагрузка запускалась между циклами оптимизатора,
+                # из-за чего интервал "плыл" в зависимости от длины цикла.
+                # Теперь она выполняется здесь (проверка каждые ~3с) и сразу
+                # синхронно пересобирает chart_candles/chart_signals из новых
+                # _sw_candles — иначе последние свечи на графике рисовались
+                # неверно (chart_candles оставался построен на старом окне).
+                with opt_lock:
+                    _rs = dict(_reload_state)
+                if _rs.get("active") and running and _rs.get("symbol") == symbol and _rs.get("tf") == tf \
+                        and now >= _rs.get("next_at", 0):
+                    olog_msg = f"{_ts()} [reload] Перезагрузка свечей (граница {tf})..."
+                    print(olog_msg, flush=True)
+                    try:
+                        fresh_reload = _fetch_candles(symbol, tf, _rs.get("days", 3))
+                        _ncw = _rs.get("n_candles", 0)
+                        if _ncw > 0 and _ncw < len(fresh_reload):
+                            fresh_reload = fresh_reload[-_ncw:]
+                        if len(fresh_reload) >= 30:
+                            with opt_lock:
+                                _sw_candles = list(fresh_reload)
+                            if len(_multi_symbols) > 1 and symbol in _sw_state:
+                                with _sw_state_lock:
+                                    _sw_state[symbol]["candles"] = list(fresh_reload)
+
+                            # Синхронно пересобираем chart_candles/chart_signals
+                            # на новом окне — чтобы они совпадали с _sw_candles
+                            # сразу, а не ждали следующего тика SW-треда.
+                            _rb_best_p = (best or {}).get("params", {}) if best else {}
+                            try:
+                                with htf_lock:
+                                    _rb_htf_dir = htf_state.get("direction", 0)
+                            except Exception:
+                                _rb_htf_dir = 0
+                            if _rb_best_p:
+                                sim_rb = _simulate(fresh_reload, _rb_best_p, 0, _collect=True,
+                                                    risk_pct=_rs.get("risk_pct", 20.0),
+                                                    htf_direction=_rb_htf_dir)
+                                sigs_rb = sim_rb["_signals"] if sim_rb else []
+                                _pb_rb  = sim_rb["pending_signal_bar"] if sim_rb else None
+                                _pd_rb  = sim_rb["pending_signal_dir"] if sim_rb else None
+                                _pt_rb  = sim_rb["pending_signal_t"] if sim_rb else None
+                            else:
+                                sigs_rb = []
+                                _pb_rb = _pd_rb = _pt_rb = None
+                            _pending_info_rb = ({"t": _pt_rb, "dir": _pd_rb}
+                                                 if _pb_rb is not None else None)
+
+                            new_cc_rb = [{"t":c["t"],"o":c["open"],"h":c["high"],
+                                          "l":c["low"],"c":c["close"]} for c in fresh_reload]
+                            cur_c_rb = _fetch_current_candle(symbol, tf)
+                            if cur_c_rb and cur_c_rb["t"] > fresh_reload[-1]["t"]:
+                                _live_open_rb = fresh_reload[-1]["close"]
+                                new_cc_rb = new_cc_rb + [{"t":cur_c_rb["t"],
+                                    "o":_live_open_rb,
+                                    "h":max(_live_open_rb, cur_c_rb["high"]),
+                                    "l":min(_live_open_rb, cur_c_rb["low"]),
+                                    "c":cur_c_rb["close"],"live":True}]
+
+                            with opt_lock:
+                                if opt_state.get("chart_symbol", "") == symbol:
+                                    opt_state["chart_candles"]      = new_cc_rb
+                                    opt_state["chart_signals"]      = sigs_rb
+                                    opt_state["chart_pending_bar"]  = _pb_rb
+                                    opt_state["chart_pending_info"] = _pending_info_rb
+                                    opt_state["chart_updated_at"]   = now
+                                    cc = new_cc_rb
+                                    _reload_state["next_at"] = (now // _rs["tf_sec"] + 1) * _rs["tf_sec"] + 3
+                            print(f"{_ts()} [reload] ✅ Свечи и график обновлены: {len(fresh_reload)} св.", flush=True)
+                        else:
+                            print(f"{_ts()} [reload] ⚠ Мало свечей ({len(fresh_reload)}), оставляем старые", flush=True)
+                            with opt_lock:
+                                _reload_state["next_at"] = (now // _rs["tf_sec"] + 1) * _rs["tf_sec"] + 3
+                    except Exception as _re:
+                        print(f"{_ts()} [reload] ❌ Ошибка перезагрузки: {_re}", flush=True)
+                        with opt_lock:
+                            _reload_state["next_at"] = (now // _rs["tf_sec"] + 1) * _rs["tf_sec"] + 3
+
                 c = _fetch_current_candle(symbol, tf)
                 if c:
                     _net_errors = 0  # сброс счётчика ошибок при успехе
@@ -2940,6 +3013,21 @@ _sw_params  = {}
 _sw_cfg     = {}   # email cfg
 _sw_risk    = 20.0
 
+# Состояние автоперезагрузки свечей по границе TF (защищено opt_lock).
+# Заполняется оптимизатором при старте, обрабатывается _live_candle_updater
+# каждые ~3с — чтобы перезагрузка происходила РОВНО на границе TF, а не
+# с дрейфом, зависящим от длины цикла оптимизатора.
+_reload_state = {
+    "active": False,      # включена ли автоперезагрузка
+    "next_at": 0,          # unix-время следующей перезагрузки
+    "tf_sec": 3600,
+    "n_candles": 0,        # размер окна (0 = без обрезки)
+    "days": 3,
+    "symbol": "",
+    "tf": "",
+    "risk_pct": 20.0,
+}
+
 # Per-symbol SW state для мультирежима
 _sw_state      = {}  # {symbol: {"candles":[], "params":{}, "risk":20, "running":False, "opt_states_ref": None}}
 _sw_state_lock = threading.Lock()
@@ -4290,12 +4378,25 @@ def run_optimizer(params):
     _STAGNATION_THRESH  = 15  # порог: столько циклов без улучшения → встряска
     _last_shake_vfit    = -1e18  # validated_fitness на момент последнего рескрамбла
     # ────────────────────────────────────────────────────────────────────────
-    # Автоперезагрузка свечей: на открытии каждой новой свечи (по границе TF)
+    # Автоперезагрузка свечей: на открытии каждой новой свечи (по границе TF).
+    # Обрабатывается фоновым _live_candle_updater (каждые ~3с) — это устраняет
+    # дрейф интервалов перезагрузки, который раньше зависел от длины цикла оптимизатора.
     _tf_sec_reload = TF_SECONDS.get(tf, 3600)
     def _next_candle_boundary():
         # +3 сек grace period: Gate.io может не сразу закрыть свечу на ровной границе
         return (int(time.time()) // _tf_sec_reload + 1) * _tf_sec_reload + 3
     _next_reload_at = _next_candle_boundary()
+    with opt_lock:
+        _reload_state.update({
+            "active": True,
+            "next_at": _next_reload_at,
+            "tf_sec": _tf_sec_reload,
+            "n_candles": n_candles,
+            "days": days,
+            "symbol": symbol,
+            "tf": tf,
+            "risk_pct": risk_pct,
+        })
     olog(f"🔄 Автообновление свечей: следующая перезагрузка в {__import__('datetime').datetime.utcfromtimestamp(_next_reload_at).strftime('%H:%M:%S')} UTC", "info")
     # Сразу заполняем из seed если он есть
     if seed and seed.get("best") and seed["best"].get("params"):
@@ -4377,35 +4478,10 @@ def run_optimizer(params):
                 prev_eq = prev_top20[0]["equity"] if prev_top20 else 0
                 olog(f"═══ ЦИКЛ #{cycle} — ПРОДОЛЖЕНИЕ (лучшее за всё время: ${prev_eq:.2f}) ═══", "ok")
 
-        # Между циклами — автоперезагрузка свечей на открытии новой свечи (по границе TF)
-        if cycle > 1 and infinite and time.time() >= _next_reload_at:
-            olog(f"🔄 Перезагрузка свечей (новая {tf}-свеча)...", "info")
-            try:
-                # Загрузка в потоке с таймаутом — не блокируем цикл при зависшей сети
-                _fr_holder = [None]
-                def _do_reload(): _fr_holder[0] = _fetch_candles(symbol, tf, days)
-                _fr_t = threading.Thread(target=_do_reload, daemon=True); _fr_t.start(); _fr_t.join(timeout=30)
-                if not _fr_t.is_alive() and _fr_holder[0]:
-                    fresh_reload = _fr_holder[0]
-                else:
-                    olog("⚠ Перезагрузка свечей: таймаут 30с, используем старые", "warn")
-                    fresh_reload = []
-                if n_candles > 0 and n_candles < len(fresh_reload):
-                    fresh_reload = fresh_reload[-n_candles:]
-                if len(fresh_reload) >= 30:
-                    with opt_lock:
-                        _sw_candles = list(fresh_reload)
-                    if len(_multi_symbols) > 1 and symbol in _sw_state:
-                        with _sw_state_lock:
-                            _sw_state[symbol]["candles"] = list(fresh_reload)
-                    olog(f"✅ Свечи обновлены: {len(fresh_reload)} ({fresh_reload[-1]['t'] and __import__('datetime').datetime.utcfromtimestamp(fresh_reload[-1]['t']).strftime('%d.%m %H:%M') or '?'} UTC)", "ok")
-                else:
-                    olog(f"⚠ Перезагрузка не удалась — мало свечей ({len(fresh_reload)}), используем старые", "warn")
-            except Exception as _re:
-                olog(f"⚠ Ошибка перезагрузки свечей: {_re}", "warn")
-            # Следующая перезагрузка — на открытии следующей свечи
-            _next_reload_at = _next_candle_boundary()
-            olog(f"🔄 Следующая перезагрузка: {__import__('datetime').datetime.utcfromtimestamp(_next_reload_at).strftime('%H:%M:%S')} UTC", "info")
+        # Перезагрузка свечей по границе TF теперь выполняется фоновым
+        # _live_candle_updater (через _reload_state) — без дрейфа, не зависит
+        # от длины цикла оптимизатора. Здесь просто читаем актуальные _sw_candles,
+        # которые updater обновляет на лету.
 
         # Между циклами — проверяем появление новой свечи и бесшовно сдвигаем окно
         if cycle > 1:
