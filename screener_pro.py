@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.307
+WickFill Optimizer v3.308
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.308: fix задержка обновления свечи на ~2 мин в SW-треде — вместо фиксированного
+  sleep_total = wait_sec + 15 (из-за чего тред мог ждать до следующей границы + 15с)
+  теперь вычисляется точное время пробуждения wake_at = next_close + 5с grace;
+  цикл sleep(1) с проверкой remaining <= 0 гарантирует пробуждение ровно на границе TF.
 - v3.307: дефолтный масштаб графика ×1.5: мобайл 80→120 свечей, десктоп 160→240
 - v3.306: fix пропадание свечи перед live — корень в _fetch_latest_candle: функция всегда брала data[-2] (предпоследнюю), считая data[-1] незакрытой; но Gate.io в момент смены интервала возвращает две закрытые свечи → data[-1] (самая свежая закрытая) терялась; исправлено: теперь перебираем с конца и берём первую у которой now >= t + interval_sec (календарная граница); также добавлен лог времени следующей перезагрузки свечей
 - v3.305: AMOLED + Fullscreen API — при включении AMOLED вызывается requestFullscreen({navigationUI:'hide'}) (прячет адресную строку Chrome), при выключении — exitFullscreen(); если пользователь вышел из фуллскрина свайпом/кнопкой браузера — AMOLED автоматически выключается
@@ -177,7 +181,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.307"
+APP_VERSION = "3.308"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3049,13 +3053,16 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
 
         now = int(time.time())
         next_close = ((now // interval_sec) + 1) * interval_sec
-        wait_sec = next_close - now
-        sleep_total = wait_sec + 15  # +15с — биржа иногда задерживает финализацию свечи
-        print(f"[sw:{symbol}] Следующая свеча через {sleep_total}с")
+        _grace = 5  # секунд grace-period после границы TF
+        wake_at = next_close + _grace
+        wake_human = __import__('datetime').datetime.utcfromtimestamp(wake_at).strftime('%H:%M:%S')
+        print(f"[sw:{symbol}] Следующая свеча: граница {__import__('datetime').datetime.utcfromtimestamp(next_close).strftime('%H:%M:%S')} UTC, ждём до {wake_human} UTC (+{_grace}с)")
 
-        for _ in range(sleep_total):
+        while True:
             if not _get_running(): break
-            time.sleep(1)
+            remaining = wake_at - time.time()
+            if remaining <= 0: break
+            time.sleep(min(1.0, remaining))
 
         if not _get_running(): break
 
