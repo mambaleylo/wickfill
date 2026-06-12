@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.304
+WickFill Optimizer v3.305
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.305: AMOLED + Fullscreen API — при включении AMOLED вызывается requestFullscreen({navigationUI:'hide'}) (прячет адресную строку Chrome), при выключении — exitFullscreen(); если пользователь вышел из фуллскрина свайпом/кнопкой браузера — AMOLED автоматически выключается
 - v3.304: (1) авто-возврат к правому краю: через 5 сек после зума/скролла _schedAutoReturn() сбрасывает viewLen=_defaultViewLen и viewStart к последней свече; работает для wheel/drag/pinch/touch; (2) увеличен дефолтный масштаб: мобайл 60→80 свечей, десктоп 120→160
 - v3.303: fix пропадание свечи перед live при перезагрузке на границе TF — три причины:
   (1) _fetch_candles обрезал незакрытую свечу по t+interval>now (строгое >); при точном совпадении now==boundary свеча оставалась в массиве и потом пропадала; исправлено на >=;
@@ -174,7 +175,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.304"
+APP_VERSION = "3.305"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7345,13 +7346,41 @@ function wakeFromAmoled(ev){
   }
 }
 
+function _requestFS(){
+  const el=document.documentElement;
+  try{
+    if(el.requestFullscreen) el.requestFullscreen({navigationUI:'hide'});
+    else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  }catch(e){}
+}
+function _exitFS(){
+  try{
+    if(document.exitFullscreen) document.exitFullscreen();
+    else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }catch(e){}
+}
+// Если фуллскрин закрыли свайпом/кнопкой браузера — синхронизируем состояние
+document.addEventListener('fullscreenchange',()=>{
+  if(!document.fullscreenElement && _amoledOn){
+    // пользователь сам вышел из FS — выключаем AMOLED
+    _amoledOn=false;
+    localStorage.setItem('wf_amoled','0');
+    _amoledBtnRefresh();
+    if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
+    const ov=document.getElementById('amoledOverlay');
+    if(ov) ov.style.display='none';
+  }
+});
+
 function toggleAmoled(){
   _amoledOn=!_amoledOn;
   localStorage.setItem('wf_amoled', _amoledOn?'1':'0');
   _amoledBtnRefresh();
   if(_amoledOn){
+    _requestFS();
     _resetAmoledTimer();
   } else {
+    _exitFS();
     if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
     const ov=document.getElementById('amoledOverlay');
     if(ov) ov.style.display='none';
