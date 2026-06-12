@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.318
+WickFill Optimizer v3.319
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.319: fix скролл Недавних конфигов на мобиле — overflow:hidden перенесён из
+  inline-style в CSS (inline перебивал медиа-правило overflow:visible на мобиле).
 - v3.318: fix скролл списка Недавних конфигов на мобиле — убран overflow:hidden с панели,
   max-height увеличен 240→320px, добавлен overscroll-behavior-y:contain.
 - v3.317: HTF-фильтр — сводная статистика эффективности за период перебора.
@@ -218,7 +220,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.318"
+APP_VERSION = "3.319"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5414,6 +5416,7 @@ if(window.innerWidth<=700){
   --border2:rgba(245,245,245,0.06);
 }
 
+#recentPanel{overflow:hidden}
 [data-theme="dark"] .card,
 [data-theme="dark"] .sidebar,
 [data-theme="dark"] .topbar,
@@ -5986,7 +5989,6 @@ details summary::-webkit-details-marker{display:none}
   /* overflow:hidden на recentPanel режет скролл на тач — убираем */
   #recentPanel{overflow:visible}
   /* При раскрытии JS ставит max-height:320px — достаточно для ~5 конфигов */
-
   /* ── ПРАВАЯ ПАНЕЛЬ — порядок элементов на мобиле ── */
   .right{flex:1;min-height:0;overflow:visible;display:flex;flex-direction:column}
   /* Таблица конфига — первая */
@@ -6110,7 +6112,7 @@ details summary::-webkit-details-marker{display:none}
   <aside class="sidebar">
 
     <!-- Recent configs quick-select -->
-    <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);overflow:hidden">
+    <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
       <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'320px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
