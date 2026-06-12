@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.290: fix цвет лейблов TP/SL на шкале — фон затемнён (тёмно-зелёный/тёмно-оранжевый/тёмно-коричневый), текст светлый пастельный вместо белого → хорошая читаемость на любом фоне.
 - v3.289: fix критический баг расчёта size позиции — формула была size=margin/(ep*qm) вместо size=(margin*leverage)/(ep*qm); при leverage=25 размер занижался в 25 раз и округлялся до 0 → сделки не открывались. Теперь notional = margin × leverage, size = notional / (ep * qm), что соответствует тому как Gate считает маржу.
 - v3.288: fix сделки не открываются когда баланс меньше стоимости 1 контракта — убран принудительный max(1, ...) при расчёте size; если round(margin/(ep*qm)) < 1 — возвращается понятная ошибка "Недостаточно средств" с указанием минимальной маржи и советом пополнить или снизить плечо.
 - v3.287: fix пропадание 1-2 свечей перед live и гонка записи chart_candles: (1) _live_candle_updater пропускает запись в opt_state["chart_candles"] когда sw_running=True — SW-тред сам управляет массивом, нет гонки; (2) postMessage handler: prevLive восстанавливается только если prevLive.t СТРОГО больше t последней закрытой свечи (было >=) — при равенстве SW уже закрыл свечу, старая live не нужна; (3) /chart_data: если в chart_candles нет live-свечи — инжектируем из _live_candle_cache напрямую (SW мог не успеть добавить до запроса).
@@ -156,7 +157,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.289"
+APP_VERSION = "3.290"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2173,18 +2174,18 @@ function render(){{
     // TP label + timer
     const tpLblH=_candleTimer?26:14;
     if(_fitRightLabel(tpY, tpLblH)){{
-      ctx.fillStyle=isLong?'rgba(163,191,111,0.9)':'rgba(255,130,52,0.9)';
+      ctx.fillStyle=isLong?'rgba(55,100,30,0.92)':'rgba(160,60,10,0.92)';
       ctx.beginPath();ctx.roundRect(W-PAD_R+1,tpY-tpLblH/2,PAD_R-2,tpLblH,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY-(_candleTimer?5:0)+3);
-      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,tpY+10);ctx.font='bold 9px system-ui';}}
+      ctx.fillStyle='#e8f5d0';ctx.fillText('TP '+activeSig.tp.toPrecision(5),W-PAD_R+4,tpY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(232,245,208,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,tpY+10);ctx.font='bold 9px system-ui';}}
     }}
     // SL label + timer
     const slLblH=_candleTimer?26:14;
     if(_fitRightLabel(slY, slLblH)){{
-      ctx.fillStyle='rgba(140,120,100,0.75)';
+      ctx.fillStyle='rgba(80,55,40,0.88)';
       ctx.beginPath();ctx.roundRect(W-PAD_R+1,slY-slLblH/2,PAD_R-2,slLblH,3);ctx.fill();
-      ctx.fillStyle='#fff';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY-(_candleTimer?5:0)+3);
-      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(255,255,255,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,slY+10);ctx.font='bold 9px system-ui';}}
+      ctx.fillStyle='#f5e8d8';ctx.fillText('SL '+activeSig.sl.toPrecision(5),W-PAD_R+4,slY-(_candleTimer?5:0)+3);
+      if(_candleTimer){{ctx.font='8px system-ui';ctx.fillStyle='rgba(245,232,216,0.75)';ctx.fillText(_candleTimer,W-PAD_R+4,slY+10);ctx.font='bold 9px system-ui';}}
     }}
     ctx.font='10px system-ui';
   }}
