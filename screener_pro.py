@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.306
+WickFill Optimizer v3.307
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.307: дефолтный масштаб графика ×1.5: мобайл 80→120 свечей, десктоп 160→240
 - v3.306: fix пропадание свечи перед live — корень в _fetch_latest_candle: функция всегда брала data[-2] (предпоследнюю), считая data[-1] незакрытой; но Gate.io в момент смены интервала возвращает две закрытые свечи → data[-1] (самая свежая закрытая) терялась; исправлено: теперь перебираем с конца и берём первую у которой now >= t + interval_sec (календарная граница); также добавлен лог времени следующей перезагрузки свечей
 - v3.305: AMOLED + Fullscreen API — при включении AMOLED вызывается requestFullscreen({navigationUI:'hide'}) (прячет адресную строку Chrome), при выключении — exitFullscreen(); если пользователь вышел из фуллскрина свайпом/кнопкой браузера — AMOLED автоматически выключается
 - v3.304: (1) авто-возврат к правому краю: через 5 сек после зума/скролла _schedAutoReturn() сбрасывает viewLen=_defaultViewLen и viewStart к последней свече; работает для wheel/drag/pinch/touch; (2) увеличен дефолтный масштаб: мобайл 60→80 свечей, десктоп 120→160
@@ -176,7 +177,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.306"
+APP_VERSION = "3.307"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2104,7 +2105,7 @@ const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 const wrap=document.getElementById('canvas-wrap');
 const _isMob=window.innerWidth<=700;
-const _defaultViewLen=_isMob?80:160;
+const _defaultViewLen=_isMob?120:240;
 let viewStart=Math.max(0,CANDLES.length-_defaultViewLen),viewLen=Math.min(_defaultViewLen,CANDLES.length);
 let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 // Отслеживаем: был ли пользователь у правого края при последнем render()
