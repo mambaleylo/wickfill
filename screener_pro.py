@@ -34,6 +34,7 @@ WickFill Optimizer v3.284
   сигналов/сделок (включая лишние SL), чем заявлено в карточке (WR/Сделок/PF).
   Теперь _htf_index (single) / _htf_index_sym (multi) передаются в финальный _simulate
   графика — сигналы на графике соответствуют отображаемой лучшей комбинации.
+- v3.300: debug — добавлен глобальный window.onerror на странице /chart, выводящий JS-ошибку прямо на экран (для диагностики пустого графика).
 - v3.299: fix график не открывается / запросы к серверу зависают — HTTPServer был однопоточным (один request — один поток), и долгий запрос (/chart или poll во время цикла) блокировал все остальные соединения, включая повторные открытия /chart. Заменён на ThreadingHTTPServer (daemon_threads=True) — запросы обрабатываются параллельно.
 - v3.298: fix SyntaxError f-string в loadCandleDebug — JS template literals с ${} конфликтовали с Python f-string парсером; заменены на конкатенацию строк.
 - v3.297: fix 2 свечи перед live пропадают — корень: viewStart не обновлялся когда live-свеча добавлялась асинхронно через fetchLiveCandle после postMessage. Введён _atRightEdge — глобальный флаг «пользователь у правого края», обновляется при каждом render() и всех ручных взаимодействиях (wheel/drag/pinch); render() теперь сам подтягивает viewStart = CANDLES.length - viewLen при _atRightEdge=true до клампирования — любое добавление свечей (push live, postMessage, gap-fill) автоматически двигает viewport. fetchLiveCandle: убран wasAtEnd — viewStart=CANDLES.length-viewLen при push всегда (была ошибка: viewStart не двигался когда postMessage добавлял массив без live а fetchLiveCandle асинхронно добавлял live после).
@@ -166,7 +167,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.299"
+APP_VERSION = "3.300"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2048,6 +2049,16 @@ canvas{{display:block;width:100%;height:100%}}
     </div>
   </div>
 </div>
+<script>
+window.onerror=function(msg,src,line,col,err){{
+  document.body.style.background='#FAE6D8';
+  document.body.style.color='#a03030';
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:14px;font:13px monospace;background:#fff3f0;border-bottom:2px solid #c00;white-space:pre-wrap';
+  d.textContent='JS ERROR: '+msg+'\\n  at '+src+':'+line+':'+col+(err&&err.stack?('\\n'+err.stack):'');
+  document.body.appendChild(d);
+}};
+</script>
 <script>
 // Read theme from URL param and apply before render
 (function(){{
