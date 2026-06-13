@@ -1,3 +1,3 @@
-[2026-06-12 17:37:18] alert_cfg обновлён: auto=True key=да
-[2026-06-12 17:50:54]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Max retries exceeded with url: /api/v4/futures/usdt/positions/DOGE_USDT (Caused by NameResolutionError("HTTPSConnection(host='api.gateio.ws', port=443): Failed to resolve 'api.gateio.ws' ([Errno 7] No address associated with hostname)"))
-[2026-06-12 18:31:33]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-13 01:41:06] alert_cfg обновлён: auto=True key=да
+[2026-06-13 04:45:23] СИГНАЛ ШОРТ ep=0.08655 tp=0.0855114 sl=0.0868096 tg=ok
+[2026-06-13 04:45:23] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
