@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.329
+WickFill Optimizer v3.330
+- v3.330: устойчивость к нестабильному мобильному интернету:
+  · старт цикла: при провале fetch больше не останавливает оптимизатор —
+    ждёт восстановления сети с паузой 30→60→...→300с, проверяя стоп-флаг
+    каждую секунду; при наличии кешированных _sw_candles (>= 30 св.) сразу
+    использует их без ожидания
+  · _fetch_candles: попыток увеличено с 5 до 10, backoff вырос с 60с до 120с
+  · данные оптимизатора в памяти (_sw_candles) при обрыве не теряются —
+    reload на границе TF при провале fetch откладывается до следующей границы
+- v3.329
 - v3.329: fix карточки циклов зависали после нескольких циклов — regex doneM не
   матчил строку когда _stagnation_cycles > 0 (сервер добавлял хвост
   "| stagnation=N/M" после DD%). Добавлен [\s\S]*? в конец regex.
@@ -317,7 +326,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.329"
+APP_VERSION = "3.330"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1497,7 +1506,7 @@ def _fetch_candles(symbol, tf, days):
         except Exception:
             pass
         _fetch_attempt = 0
-        _fetch_max_attempts = 5
+        _fetch_max_attempts = 10
         _fetch_ok = False
         while _fetch_attempt < _fetch_max_attempts:
             try:
@@ -1507,7 +1516,7 @@ def _fetch_candles(symbol, tf, days):
                 if r.status_code != 200:
                     last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
                     if r.status_code in (429, 502, 503, 504):
-                        _wait = min(2 ** _fetch_attempt * 2, 60)
+                        _wait = min(2 ** _fetch_attempt * 2, 120)
                         print(f"\n{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с...", flush=True)
                         time.sleep(_wait)
                         _fetch_attempt += 1
@@ -1543,7 +1552,7 @@ def _fetch_candles(symbol, tf, days):
                 break
             except Exception as e:
                 last_exception = str(e)
-                _wait = min(2 ** _fetch_attempt * 3, 60)
+                _wait = min(2 ** _fetch_attempt * 3, 120)
                 print(f"\n{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}/{_fetch_max_attempts}): {e}, повтор через {_wait}с...", flush=True)
                 time.sleep(_wait)
                 _fetch_attempt += 1
@@ -4491,9 +4500,42 @@ def run_optimizer(params):
 
     olog(f"🚀 Старт · {symbol} · {tf} · {days}д · риск {risk_pct:.0f}%")
 
-    # Загрузка свечей
-    candles = _fetch_candles(symbol, tf, days)
-    # Сбрасываем прогресс-бар загрузки
+    # Загрузка свечей — с бесконечным ожиданием при отсутствии сети
+    candles = []
+    _fetch_retry = 0
+    while True:
+        candles = _fetch_candles(symbol, tf, days)
+        with opt_lock:
+            opt_state["fetch_pct"] = -1
+            opt_state["fetch_symbol"] = ""
+        if len(candles) >= 30:
+            break
+        # Нет данных — пробуем кеш _sw_candles
+        with opt_lock:
+            _cached = list(_sw_candles) if _sw_candles else []
+        if len(_cached) >= 30:
+            reason = _last_fetch_error or "нет данных от биржи"
+            olog(f"⚠ Fetch провалился ({reason}), используем кешированные свечи ({len(_cached)} св.)", "warn")
+            candles = _cached
+            break
+        # Ни fetch ни кеш — ждём восстановления сети
+        _fetch_retry += 1
+        _wait_net = min(30 * _fetch_retry, 300)  # 30с → 60с → ... → 5мин
+        reason = _last_fetch_error or "нет данных"
+        olog(f"⏳ Нет свечей ({reason}), жду {_wait_net}с (попытка {_fetch_retry})...", "warn")
+        with opt_lock:
+            opt_state["error"] = f"Нет сети, повтор через {_wait_net}с..."
+        # Ждём с проверкой стоп-флага каждую секунду
+        for _ in range(_wait_net):
+            with opt_lock:
+                if opt_state.get("stop_flag"):
+                    olog("🛑 Стоп во время ожидания сети", "warn")
+                    opt_state["running"] = False
+                    return
+            time.sleep(1)
+        with opt_lock:
+            opt_state["error"] = ""
+    # Сбрасываем прогресс-бар загрузки (на случай если он ещё не сброшен)
     with opt_lock:
         opt_state["fetch_pct"] = -1
         opt_state["fetch_symbol"] = ""
