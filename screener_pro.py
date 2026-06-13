@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.326
+WickFill Optimizer v3.327
+- v3.327: Screen Wake Lock API в AMOLED-режиме — при включении AMOLED браузер
+  запрашивает navigator.wakeLock.request('screen'), что запрещает ОС Android
+  автоматически блокировать экран (телефон не уходит в sleep, пока вкладка
+  активна). При выключении AMOLED / выходе из фуллскрина wake lock освобождается.
+  При скрытии вкладки браузер автоматически сбрасывает lock — перехватывается
+  через visibilitychange и переполучается при возврате. Если AMOLED был включён
+  до перезагрузки страницы (localStorage) — wake lock захватывается сразу при
+  инициализации. Поддержка: Chrome 84+ / Android Chrome.
 - v3.326: fix неверный размер автосделки (DOGE открылась ~в 10× меньше нужного,
   $3 вместо $30) — захардкоженная _QM_TABLE содержала DOGE_USDT: 100.0
   (вероятно неверно, актуальный quanto_multiplier на Gate отличается); т.к.
@@ -302,7 +310,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.326"
+APP_VERSION = "3.327"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7696,6 +7704,23 @@ let _amoledOn = localStorage.getItem('wf_amoled')==='1';
 let _amoledTimer = null;
 const AMOLED_DELAY = 60000; // 1 минута
 
+/* ── Screen Wake Lock — не даём ОС гасить экран ── */
+let _wakeLock = null;
+async function _acquireWakeLock(){
+  if(!('wakeLock' in navigator)) return; // браузер не поддерживает
+  try{
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', ()=>{ _wakeLock=null; });
+  }catch(e){ console.warn('WakeLock denied:', e); }
+}
+function _releaseWakeLock(){
+  if(_wakeLock){ _wakeLock.release(); _wakeLock=null; }
+}
+// Браузер автоматически сбрасывает lock при скрытии вкладки — переполучаем при возврате
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible' && _amoledOn) _acquireWakeLock();
+});
+
 function _amoledBtnRefresh(){
   const btn=document.getElementById('amoledBtn');
   if(btn) btn.classList.toggle('green', _amoledOn);
@@ -7756,6 +7781,7 @@ document.addEventListener('fullscreenchange',()=>{
     _amoledOn=false;
     localStorage.setItem('wf_amoled','0');
     _amoledBtnRefresh();
+    _releaseWakeLock();
     if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
     const ov=document.getElementById('amoledOverlay');
     if(ov) ov.style.display='none';
@@ -7768,9 +7794,11 @@ function toggleAmoled(){
   _amoledBtnRefresh();
   if(_amoledOn){
     _requestFS();
+    _acquireWakeLock();
     _resetAmoledTimer();
   } else {
     _exitFS();
+    _releaseWakeLock();
     if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
     const ov=document.getElementById('amoledOverlay');
     if(ov) ov.style.display='none';
@@ -7789,7 +7817,7 @@ function toggleAmoled(){
 });
 
 _amoledBtnRefresh();
-if(_amoledOn) _resetAmoledTimer();
+if(_amoledOn){ _acquireWakeLock(); _resetAmoledTimer(); }
 
 </script></body></html>"""
 
