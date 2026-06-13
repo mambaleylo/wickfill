@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.325
+WickFill Optimizer v3.326
+- v3.326: fix неверный размер автосделки (DOGE открылась ~в 10× меньше нужного,
+  $3 вместо $30) — захардкоженная _QM_TABLE содержала DOGE_USDT: 100.0
+  (вероятно неверно, актуальный quanto_multiplier на Gate отличается); т.к.
+  _qm брался из таблицы ПЕРВЫМ, реальный API-фоллбек никогда не вызывался для
+  контрактов из таблицы, и неверное значение использовалось молча, без ошибки.
+  size = (margin × leverage) / (ep × qm) — qm в 10× больше реального → size в
+  10× меньше. Добавлена _gate_get_quanto_multiplier(contract) с кешем: теперь
+  ВСЕГДА сначала запрашивается реальный quanto_multiplier из Gate API
+  (/futures/usdt/contracts/{contract}), статичная таблица — только фоллбек при
+  недоступности API. Та же функция кеширует результат как _gate_get_tick.
 - v3.325: fix repaint HTF-фильтра — уже показанный на графике сигнал мог пропасть
   после рестарта/новой свечи даже при ИДЕНТИЧНОМ конфиге (актуально для ТФ < 1h,
   где исторический HTF-фильтр включён всегда независимо от use_ema_filter).
@@ -292,7 +302,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.325"
+APP_VERSION = "3.326"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2007,6 +2017,41 @@ def _gate_set_leverage(cfg, contract, leverage):
         actual_lev = data[0].get("leverage") if isinstance(data[0], dict) else None
     return True, actual_lev
 
+_gate_qm_cache = {}  # {contract: quanto_multiplier_float}
+
+def _gate_get_quanto_multiplier(contract):
+    """Возвращает quanto_multiplier для контракта (с кешем). API — источник правды,
+    статичная таблица — только фоллбек, если API недоступен (он может расходиться
+    с реальными параметрами контракта на Gate и давать неверный размер позиции
+    без какой-либо ошибки — например DOGE_USDT открывался в 10× меньшем размере)."""
+    global _gate_qm_cache
+    if contract in _gate_qm_cache:
+        return _gate_qm_cache[contract]
+    try:
+        r = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5)
+        data = r.json()
+        qm = float(data.get("quanto_multiplier") or 0)
+        if qm > 0:
+            _gate_qm_cache[contract] = qm
+            return qm
+    except Exception:
+        pass
+    # Фоллбек-таблица — используется только если API недоступен
+    _QM_FALLBACK = {
+        "BTC_USDT": 0.0001, "ETH_USDT": 0.01,  "SOL_USDT": 0.1,
+        "BNB_USDT": 0.01,   "XRP_USDT": 10.0,  "DOGE_USDT": 100.0,
+        "ADA_USDT": 10.0,   "MATIC_USDT": 10.0,"DOT_USDT": 1.0,
+        "LTC_USDT": 0.1,    "AVAX_USDT": 0.1,  "LINK_USDT": 1.0,
+        "UNI_USDT": 1.0,    "ATOM_USDT": 1.0,  "TRX_USDT": 1000.0,
+        "OP_USDT": 1.0,     "ARB_USDT": 10.0,  "SUI_USDT": 1.0,
+        "APT_USDT": 0.1,    "INJ_USDT": 0.1,   "TON_USDT": 1.0,
+    }
+    qm = _QM_FALLBACK.get(contract, 0)
+    if qm > 0:
+        _gate_qm_cache[contract] = qm
+    return qm
+
+
 _gate_price_round_cache = {}  # {contract: tick_float}
 
 def _gate_get_tick(contract):
@@ -2168,23 +2213,7 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     # Gate USDT Futures: 1 контракт = quanto_multiplier единиц базового актива.
     # Стоимость 1 контракта = ep * quanto_multiplier (в USDT).
     # size = notional / (ep * quanto_multiplier)
-    _QM_TABLE = {
-        "BTC_USDT": 0.0001, "ETH_USDT": 0.01,  "SOL_USDT": 0.1,
-        "BNB_USDT": 0.01,   "XRP_USDT": 10.0,  "DOGE_USDT": 100.0,
-        "ADA_USDT": 10.0,   "MATIC_USDT": 10.0,"DOT_USDT": 1.0,
-        "LTC_USDT": 0.1,    "AVAX_USDT": 0.1,  "LINK_USDT": 1.0,
-        "UNI_USDT": 1.0,    "ATOM_USDT": 1.0,  "TRX_USDT": 1000.0,
-        "OP_USDT": 1.0,     "ARB_USDT": 10.0,  "SUI_USDT": 1.0,
-        "APT_USDT": 0.1,    "INJ_USDT": 0.1,   "TON_USDT": 1.0,
-    }
-    _qm = _QM_TABLE.get(contract, 0)
-    if _qm == 0:
-        # Если не в таблице — запрашиваем у Gate
-        try:
-            _ci = requests.get(f"{GATE_API}/futures/usdt/contracts/{contract}", timeout=5).json()
-            _qm = float(_ci.get("quanto_multiplier", 0) or 0)
-        except Exception:
-            _qm = 0
+    _qm = _gate_get_quanto_multiplier(contract)
     if _qm > 0:
         size = round((margin * applied_leverage) / (ep * _qm))
         log_lines.append(f"  [debug] margin={margin:.2f} × lev={applied_leverage} / (ep={ep:.2f} × qm={_qm}) → size={size}")
