@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.328
+WickFill Optimizer v3.329
+- v3.329: fix карточки циклов зависали после нескольких циклов — regex doneM не
+  матчил строку когда _stagnation_cycles > 0 (сервер добавлял хвост
+  "| stagnation=N/M" после DD%). Добавлен [\s\S]*? в конец regex.
+- v3.328
 - v3.328: таблица HTF-фильтра свёрнута по умолчанию — заголовок стал кнопкой
   с треугольником-индикатором (▼/▶), разворачивается по тапу.
 - v3.327
@@ -313,7 +317,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.328"
+APP_VERSION = "3.329"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7349,7 +7353,7 @@ function logLine(msg,level,ts){
   }
   const endM=msg.match(/Старт\s*#\d+[^→]*→\s*\$([\d.]+)\s+WR\s*([\d.]+)%\s+DD\s*([\d.]+)%/);
   if(endM){const eq=parseFloat(endM[1]),wr=parseFloat(endM[2]),dd=parseFloat(endM[3]);if(!_startBuf||eq>_startBuf.eq)_startBuf={eq,wr,dd};return;}
-  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*([🆕→]+)\s*\$([\d.]+)\s+WR\s+([\d.]+)%\s+Сд\s+(\d+)\s+DD\s+([\d.]+)%/);
+  const doneM=msg.match(/✅\s*Цикл\s*#(\d+)\s*готов\s*за\s*(\d+)с\s*\|\s*([🆕→]+)\s*\$([\d.]+)\s+WR\s+([\d.]+)%\s+Сд\s+(\d+)\s+DD\s+([\d.]+)%[\s\S]*?/);
   if(doneM){
     _clearActivity();
     if(!isMulti){
