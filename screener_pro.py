@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.330
+WickFill Optimizer v3.331
+- v3.331: _fetch_candles теперь с бесконечным retry — никакой лимит попыток не
+  задан; при сетевых ошибках (таймаут, ConnectionError, 429/502/503/504) ждёт
+  120с и повторяет вечно пока не появится сеть. Выход только при не-сетевых
+  ошибках (HTTP 400/404 и т.п.) или при использовании кеша. Паузы растут по
+  экспоненте до 120с (cap) и сбрасываются при успехе.
+- v3.330
 - v3.330: устойчивость к нестабильному мобильному интернету:
   · старт цикла: при провале fetch больше не останавливает оптимизатор —
     ждёт восстановления сети с паузой 30→60→...→300с, проверяя стоп-флаг
@@ -326,7 +332,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.330"
+APP_VERSION = "3.331"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1506,9 +1512,8 @@ def _fetch_candles(symbol, tf, days):
         except Exception:
             pass
         _fetch_attempt = 0
-        _fetch_max_attempts = 10
         _fetch_ok = False
-        while _fetch_attempt < _fetch_max_attempts:
+        while not _fetch_ok:  # бесконечный retry — ждём сеть сколько нужно
             try:
                 r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
                     params={"contract": symbol, "interval": tf,
@@ -1516,11 +1521,12 @@ def _fetch_candles(symbol, tf, days):
                 if r.status_code != 200:
                     last_http_error = f"HTTP {r.status_code}: {r.text[:200]}"
                     if r.status_code in (429, 502, 503, 504):
-                        _wait = min(2 ** _fetch_attempt * 2, 120)
-                        print(f"\n{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с...", flush=True)
+                        _wait = min(2 ** min(_fetch_attempt, 7) * 2, 120)
+                        print(f"\n{_ts()} [fetch] ⚠ {last_http_error}, повтор через {_wait}с (попытка {_fetch_attempt+1})...", flush=True)
                         time.sleep(_wait)
                         _fetch_attempt += 1
                         continue
+                    # Другие HTTP-ошибки (400, 404) — не сетевые, выходим
                     print(f"\n{_ts()} [fetch] ❌ {last_http_error}", flush=True)
                     _fetch_ok = False
                     break
@@ -1549,15 +1555,16 @@ def _fetch_candles(symbol, tf, days):
                     _fetch_ok = True; break
                 time.sleep(0.05)
                 _fetch_ok = True
+                _fetch_attempt = 0  # сброс при успехе
                 break
             except Exception as e:
                 last_exception = str(e)
-                _wait = min(2 ** _fetch_attempt * 3, 120)
-                print(f"\n{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}/{_fetch_max_attempts}): {e}, повтор через {_wait}с...", flush=True)
+                _wait = min(2 ** min(_fetch_attempt, 7) * 3, 120)
+                print(f"\n{_ts()} [fetch] ⚠ Ошибка (попытка {_fetch_attempt+1}): {e}, повтор через {_wait}с...", flush=True)
                 time.sleep(_wait)
                 _fetch_attempt += 1
-        if not _fetch_ok and _fetch_attempt >= _fetch_max_attempts:
-            print(f"\n{_ts()} [fetch] ❌ Превышено кол-во попыток. Последняя ошибка: {last_exception or last_http_error}", flush=True)
+        if not _fetch_ok:
+            print(f"\n{_ts()} [fetch] ❌ Не сетевая ошибка, прерываю. {last_exception or last_http_error}", flush=True)
             break
     seen = set(); result = []
     for c in sorted(all_candles, key=lambda x: x["t"]):
