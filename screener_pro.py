@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.334
+WickFill Optimizer v3.335
+- v3.335: fix сигналы на графике выглядят иначе после перезагрузки страницы —
+  chart_signals хранят bar_i (индекс в массиве), но между запусками SW-тред
+  добавлял новые свечи в chart_candles не пересчитывая сигналы → bar_i
+  указывали на неверные свечи. Фикс: при инициализации /chart JS пересчитывает
+  bar_i/exit_bar/signal_bar по timestamp (tMap: t→index), exit_bar переопределяется
+  TP/SL хитом по актуальному CANDLES — гарантирует согласованность сигналов
+  с любым состоянием массива свечей.
+- v3.334
 - v3.334: кнопка AMOLED отображается в шапке на мобиле — добавлена отдельная
   кнопка #amoledBtnMob прямо в .topbar (вне .topbar-meta который скрыт на
   мобиле display:none !important); на десктопе скрыта (display:none),
@@ -353,7 +361,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.334"
+APP_VERSION = "3.335"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2388,6 +2396,29 @@ window.onerror=function(msg,src,line,col,err){{
 <script>
 const CANDLES={candles_json};
 const SIGNALS={signals_json};
+// Переиндексируем bar_i/exit_bar/signal_bar по timestamp — на случай если свечи
+// сдвинулись (SW добавил новые) с момента последнего _simulate на сервере
+(function(){{
+  const tMap={{}};
+  CANDLES.forEach((c,i)=>{{tMap[c.t]=i;}});
+  SIGNALS.forEach(s=>{{
+    if(s.t!=null && tMap[s.t]!=null) s.bar_i=tMap[s.t];
+    if(s.exit_bar!=null){{
+      // exit_bar — ищем по exit_p и dir после bar_i
+      // нет отдельного timestamp для exit — пересчитываем по TP/SL
+      const bi=s.bar_i; const dir=s.dir; const tp=s.tp; const sl=s.sl;
+      let eb=null;
+      for(let i=bi+1;i<CANDLES.length;i++){{
+        const c=CANDLES[i];
+        const hitTp=(dir===1&&c.h>=tp)||(dir===-1&&c.l<=tp);
+        const hitSl=(dir===1&&c.l<=sl)||(dir===-1&&c.h>=sl);
+        if(hitTp||hitSl){{eb=i;break;}}
+      }}
+      s.exit_bar=eb;
+    }}
+    if(s.signal_bar!=null && s.bar_i!=null) s.signal_bar=Math.max(0,s.bar_i-1);
+  }});
+}})();
 const TF_SEC={tf_sec};
 let PENDING_BAR=null;  // bar_i сигнала ожидающего входа (use_next_bar, ещё не открыт)
 const canvas=document.getElementById('c');
