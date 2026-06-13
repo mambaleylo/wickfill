@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.321
+WickFill Optimizer v3.322
+- v3.322: дополнительные фиксы по итогам аудита кода:
+  (1) _gate_close_position: ошибка GET /positions (сетевая/auth) больше не трактуется
+      как "позиции нет, можно открывать новую" — теперь возвращает ошибку и
+      _gate_execute_signal прерывается, не открывая вторую позицию поверх
+      потенциально открытой старой (риск нежелательного наложения позиций).
+  (2) _run_multi_safe: resync chart_signals при record_kept вызывал _simulate()
+      без htf_index (тот же класс бага что в v3.321) — добавлен htf_index=_htf_index_sym.
+  (3) _run_one_cycle: WF-валидация (3 окна) вызывала _quick_window дважды на каждое
+      окно (для stability_ratio и для slope) — 6 вызовов _simulate вместо 3 на цикл;
+      объединено в один проход, валидация ускорена вдвое без изменения логики.
 - v3.321: fix временного исчезновения сделок/сигналов на графике (через несколько
   минут после reload, потом возвращались) — в _sliding_window_thread оба пути
   периодической перезагрузки свечей (stale-reload и точная reload-по-границе-TF)
@@ -246,7 +256,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.321"
+APP_VERSION = "3.322"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1932,7 +1942,7 @@ def _gate_close_position(cfg, contract):
     _gate_cancel_all_orders(cfg, contract)
     # Получаем текущую позицию
     data, err = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
-    if err: return True, None  # нет позиции — ок
+    if err: return False, f"не удалось проверить текущую позицию: {err}"  # ошибка API — не продолжаем, иначе риск открыть вторую позицию поверх старой
     size = int(data.get("size", 0))
     if size == 0: return True, None  # уже закрыта
     # Закрываем противоположным маркет-ордером
@@ -3670,23 +3680,20 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=htf_index)
     window_size_c = days / 3.0
     ok_windows = 0; total_windows = 0
+    _wrs_cycle = []
     for wi in range(3):
         wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
         if wres and wres["trades"] >= 5:
             total_windows += 1
             if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.55:
                 ok_windows += 1
+            _wrs_cycle.append(wres["winrate"])
     stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
     # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
     stability_multiplier = 0.5 + 0.5 * stability_ratio
 
     # Штраф за деградирующий тренд winrate по окнам (slope penalty)
     # Линейная регрессия по winrate окон: отрицательный slope → штраф
-    _wrs_cycle = []
-    for wi in range(3):
-        wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
-        if wres and wres["trades"] >= 5:
-            _wrs_cycle.append(wres["winrate"])
     if len(_wrs_cycle) >= 3:
         _n = len(_wrs_cycle)
         _xs = list(range(_n))
@@ -5028,7 +5035,7 @@ def _run_multi_safe(sym_list, base_params):
                             try:
                                 rec_sim = _simulate(
                                     [{"t":c["t"],"open":c["o"],"high":c["h"],"low":c["l"],"close":c["c"]} for c in s["chart_candles"]],
-                                    dict(s["best"]["params"]), 0, _collect=True, risk_pct=risk_pct
+                                    dict(s["best"]["params"]), 0, _collect=True, risk_pct=risk_pct, htf_index=_htf_index_sym
                                 )
                                 s["chart_signals"] = rec_sim["_signals"] if rec_sim else []
                             except Exception as e:
