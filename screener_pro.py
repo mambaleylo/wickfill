@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.322
+WickFill Optimizer v3.323
+- v3.323: адаптивная встряска (анти-тупик в переборе параметров).
+  Проблема: при stagnation встряска форсированно рескрамблила только sl_pct/tp_pct
+  и bool/cat-параметры; ~30 числовых параметров фильтров (lookback/threshold —
+  RSI, уровни, geo, CSS, cluster, sweep, quiet, EMA и т.п.) менялись только
+  вероятностно через BH-perturbation и могли годами "залипать" в локальном
+  оптимуме координатного спуска без выхода. Переменная _last_shake_vfit
+  вычислялась, но не использовалась — повторная встряска была идентична первой
+  независимо от результата.
+  Теперь shake — уровень (0/1/2): при первой встряске после стагнации — как раньше
+  (shake=1, рескрамбл stop/tp/bool/cat). Если к моменту СЛЕДУЮЩЕЙ встряски
+  validated_fitness глобального рекорда не улучшился с прошлой встряски —
+  включается shake=2 (эскалация): дополнительно форсированно рескрамблятся все
+  ~30 числовых параметров фильтров (_SHAKE_KEYS_NUMERIC_ESCALATED), что даёт
+  координатному спуску шанс выйти из устойчивого локального оптимума.
 - v3.322: дополнительные фиксы по итогам аудита кода:
   (1) _gate_close_position: ошибка GET /positions (сетевая/auth) больше не трактуется
       как "позиции нет, можно открывать новую" — теперь возвращает ошибку и
@@ -256,7 +270,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.322"
+APP_VERSION = "3.323"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3543,8 +3557,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     _seed_floor_fit = (_seed_floor.get("validated_fitness") or _seed_floor["fitness"]) if _seed_floor else -1e18
 
     # ── При встряске расширяем BH ────────────────────────────────────────────
-    # shake=True: больше итераций, шире шаг мутации, обязательно рескрамблим
+    # shake=1: больше итераций, шире шаг мутации, обязательно рескрамблим
     # bool/cat и stop/tp в стартовых точках чтобы дать шанс "заблокированным" параметрам
+    # shake=2 (эскалация — предыдущая встряска не дала улучшения): дополнительно
+    # форсированно рескрамблим "залипающие" числовые параметры фильтров
+    # (lookback/threshold), которые иначе меняются только вероятностно через BH-perturbation
+    # и могут годами оставаться в локальном оптимуме координатного спуска.
     _BH_MAX_eff     = 20 if shake else 12
     _BH_PATIENCE_eff = 8 if shake else 4
     _BH_STEP_FRAC   = 0.6 if shake else 0.25   # max шаг = fraction * len(grid)
@@ -3552,11 +3570,31 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
 
     _SHAKE_KEYS_BOOL_CAT = [k for k, s in PARAM_SPACE.items() if s["type"] in ("bool", "cat")]
     _SHAKE_KEYS_NUMERIC  = ["sl_pct", "tp_pct"]  # параметры с сильным lock-in эффектом
+    # Эскалированный набор (shake>=2): числовые threshold/lookback параметры фильтров —
+    # обычно зависят друг от друга (FILTER_GROUPS), координатный спуск их редко меняет совместно.
+    _SHAKE_KEYS_NUMERIC_ESCALATED = [
+        "rsi_len", "rsi_long_max", "rsi_short_min",
+        "level_lookback", "level_toler_pct",
+        "geo_lookback", "geo_min_pct",
+        "css_min_score", "css_wt_wick", "css_wt_close", "css_wt_body", "css_wt_range", "css_wt_price",
+        "ret_lookback", "ret_n", "ret_wick_sim", "min_return_pct",
+        "rep_lookback", "rep_zone_pct", "rep_min_win",
+        "cluster_lookback", "cluster_pct", "cluster_min",
+        "close_long_min_pct", "close_short_max_pct",
+        "quiet_atr_len", "quiet_max_ratio", "quiet_min_ratio",
+        "sweep_len", "sweep_toler_pct",
+        "ms_lookback", "ema_period",
+        "min_wick_pct", "min_wick_pct_price", "confirm_body_pct",
+    ]
 
     def _shake_individual(ind):
-        """Форсированно рескрамблим stop/tp + все bool/cat; остальное не трогаем."""
+        """Форсированно рескрамблим stop/tp + все bool/cat (shake=1);
+        при shake=2 дополнительно рескрамблим "залипающие" числовые параметры фильтров."""
         ind2 = dict(ind)
-        for k in _SHAKE_KEYS_BOOL_CAT + _SHAKE_KEYS_NUMERIC:
+        _keys = _SHAKE_KEYS_BOOL_CAT + _SHAKE_KEYS_NUMERIC
+        if shake >= 2:
+            _keys = _keys + _SHAKE_KEYS_NUMERIC_ESCALATED
+        for k in _keys:
             if k not in PARAM_SPACE: continue
             spec = PARAM_SPACE[k]; grid = _grids_local[k]
             ind2[k] = random.choice(grid)  # random.choice работает и для bool/cat и для числовых
@@ -3566,11 +3604,12 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     # Фаза 1: многоточечный старт
     if prev_best_params:
         if shake:
-            # При встряске: лучший как база, но с рескрамблем stop/tp/bool/cat,
-            # плюс увеличиваем число рестартов на 2 чтобы шире покрыть пространство
+            # При встряске: лучший как база, но с рескрамблем stop/tp/bool/cat
+            # (shake=2: + числовые фильтры), плюс увеличиваем число рестартов на 2
             shaken_base = _shake_individual(_clamp_tp(prev_best_params))
             start_points = [_clamp_tp(prev_best_params), shaken_base] + [_rand_ind() for _ in range(n_restarts - 1)]
-            olog(f"━━ ФАЗА 1 [ВСТРЯСКА]: база + shake(stop/tp/bool) + {n_restarts-1} случайных ━", "ok")
+            _shake_lbl = "ЭСКАЛАЦИЯ shake(stop/tp/bool+числовые фильтры)" if shake >= 2 else "shake(stop/tp/bool)"
+            olog(f"━━ ФАЗА 1 [ВСТРЯСКА]: база + {_shake_lbl} + {n_restarts-1} случайных ━", "ok")
         else:
             start_points = [_clamp_tp(prev_best_params)] + [_rand_ind() for _ in range(n_restarts - 1)]
             olog(f"━━ ФАЗА 1: лучший предыдущего цикла + {n_restarts-1} случайных ━", "ok")
@@ -4569,12 +4608,18 @@ def run_optimizer(params):
         cycle_t0 = time.time()
 
         # ── Встряска при стагнации ──────────────────────────────────────────
-        _shake_now = False
+        _shake_now = 0
         if infinite and _stagnation_cycles >= _STAGNATION_THRESH:
-            _shake_now = True
+            _gb_vfit_now = (_global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0)
+                            if _global_best_ever else -1e18)
+            # Эскалация: если предыдущая встряска (если была) не улучшила рекорд —
+            # на этот раз дополнительно рескрамблим залипшие числовые параметры фильтров
+            _shake_now = 2 if _gb_vfit_now <= _last_shake_vfit else 1
             _stagnation_cycles = 0  # сбрасываем счётчик после встряски
-            _last_shake_vfit = _global_best_ever.get("validated_fitness") or _global_best_ever.get("fitness", 0) if _global_best_ever else -1e18
-            olog(f"⚡ ВСТРЯСКА (stagnation={_STAGNATION_THRESH} циклов): рескрамбл stop/tp/bool → расширенный BH", "warn")
+            _last_shake_vfit = _gb_vfit_now
+            _lvl_str = "ЭСКАЛАЦИЯ (предыдущая встряска не помогла) — рескрамбл stop/tp/bool/cat + числовые фильтры" \
+                       if _shake_now == 2 else "рескрамбл stop/tp/bool"
+            olog(f"⚡ ВСТРЯСКА (stagnation={_STAGNATION_THRESH} циклов): {_lvl_str} → расширенный BH", "warn")
         # ────────────────────────────────────────────────────────────────────
 
         # Переинициализируем воркеры с актуальными current_candles перед каждым циклом.
