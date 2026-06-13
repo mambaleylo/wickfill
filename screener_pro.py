@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.319
+WickFill Optimizer v3.320
+- v3.320: комплексный фикс накопленных багов:
+  (1) SHAKE_KEYS_NUMERIC содержал "stop_pct" вместо "sl_pct" — встряска никогда не
+      рескрамблила SL-параметр; теперь рескрамбл sl_pct/tp_pct работает корректно;
+  (2) NameError "_htf_index_sym" в _run_multi_safe — переменная использовалась при
+      запуске SW-треда но не была определена в этой функции; добавлены инициализация
+      и per-symbol кеш _htf_index_cache;
+  (3) Мутация _global_best_ever через all_time_best — WF slope-штраф модифицировал
+      validated_fitness/wf_slope напрямую через ссылку, а не копию; за N циклов
+      validated_fitness рекорда накапливал штрафы → стагнация срабатывала раньше;
+      исправлено через dict(copy);
+  (4) Начальный opt_state не содержал ряд ключей: all_time_best, trade_best,
+      chart_pending_bar, chart_pending_info, logs_dropped, days, alert_cfg;
+  (5) olog() в run_optimizer без лимита размера — при длинных сессиях opt_state["logs"]
+      рос бесконтрольно; добавлен trim 500→300 (также для gate-лога);
+  (6) /scan_stop не сбрасывал _reload_state["active"] — _live_candle_updater продолжал
+      перезагрузки свечей после остановки;
+  (7) Лишний import threading внутри _run_sym_worker — threading уже на уровне модуля.
 - ∞ Бесконечный режим: оптимизация крутится без остановки, рестарт после каждого цикла
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
@@ -220,7 +237,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.319"
+APP_VERSION = "3.320"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -369,10 +386,12 @@ opt_state = {
     "cycle": 0,       # номер цикла бесконечного режима
     "cycle_step": 0, "cycle_total": 0,  # прогресс внутри цикла (стартов + BH итераций)
     "progress": 0, "total": 0, "generation": 0, "pass_num": 0,
-    "current_param": "", "logs": [], "best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
+    "current_param": "", "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "trade_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
     "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None,
+    "days": 3,
     "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
+    "chart_pending_bar": None, "chart_pending_info": None,
     # sliding window
     "sw_running": False, "sw_last_update": 0, "sw_candle_count": 0,
     # live signal alert
@@ -381,6 +400,8 @@ opt_state = {
     "fetch_pct": -1, "fetch_symbol": "",
     # HTF-фильтр: сводная статистика эффективности (с/без фильтра на окне перебора)
     "htf_stats": None,
+    # alert cfg (копия для SW-треда)
+    "alert_cfg": None,
 }
 opt_lock = threading.Lock()
 
@@ -3035,6 +3056,8 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
                     "msg": f"[gate] {status} {symbol} {'ЛОНГ' if direction==1 else 'ШОРТ'} × {int(leverage)} — {trade_log.splitlines()[-1]}",
                     "level": "ok" if ok_trade else "error"
                 })
+                if len(opt_state["logs"]) > 500:
+                    opt_state["logs"] = opt_state["logs"][-300:]
         break
 
 # ═══════════════════════════════════════════════════════════════
@@ -3508,7 +3531,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     _PERTURB_FRAC   = 0.55 if shake else 0.35  # доля ключей под perturbation
 
     _SHAKE_KEYS_BOOL_CAT = [k for k, s in PARAM_SPACE.items() if s["type"] in ("bool", "cat")]
-    _SHAKE_KEYS_NUMERIC  = ["stop_pct", "tp_pct"]  # параметры с сильным lock-in эффектом
+    _SHAKE_KEYS_NUMERIC  = ["sl_pct", "tp_pct"]  # параметры с сильным lock-in эффектом
 
     def _shake_individual(ind):
         """Форсированно рескрамблим stop/tp + все bool/cat; остальное не трогаем."""
@@ -4322,6 +4345,8 @@ def run_optimizer(params):
     def olog(msg, level="info"):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
+            if len(opt_state["logs"]) > 500:
+                opt_state["logs"] = opt_state["logs"][-300:]
 
     t0 = time.time()
 
@@ -4591,7 +4616,7 @@ def run_optimizer(params):
                 _stagnation_cycles = 0  # рекорд улучшился — сбрасываем
             else:
                 _stagnation_cycles += 1  # нет улучшения — наращиваем
-            all_time_best = _global_best_ever
+            all_time_best = dict(_global_best_ever)  # копия — slope-штраф не мутирует _global_best_ever
             prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
             _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
@@ -4908,6 +4933,10 @@ def _run_multi_safe(sym_list, base_params):
             if s not in _sw_state:
                 _sw_state[s] = {"candles": [], "params": {}, "risk": risk_pct, "running": False}
 
+    # HTF-index кеш по символу — строится один раз при первом цикле каждого символа
+    _htf_index_cache = {}  # {sym: htf_index_or_None}
+    _htf_index_sym = None  # текущий htf_index для SW-треда активного символа
+
     try:
         while not _opt_stop_flag.is_set():
             for sym in sym_list:
@@ -4924,6 +4953,13 @@ def _run_multi_safe(sym_list, base_params):
                     opt_states[sym]["running"] = True
                     opt_states[sym]["cycle"]   = sym_cycles[sym]
                 print(f"[multi] Цикл #{sym_cycles[sym]} → {sym}", flush=True)
+                # Обновляем _htf_index_sym для текущего символа (строим один раз, кешируем)
+                if sym not in _htf_index_cache:
+                    if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
+                        _htf_index_cache[sym] = _build_htf_index(sym, tf, days)
+                    else:
+                        _htf_index_cache[sym] = None
+                _htf_index_sym = _htf_index_cache[sym]
                 try:
                     run_optimizer(params)
                 except Exception as e:
@@ -5228,8 +5264,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                         def _do_ms_save(_snap=_ms_snap):
                             try: _auto_save_config(*_snap, _slog)
                             except Exception as _e: print(f"[autosave-ms] {_e}", flush=True)
-                        import threading as _thr
-                        _thr.Thread(target=_do_ms_save, daemon=True).start()
+                        threading.Thread(target=_do_ms_save, daemon=True).start()
                 except Exception:
                     pass
 
@@ -8046,6 +8081,9 @@ class Handler(BaseHTTPRequestHandler):
             # Останавливаем все _sw_threads (multi-symbol режим)
             for _sym, _st in list(_sw_state.items()):
                 _st["running"] = False
+            # Останавливаем автоперезагрузку свечей (иначе _live_candle_updater продолжит)
+            with opt_lock:
+                _reload_state["active"] = False
             # Останавливаем HTF-фильтр
             _htf_stop_flag.set()
             self._json({"ok":True})
