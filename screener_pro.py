@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.320
+WickFill Optimizer v3.321
+- v3.321: fix временного исчезновения сделок/сигналов на графике (через несколько
+  минут после reload, потом возвращались) — в _sliding_window_thread оба пути
+  периодической перезагрузки свечей (stale-reload и точная reload-по-границе-TF)
+  вызывали _simulate() для chart_signals БЕЗ htf_index, передавая только текущий
+  скалярный htf_direction; при включённом HTF-фильтре это давало другой набор
+  сигналов чем у trade_best/оптимизатора (который всегда использует htf_index по
+  истории) → сигналы временно пропадали с графика до следующего нормального тика
+  SW-треда, который снова передаёт htf_index. Теперь оба reload-вызова _simulate
+  тоже передают htf_index (параметр уже доступен в scope потока).
 - v3.320: комплексный фикс накопленных багов:
   (1) SHAKE_KEYS_NUMERIC содержал "stop_pct" вместо "sl_pct" — встряска никогда не
       рескрамблила SL-параметр; теперь рескрамбл sl_pct/tp_pct работает корректно;
@@ -237,7 +246,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.320"
+APP_VERSION = "3.321"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -481,7 +490,7 @@ def _live_candle_updater():
                         if fresh and len(fresh) > 10:
                             best_p = best.get("params", {})
                             if best_p:
-                                sim = _simulate(fresh, best_p, 0, _collect=True)
+                                sim = _simulate(fresh, best_p, 0, _collect=True, htf_index=htf_index)
                                 sigs = sim["_signals"] if sim else []
                             else:
                                 sigs = []
@@ -538,7 +547,8 @@ def _live_candle_updater():
                             if _rb_best_p:
                                 sim_rb = _simulate(fresh_reload, _rb_best_p, 0, _collect=True,
                                                     risk_pct=_rs.get("risk_pct", 20.0),
-                                                    htf_direction=_rb_htf_dir)
+                                                    htf_direction=_rb_htf_dir,
+                                                    htf_index=htf_index)
                                 sigs_rb = sim_rb["_signals"] if sim_rb else []
                                 _pb_rb  = sim_rb["pending_signal_bar"] if sim_rb else None
                                 _pd_rb  = sim_rb["pending_signal_dir"] if sim_rb else None
