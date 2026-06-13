@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.333
+WickFill Optimizer v3.334
+- v3.334: кнопка AMOLED отображается в шапке на мобиле — добавлена отдельная
+  кнопка #amoledBtnMob прямо в .topbar (вне .topbar-meta который скрыт на
+  мобиле display:none !important); на десктопе скрыта (display:none),
+  на мобиле показывается через медиа-правило; _amoledBtnRefresh синхронизирует
+  состояние (класс green) на обоих элементах.
+- v3.333
 - v3.333: fix открытие новой сделки на неполную сумму при смене направления —
   _gate_close_position отправляла IOC-ордер и сразу возвращала управление; Gate
   не успевал освободить маржу, и баланс при расчёте размера новой позиции был
@@ -347,7 +353,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.333"
+APP_VERSION = "3.334"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6195,6 +6201,8 @@ details summary::-webkit-details-marker{display:none}
   .topbar-spacer{flex:1}
   /* Скрываем все кнопки в шапке на мобиле — есть Restart в сайдбаре */
   .topbar-meta{display:none !important}
+  /* AMOLED — отдельная кнопка в шапке, видна только на мобиле */
+  #amoledBtnMob{display:flex !important}
 
   /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
   html,body{overflow:auto !important;height:auto !important;min-height:100dvh !important;touch-action:pan-y !important;overscroll-behavior:auto !important}
@@ -6331,6 +6339,10 @@ details summary::-webkit-details-marker{display:none}
     <span style="font-size:.72rem;font-weight:400;color:var(--text3)" id="versionSpan">v</span>
   </div>
   <div class="topbar-spacer"></div>
+  <button class="tb btn" id="amoledBtnMob" onclick="toggleAmoled()" title="AMOLED режим" style="display:none">
+    <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="7" r="6"/></svg>
+    AMOLED
+  </button>
   <div class="topbar-meta">
     <span class="tb" id="speedPill" style="display:none">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" opacity=".75"/></svg>
@@ -7820,6 +7832,8 @@ document.addEventListener('visibilitychange', ()=>{
 function _amoledBtnRefresh(){
   const btn=document.getElementById('amoledBtn');
   if(btn) btn.classList.toggle('green', _amoledOn);
+  const btnMob=document.getElementById('amoledBtnMob');
+  if(btnMob) btnMob.classList.toggle('green', _amoledOn);
   const sw=document.getElementById('amoledSw');
   if(sw) sw.classList.toggle('on', _amoledOn);
 }
