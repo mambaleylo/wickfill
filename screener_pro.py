@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.332
+WickFill Optimizer v3.333
+- v3.333: fix открытие новой сделки на неполную сумму при смене направления —
+  _gate_close_position отправляла IOC-ордер и сразу возвращала управление; Gate
+  не успевал освободить маржу, и баланс при расчёте размера новой позиции был
+  занижен. Добавлен polling позиции после close-ордера (до 10 × 0.5с = 5с) —
+  ждём пока size==0 (маржа реально освобождена). Убран лишний sleep(0.5) в
+  _gate_execute_signal (ожидание перенесено внутрь _gate_close_position).
+- v3.332
 - v3.332: fix карточки циклов переставали появляться после ~4-5 циклов —
   при обрезке лога (>500 записей → последние 300) JS-счётчик lastLogCount
   оставался больше нового logs.length и условие logs.length>lastLogCount
@@ -340,7 +347,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.332"
+APP_VERSION = "3.333"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2040,7 +2047,17 @@ def _gate_close_position(cfg, contract):
         "text":     "t-wickfill-close"
     }
     _, err = _gate_request(cfg, "POST", "/api/v4/futures/usdt/orders", body=order)
-    return err is None, err
+    if err:
+        return False, err
+    # Ждём реального закрытия позиции (до 5с) чтобы маржа освободилась до открытия новой
+    for _ in range(10):
+        time.sleep(0.5)
+        chk, chk_err = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
+        if chk_err:
+            break  # не можем проверить — выходим, пауза уже была
+        if int(chk.get("size", 0)) == 0:
+            return True, None  # позиция закрыта, маржа освобождена
+    return True, None  # IOC исполнен — считаем закрытой
 
 def _gate_set_leverage(cfg, contract, leverage):
     """Устанавливает кредитное плечо для контракта. Возвращает (ok, actual_leverage_or_err)."""
@@ -2210,8 +2227,6 @@ def _gate_execute_signal(cfg, symbol, direction, ep, tp, sl, leverage, position_
     if not ok:
         return False, f"Ошибка закрытия позиции: {err}"
     log_lines.append("✓ Старая позиция закрыта (или не было)")
-    # Небольшая пауза после закрытия — Gate должен сбросить позицию прежде чем принять новое плечо
-    time.sleep(0.5)
     # 2. Получаем баланс
     balance, err = _gate_get_balance(cfg)
     if err or balance is None:
