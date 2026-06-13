@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.335
+WickFill Optimizer v3.336
+- v3.336: убран режим безубытка (BE) полностью — параметры use_be/be_trigger_pct/
+  be_offset_pct удалены из PARAM_SPACE и FILTER_GROUPS; мёртвый код BE (be_trig,
+  be_off, be_triggered, be_trig_lvl) удалён из _simulate (BE-логика реально
+  никогда не сдвигала SL — переменные были no-op). Старые сохранённые конфиги
+  с этими полями в params загружаются без ошибок (поля просто игнорируются).
 - v3.335: fix сигналы на графике выглядят иначе после перезагрузки страницы —
   chart_signals хранят bar_i (индекс в массиве), но между запусками SW-тред
   добавлял новые свечи в chart_candles не пересчитывая сигналы → bar_i
@@ -361,7 +366,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.335"
+APP_VERSION = "3.336"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -435,9 +440,6 @@ PARAM_SPACE = {
     "css_wt_body":        {"min": 10.0, "max": 40.0, "step": 10.0, "type": "float", "label": "CSS — вес тела"},
     "css_wt_range":       {"min": 10.0, "max": 40.0, "step": 10.0, "type": "float", "label": "CSS — вес диапазона"},
     "css_wt_price":       {"min": 0.0,  "max": 30.0, "step": 10.0, "type": "float", "label": "CSS — вес фитиль/цена"},
-    "use_be":             {"values": [False, True], "type": "bool", "label": "Безубыток"},
-    "be_trigger_pct":     {"min": 0.1,  "max": 0.8,  "step": 0.1,  "type": "float", "label": "BE — триггер (%)"},
-    "be_offset_pct":      {"min": 0.0,  "max": 0.2,  "step": 0.05, "type": "float", "label": "BE — смещение (%)"},
     "use_next_bar":       {"values": [True, False], "type": "bool", "label": "Вход на следующей свече"},
     "use_return_filter":  {"values": [True, False], "type": "bool", "label": "Гео-1 возврат к телу"},
     "ret_lookback":       {"min": 30,   "max": 120,  "step": 10,   "type": "int",   "label": "Гео-1 — история"},
@@ -491,7 +493,6 @@ FILTER_GROUPS = {
     "css_wt_close": "use_css_filter", "css_wt_body": "use_css_filter",
     "css_wt_range": "use_css_filter", "css_wt_price": "use_css_filter",
     "confirm_body_pct": "use_confirm_candle",
-    "be_trigger_pct": "use_be", "be_offset_pct": "use_be",
     "ret_lookback": "use_return_filter", "ret_n": "use_return_filter",
     "ret_wick_sim": "use_return_filter", "min_return_pct": "use_return_filter",
     "rep_lookback": "use_repeat_filter", "rep_zone_pct": "use_repeat_filter", "rep_min_win": "use_repeat_filter",
@@ -808,7 +809,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     ugf=p["use_geo_filter"]; gl=p["geo_lookback"]; gmin=p["geo_min_pct"]
     ucss=p["use_css_filter"]; css_mn=p["css_min_score"]
     ww=p["css_wt_wick"]; wc=p["css_wt_close"]; wb=p["css_wt_body"]; wr_w=p["css_wt_range"]; wp_w=p["css_wt_price"]
-    be_trig=p["be_trigger_pct"]; be_off=p["be_offset_pct"]
     nb=p["use_next_bar"]
     uretf=p["use_return_filter"]; ret_lb=p["ret_lookback"]; ret_n=p["ret_n"]
     ret_sim=p["ret_wick_sim"]; ret_minwr=p["min_return_pct"]
@@ -1001,7 +1001,6 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     trades=0; wins=0; losses_n=0; pnls=[]
     in_trade=False; t_dir=0; t_ep=0.0; t_tp=0.0; t_sl=0.0
     t_orig_sl=0.0; t_pos=0.0; t_entry_bar=-1
-    be_triggered=False; be_trig_lvl=0.0
     pending_sig=0; sig_bar=-1; last_sig=0
     _csigs=[]; _pending_signal_bar=None
 
@@ -1057,7 +1056,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 if dd>max_dd: max_dd=dd
                 if _collect and _csigs:
                     _csigs[-1]["exit_bar"]=i; _csigs[-1]["win"]=tp_win; _csigs[-1]["exit_p"]=exit_p
-                in_trade=False; be_triggered=False
+                in_trade=False
 
         up_w_pct=up_w/rng*100 if rng>0 else 0
         dn_w_pct=dn_w/rng*100 if rng>0 else 0
@@ -1251,12 +1250,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     ep=cl; pos=min(equity,max_pos)
                     if pending_sig==1:
                         t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1+be_trig/100)
-                        be_triggered=False;in_trade=True;t_entry_bar=i
+                        t_orig_sl=sl_p;t_pos=pos
+                        in_trade=True;t_entry_bar=i
                     elif pending_sig==-1:
                         t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1-be_trig/100)
-                        be_triggered=False;in_trade=True;t_entry_bar=i
+                        t_orig_sl=sl_p;t_pos=pos
+                        in_trade=True;t_entry_bar=i
                     if _collect and in_trade:
                         _csigs.append({"bar_i":i,"dir":t_dir,"ep":t_ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None,"signal_bar":sig_bar})
                 pending_sig=0
@@ -1277,7 +1276,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     if _collect and _csigs:
                         _csigs[-1]["exit_bar"]=i;_csigs[-1]["win"]=is_win
                         _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True
-                    in_trade=False;be_triggered=False
+                    in_trade=False
                     pending_sig=-1 if short_sig_base else 1;sig_bar=i
 
             if long_sig_base and not in_trade: pending_sig=1;sig_bar=i
@@ -1299,31 +1298,31 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     if _collect and _csigs:
                         _csigs[-1]["exit_bar"]=i;_csigs[-1]["win"]=is_win
                         _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True
-                    in_trade=False;be_triggered=False
+                    in_trade=False
                     if short_sig_base and _confirm():
                         ep=cl;pos=min(equity,max_pos)
                         t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1-be_trig/100)
-                        be_triggered=False;in_trade=True;t_entry_bar=i
+                        t_orig_sl=sl_p;t_pos=pos
+                        in_trade=True;t_entry_bar=i
                         if _collect: _csigs.append({"bar_i":i,"dir":-1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
                     elif long_sig_base and _confirm():
                         ep=cl;pos=min(equity,max_pos)
                         t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1+be_trig/100)
-                        be_triggered=False;in_trade=True;t_entry_bar=i
+                        t_orig_sl=sl_p;t_pos=pos
+                        in_trade=True;t_entry_bar=i
                         if _collect: _csigs.append({"bar_i":i,"dir":1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
 
             if long_sig_base and not in_trade and _confirm():
                 ep=cl;pos=min(equity,max_pos)
                 t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1+be_trig/100)
-                be_triggered=False;in_trade=True;t_entry_bar=i
+                t_orig_sl=sl_p;t_pos=pos
+                in_trade=True;t_entry_bar=i
                 if _collect: _csigs.append({"bar_i":i,"dir":1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
             elif short_sig_base and not in_trade and _confirm():
                 ep=cl;pos=min(equity,max_pos)
                 t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                t_orig_sl=sl_p;t_pos=pos;be_trig_lvl=ep*(1-be_trig/100)
-                be_triggered=False;in_trade=True;t_entry_bar=i
+                t_orig_sl=sl_p;t_pos=pos
+                in_trade=True;t_entry_bar=i
                 if _collect: _csigs.append({"bar_i":i,"dir":-1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
 
     if in_trade:
