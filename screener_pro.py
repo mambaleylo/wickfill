@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.327
+WickFill Optimizer v3.328
+- v3.328: таблица HTF-фильтра свёрнута по умолчанию — заголовок стал кнопкой
+  с треугольником-индикатором (▼/▶), разворачивается по тапу.
+- v3.327
 - v3.327: Screen Wake Lock API в AMOLED-режиме — при включении AMOLED браузер
   запрашивает navigator.wakeLock.request('screen'), что запрещает ОС Android
   автоматически блокировать экран (телефон не уходит в sleep, пока вкладка
@@ -310,7 +313,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.327"
+APP_VERSION = "3.328"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6532,19 +6535,24 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- HTF filter effectiveness card -->
     <div class="table-panel in-strip" id="htfStatsWrap" style="display:none">
-      <div class="table-hdr">HTF-фильтр (<span id="htfStatsTf">—</span>) — за период перебора</div>
-      <table>
-        <thead>
-          <tr>
-            <th></th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
-          <tr><td>Без фильтра</td><td id="htfWoEq">—</td><td id="htfWoWr">—</td><td id="htfWoTr">—</td><td id="htfWoDd">—</td><td id="htfWoPf">—</td></tr>
-        </tbody>
-      </table>
-      <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span></div>
+      <div class="table-hdr" id="htfStatsToggle" onclick="(function(){var b=document.getElementById('htfStatsBody');var a=document.getElementById('htfStatsArrow');var open=b.style.display!=='none';b.style.display=open?'none':'';a.style.transform=open?'rotate(-90deg)':'rotate(0deg)';})()" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px">
+        <span id="htfStatsArrow" style="display:inline-block;transition:transform .2s;transform:rotate(-90deg);font-size:.8rem">▼</span>
+        HTF-фильтр (<span id="htfStatsTf">—</span>) — за период перебора
+      </div>
+      <div id="htfStatsBody" style="display:none">
+        <table>
+          <thead>
+            <tr>
+              <th></th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
+            <tr><td>Без фильтра</td><td id="htfWoEq">—</td><td id="htfWoWr">—</td><td id="htfWoTr">—</td><td id="htfWoDd">—</td><td id="htfWoPf">—</td></tr>
+          </tbody>
+        </table>
+        <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span></div>
+      </div>
     </div>
 
 
