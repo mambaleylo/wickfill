@@ -1,5 +1,2 @@
-[2026-06-13 08:06:03] alert_cfg обновлён: auto=True key=да
-[2026-06-13 08:30:08]   cleanup error: POSITION_NOT_FOUND
-[2026-06-13 08:35:09]   cleanup error: POSITION_NOT_FOUND
-[2026-06-13 08:40:15]   cleanup error: POSITION_NOT_FOUND
-[2026-06-13 08:45:17]   cleanup error: POSITION_NOT_FOUND
+[2026-06-13 08:48:49] alert_cfg обновлён: auto=True key=да
+[2026-06-13 08:55:08]   cleanup error: POSITION_NOT_FOUND
