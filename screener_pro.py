@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.331
+WickFill Optimizer v3.332
+- v3.332: fix карточки циклов переставали появляться после ~4-5 циклов —
+  при обрезке лога (>500 записей → последние 300) JS-счётчик lastLogCount
+  оставался больше нового logs.length и условие logs.length>lastLogCount
+  никогда не срабатывало → новые логи не читались → карточки не создавались.
+  Фикс: сервер теперь ведёт logs_dropped (суммарно отброшенных), JS хранит
+  lastLogTotal = logs_dropped + logs.length как абсолютный индекс; при каждом
+  поллинге читает только новые записи начиная с max(0, lastLogTotal-logsDropped).
+- v3.331
 - v3.331: _fetch_candles теперь с бесконечным retry — никакой лимит попыток не
   задан; при сетевых ошибках (таймаут, ConnectionError, 429/502/503/504) ждёт
   120с и повторяет вечно пока не появится сеть. Выход только при не-сетевых
@@ -3173,7 +3181,9 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
                     "level": "ok" if ok_trade else "error"
                 })
                 if len(opt_state["logs"]) > 500:
+                    _drop = len(opt_state["logs"]) - 300
                     opt_state["logs"] = opt_state["logs"][-300:]
+                    opt_state["logs_dropped"] = opt_state.get("logs_dropped", 0) + _drop
         break
 
 # ═══════════════════════════════════════════════════════════════
@@ -4087,7 +4097,9 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
             with opt_lock:
                 opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
                 if len(opt_state["logs"]) > 500:
+                    _drop = len(opt_state["logs"]) - 300
                     opt_state["logs"] = opt_state["logs"][-300:]
+                    opt_state["logs_dropped"] = opt_state.get("logs_dropped", 0) + _drop
 
     # Попытаться создать /sdcard/Download/WickFill (и /sdcard/Download как fallback)
     for _d in ["/sdcard/Download", _WICKFILL_DIR]:
@@ -4501,7 +4513,9 @@ def run_optimizer(params):
         with opt_lock:
             opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": msg, "level": level})
             if len(opt_state["logs"]) > 500:
+                _drop = len(opt_state["logs"]) - 300
                 opt_state["logs"] = opt_state["logs"][-300:]
+                opt_state["logs_dropped"] = opt_state.get("logs_dropped", 0) + _drop
 
     t0 = time.time()
 
@@ -5292,7 +5306,9 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
             logs.append({"ts": _time.strftime("%H:%M:%S"), "msg": f"[{sym.replace('_USDT','')}] {msg}", "level": level})
             # Ограничиваем буфер
             if len(logs) > 400:
+                _drop = len(logs) - 200
                 s["logs"] = logs[-200:]
+                s["logs_dropped"] = s.get("logs_dropped", 0) + _drop
 
     print(f"{_ts()} [par] {sym}: воркер запущен ({n_workers} воркеров)", flush=True)
     _slog(f"⚙ Параллельный режим · {n_workers} {'процессов' if _POOL_TYPE=='proc' else 'потоков'} · {tf} · {days}д", "info")
@@ -6624,7 +6640,7 @@ details summary::-webkit-details-marker{display:none}
 </div><!-- /app -->
 
 <script>
-let polling=null, startTs=0, lastLogCount=0, chartOpened=false;
+let polling=null, startTs=0, lastLogCount=0, lastLogTotal=0, chartOpened=false;
 let _lastChartTs={};   // per-symbol: {sym: timestamp} — чтобы не мигал при смене символа
 let _chartFrameLoaded=false;
 const infiniteMode=true;
@@ -6979,7 +6995,7 @@ function startOpt(){
       if(ccLabel) ccLabel.textContent=_symList.length>1?'Монеты':'Циклы';
       _renderSymCards();
       _renderSymSwitcher();
-      lastLogCount=0;chartOpened=false;_lastChartTs={};
+      lastLogCount=0;lastLogTotal=0;chartOpened=false;_lastChartTs={};
       _resetLog();
       document.getElementById('bestSection').style.display='none';
       if(window.innerWidth>700) document.getElementById('top20Wrap').style.display='none';
@@ -7297,8 +7313,12 @@ function poll(){
 
 
     const logs=d.logs||[];
-    if(logs.length>lastLogCount){
-      for(let i=lastLogCount;i<logs.length;i++) logLine(logs[i].msg,logs[i].level,logs[i].ts);
+    const logsDropped=d.logs_dropped||0;
+    const totalSeen=logsDropped+logs.length;
+    if(totalSeen>lastLogTotal){
+      const startIdx=Math.max(0,lastLogTotal-logsDropped);
+      for(let i=startIdx;i<logs.length;i++) logLine(logs[i].msg,logs[i].level,logs[i].ts);
+      lastLogTotal=totalSeen;
       lastLogCount=logs.length;
     }
     const _atb=d.trade_best||d.all_time_best||d.best;
@@ -7338,7 +7358,7 @@ function _resetLog(){
   document.getElementById('wfLog').innerHTML='';
   const sw=document.getElementById('symSwitcher');
   if(sw){sw.style.display='none';sw.innerHTML='';}
-  lastLogCount=0; _cc={}; _ccPrevEq=null; _startBuf=null;
+  lastLogCount=0; lastLogTotal=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
 
 function addLogLine(msg,level,ts){
@@ -7921,6 +7941,7 @@ class Handler(BaseHTTPRequestHandler):
                     "avg_cycle_s":    opt_state.get("avg_cycle_s"),
                     "error":          opt_state["error"],
                     "logs":           list(opt_state["logs"]),
+                    "logs_dropped":   opt_state.get("logs_dropped", 0),
                     "chart_path":     cr,
                     "chart_updated_at": opt_state.get("chart_updated_at",0),
                     "sw_running":     opt_state.get("sw_running",False),
