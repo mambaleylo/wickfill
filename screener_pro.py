@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.343
+WickFill Optimizer v3.344
+- v3.344: карточка цикла теперь показывает результат прогона ЭТОГО цикла
+  (cycle_best — лучший по validated_fitness из top20 этого цикла), а не
+  общий рекорд all_time_best за все циклы. Бейдж 🆕 рекорд / → без изм.
+  по-прежнему отражает, обновился ли глобальный рекорд (_global_best_ever).
 - v3.343: ещё один экземпляр гонки SW-тред / reload-по-границе-TF из v3.341 —
   на той же границе TF SW-тред умеет "синтезировать" вход после
   ⏳-pending-сигнала (carry-forward, v3.271), если он выпал из
@@ -426,7 +430,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.343"
+APP_VERSION = "3.344"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5026,7 +5030,7 @@ def run_optimizer(params):
             run_optimizer._prev_reported_eq = all_time_best.get("equity", 0)
             rec_flag = "🆕" if is_new_rec else "→"
             _stag_str = f" | stagnation={_stagnation_cycles}/{_STAGNATION_THRESH}" if _stagnation_cycles > 0 else ""
-            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${all_time_best['equity']:.2f} WR {all_time_best['winrate']:.1f}% Сд {all_time_best['trades']} DD {all_time_best['max_dd']:.1f}%{_stag_str}", "found" if is_new_rec else "ok")
+            olog(f"✅ Цикл #{cycle} готов за {int(cycle_elapsed)}с | {rec_flag} ${cycle_best['equity']:.2f} WR {cycle_best['winrate']:.1f}% Сд {cycle_best['trades']} DD {cycle_best['max_dd']:.1f}%{_stag_str}", "found" if is_new_rec else "ok")
 
             all_time_params = dict(all_time_best["params"])
             # --- Синхронизация с GitHub: если на GitHub лежит лучший конфиг (с другого устройства),
