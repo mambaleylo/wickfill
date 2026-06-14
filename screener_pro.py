@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.340
+WickFill Optimizer v3.341
+- v3.341: fix "сигналы/заливки на графике разные при двух почти-одновременных
+  загрузках (разница ~1-2с)" — пересборка chart_signals по границе TF
+  выполняется ДВУМЯ независимыми путями: SW-тредом (5с grace, со сдвигом окна
+  + _carry_forward_open_signal) и reload-по-границе-TF в _live_candle_updater
+  (3с grace, fresh fetch с биржи, БЕЗ carry-forward). Оба пишут в
+  opt_state["chart_signals"] почти одновременно на одной и той же границе TF;
+  путь без carry-forward мог "терять" текущую открытую сделку (заливка TP/SL
+  и %-лейбл до правого края) если она выпадала из нового окна — и при
+  postMessage-обновлении график на секунду показывал то с открытой сделкой,
+  то без неё. Теперь reload-по-границе-TF тоже снимает прежние chart_signals/
+  chart_signals_params ДО перезаписи и применяет _carry_forward_open_signal —
+  оба пути дают консистентный результат независимо от порядка выполнения.
 - v3.340: fix "TP/SL заливка тянется от старого сигнала, хотя появился новый" —
   _carry_forward_open_signal проверял совпадение старого открытого сигнала с
   новыми только по времени входа (t). Если старая позиция закрылась по
@@ -394,7 +406,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.340"
+APP_VERSION = "3.341"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -683,6 +695,11 @@ def _live_candle_updater():
                             # Синхронно пересобираем chart_candles/chart_signals
                             # на новом окне — чтобы они совпадали с _sw_candles
                             # сразу, а не ждали следующего тика SW-треда.
+                            # Снимок текущих chart_signals/params ДО перезаписи —
+                            # нужен для carry-forward открытого сигнала (см. ниже).
+                            with opt_lock:
+                                _rb_prev_signals = list(opt_state.get("chart_signals") or [])
+                                _rb_prev_params  = opt_state.get("chart_signals_params")
                             _rb_best_p = (best or {}).get("params", {}) if best else {}
                             try:
                                 with htf_lock:
@@ -703,6 +720,16 @@ def _live_candle_updater():
                                 _pb_rb = _pd_rb = _pt_rb = None
                             _pending_info_rb = ({"t": _pt_rb, "dir": _pd_rb}
                                                  if _pb_rb is not None else None)
+
+                            # Carry-forward открытого сигнала — без этого данный путь
+                            # (reload по границе TF, без carry-forward) и тик SW-треда
+                            # (с carry-forward) попеременно перезаписывали chart_signals
+                            # то с "открытой" сделкой (заливка+% до правого края), то без —
+                            # график/сигналы дёргались между двумя почти-одновременными
+                            # обновлениями (см. v3.339/v3.340).
+                            sigs_rb = _carry_forward_open_signal(
+                                _rb_prev_signals, sigs_rb, fresh_reload,
+                                prev_best_p=_rb_prev_params, cur_best_p=_rb_best_p)
 
                             new_cc_rb = [{"t":c["t"],"o":c["open"],"h":c["high"],
                                           "l":c["low"],"c":c["close"]} for c in fresh_reload]
