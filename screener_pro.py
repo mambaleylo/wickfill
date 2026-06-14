@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.344
+WickFill Optimizer v3.345
+- v3.345: AMOLED-режим — минималистичный скринсейвер на чёрном экране вместо
+  пустого оверлея. Показывает время/дату и ротирует 3 панели (лучший результат
+  цикла: equity/WR/сделки/DD; символ+TF+цикл+время в работе; CPU+profit factor),
+  каждые 30с меняется панель и позиция блока на экране (защита от выгорания
+  AMOLED). С 22:00 до 07:00 — приглушённая яркость (почти невидимый текст,
+  не слепит ночью).
 - v3.344: карточка цикла теперь показывает результат прогона ЭТОГО цикла
   (cycle_best — лучший по validated_fitness из top20 этого цикла), а не
   общий рекорд all_time_best за все циклы. Бейдж 🆕 рекорд / → без изм.
@@ -430,7 +436,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.344"
+APP_VERSION = "3.345"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6506,11 +6512,36 @@ details summary::-webkit-details-marker{display:none}
   /* На мобиле осветляем тёмный график */
   #chartFrame{filter:brightness(1.35) contrast(0.92);}
 }
+
+/* ── AMOLED screensaver ── */
+#amoledContent{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  text-align:center;font-family:'DM Mono',monospace;
+  color:rgba(255,255,255,.32);
+  transition:opacity 1.1s ease,color 1.1s ease,top 1.1s ease,left 1.1s ease;
+  user-select:none;pointer-events:none;white-space:nowrap;
+}
+#amoledContent .as-time{font-size:3.4rem;font-weight:500;letter-spacing:.04em;line-height:1}
+#amoledContent .as-date{font-size:.8rem;margin-top:6px;opacity:.65;text-transform:capitalize}
+#amoledContent .as-divider{width:34px;height:1px;background:currentColor;opacity:.25;margin:16px auto}
+#amoledContent .as-label{font-size:.62rem;letter-spacing:.18em;text-transform:uppercase;opacity:.5;margin-bottom:8px}
+#amoledContent .as-row{display:flex;gap:22px;justify-content:center}
+#amoledContent .as-row b{font-size:1.5rem;font-weight:600;display:block;color:inherit}
+#amoledContent .as-row span{font-size:.58rem;opacity:.55;display:block;margin-top:3px;letter-spacing:.12em;text-transform:uppercase}
+#amoledContent.night{color:rgba(255,255,255,.09)}
+#amoledContent.night .as-time{font-weight:400}
+@media (max-width:480px){
+  #amoledContent .as-time{font-size:2.6rem}
+  #amoledContent .as-row{gap:16px}
+  #amoledContent .as-row b{font-size:1.2rem}
+}
 </style></head><body>
 
 <div class="app">
 
-<div id="amoledOverlay" onclick="wakeFromAmoled(event)" ontouchstart="wakeFromAmoled(event)" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;"></div>
+<div id="amoledOverlay" onclick="wakeFromAmoled(event)" ontouchstart="wakeFromAmoled(event)" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;">
+  <div id="amoledContent"></div>
+</div>
 
 <!-- ── Topbar ── -->
 <header class="topbar">
@@ -7386,6 +7417,7 @@ function poll(){
   const useMulti=_symList.length>1;
   const endpoint=useMulti?'/opt_status_all':'/opt_status';
   fetch(endpoint,{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    window._lastPoll = d;
     const wasLost = _connLost;
     _connLost = false;
     _connRetryCount = 0;
@@ -7993,6 +8025,93 @@ let _amoledOn = localStorage.getItem('wf_amoled')==='1';
 let _amoledTimer = null;
 const AMOLED_DELAY = 60000; // 1 минута
 
+/* ── AMOLED screensaver — ротация панелей + сдвиг позиции каждые 30с ── */
+const AMOLED_SHIFT_INTERVAL = 30000; // 30с
+let _amoledShiftTimer = null;
+let _amoledPanelIdx = 0;
+
+function _amoledIsNight(){
+  const h=new Date().getHours();
+  return (h>=22 || h<7); // 22:00–07:00 — приглушённый режим, не слепит
+}
+
+function _amoledPanels(night){
+  const d=window._lastPoll||{}, best=window._lastBest||{};
+  const now=new Date();
+  const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  const date=now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
+  const head=`<div class="as-time">${time}</div><div class="as-date">${date}</div><div class="as-divider"></div>`;
+  const panels=[];
+
+  if(best.equity!==undefined){
+    const eq=best.equity, pos=eq>=100;
+    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.85)':'rgba(255,130,52,.8)');
+    panels.push(head+
+      `<div class="as-label">Лучший результат</div>`+
+      `<div class="as-row">`+
+        `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b><span>Equity</span></div>`+
+        `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>Winrate</span></div>`+
+        `<div><b>${best.trades||0}</b><span>Сделок</span></div>`+
+        `<div><b>${(best.max_dd||0).toFixed(0)}%</b><span>DD</span></div>`+
+      `</div>`);
+  }
+
+  const sym=(document.getElementById('wf_symbol')?.value||'').trim().toUpperCase();
+  const tf=document.getElementById('wf_tf_sel')?.value||'';
+  const cycleStr=d.infinite?('#'+(d.cycle||0)):'—';
+  const elapsed=document.getElementById('progTime')?.textContent||'—';
+  panels.push(head+
+    `<div class="as-label">${sym||'WickFill'}${tf?(' · '+tf):''}</div>`+
+    `<div class="as-row">`+
+      `<div><b>${cycleStr}</b><span>Цикл</span></div>`+
+      `<div><b>${elapsed}</b><span>В работе</span></div>`+
+    `</div>`);
+
+  const cpu=document.getElementById('cpuTempText')?.textContent||'—';
+  const pf=(best.profit_factor!=null)?best.profit_factor.toFixed(2):'—';
+  panels.push(head+
+    `<div class="as-label">Состояние</div>`+
+    `<div class="as-row">`+
+      `<div><b>${cpu}</b><span>CPU</span></div>`+
+      `<div><b>${pf}</b><span>Profit F.</span></div>`+
+    `</div>`);
+
+  return panels.length?panels:[head+`<div class="as-label">WickFill</div>`];
+}
+
+function _amoledShift(){
+  const ov=document.getElementById('amoledOverlay');
+  const content=document.getElementById('amoledContent');
+  if(!ov||!content||ov.style.display!=='block') return;
+  const night=_amoledIsNight();
+  const panels=_amoledPanels(night);
+  const idx=_amoledPanelIdx%panels.length;
+  _amoledPanelIdx++;
+  content.style.opacity='0';
+  setTimeout(()=>{
+    if(ov.style.display!=='block') return; // уже разбудили — не дорисовываем
+    content.classList.toggle('night',night);
+    content.innerHTML=panels[idx];
+    // случайное смещение в пределах центральной зоны — защита от выгорания AMOLED
+    content.style.top=(32+Math.random()*36)+'%';
+    content.style.left=(28+Math.random()*44)+'%';
+    content.style.opacity='1';
+  },350);
+}
+
+function _amoledStartScreensaver(){
+  _amoledPanelIdx=0;
+  _amoledShift();
+  if(_amoledShiftTimer) clearInterval(_amoledShiftTimer);
+  _amoledShiftTimer=setInterval(_amoledShift, AMOLED_SHIFT_INTERVAL);
+}
+
+function _amoledStopScreensaver(){
+  if(_amoledShiftTimer){clearInterval(_amoledShiftTimer);_amoledShiftTimer=null;}
+  const content=document.getElementById('amoledContent');
+  if(content){content.style.opacity='0';content.innerHTML='';content.classList.remove('night');}
+}
+
 /* ── Screen Wake Lock — не даём ОС гасить экран ── */
 let _wakeLock = null;
 async function _acquireWakeLock(){
@@ -8025,6 +8144,7 @@ function _resetAmoledTimer(){
     _amoledTimer=setTimeout(()=>{
       const ov=document.getElementById('amoledOverlay');
       if(ov) ov.style.display='block';
+      _amoledStartScreensaver();
     }, AMOLED_DELAY);
   }
 }
@@ -8033,6 +8153,7 @@ let _amoledWoke=false;
 function wakeFromAmoled(ev){
   const ov=document.getElementById('amoledOverlay');
   if(ov) ov.style.display='none';
+  _amoledStopScreensaver();
   _resetAmoledTimer();
   // Если под оверлеем была кнопка/элемент — "пробрасываем" этот же тап дальше,
   // чтобы не требовался второй клик для срабатывания кнопки.
@@ -8076,6 +8197,7 @@ document.addEventListener('fullscreenchange',()=>{
     if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
     const ov=document.getElementById('amoledOverlay');
     if(ov) ov.style.display='none';
+    _amoledStopScreensaver();
   }
 });
 
@@ -8093,6 +8215,7 @@ function toggleAmoled(){
     if(_amoledTimer){clearTimeout(_amoledTimer);_amoledTimer=null;}
     const ov=document.getElementById('amoledOverlay');
     if(ov) ov.style.display='none';
+    _amoledStopScreensaver();
   }
 }
 
@@ -8101,7 +8224,7 @@ function toggleAmoled(){
     const ov=document.getElementById('amoledOverlay');
     if(ov && ov.style.display==='block'){
       // первое касание — только гасим оверлей, не даём провалиться в клик под ним
-      if(ev==='click'||ev==='touchstart'){ ov.style.display='none'; }
+      if(ev==='click'||ev==='touchstart'){ ov.style.display='none'; _amoledStopScreensaver(); }
     }
     _resetAmoledTimer();
   }, {passive:true});
