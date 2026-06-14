@@ -1,6 +1,1 @@
-[2026-06-14 12:19:50] alert_cfg обновлён: auto=True key=да
-[2026-06-14 13:50:55] alert_cfg обновлён: auto=False key=да
-[2026-06-14 13:50:55] alert_cfg обновлён: auto=False key=да
-[2026-06-14 14:40:11] СИГНАЛ ШОРТ ep=0.08716 tp=0.0861141 sl=0.0874215 tg=ok
-[2026-06-14 14:40:11] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
-[2026-06-14 16:40:28] alert_cfg обновлён: auto=False key=да
+[2026-06-14 18:09:45] alert_cfg обновлён: auto=True key=да
