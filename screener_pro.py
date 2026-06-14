@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.337
+WickFill Optimizer v3.338
+- v3.338: фикс регрессии v3.337 — ограничение заливки правым краем следующего
+  сигнала случайно обрезало заливку ОТКРЫТОЙ (текущей) сделки (то нормально, то
+  обрезано — зависело от наличия "хвостовых" записей в SIGNALS после открытой
+  сделки). Теперь обрезка применяется только к закрытым сделкам (exit_bar!=null)
+  и только если следующий сигнал реально входит на/до exit_bar текущей.
 - v3.337: фикс наложения заливки сигналов на графике — заливка закрытой сделки
   включала весь бар выхода (exit_bar+1), и если следующая сделка входила на
   этом же баре (закрытие по реверс-сигналу + немедленный новый вход), заливки
@@ -371,7 +376,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.337"
+APP_VERSION = "3.338"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2534,11 +2539,14 @@ function render(){{
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
     let ei=Math.min(Math.max(viC,eiR),vis.length-1);
-    // Не даём заливке текущего сигнала наезжать на бар входа следующего сигнала
-    const _next=SIGNALS[_si+1];
-    if(_next && _next.bar_i>s.bar_i){{
-      const _nextVi=_next.bar_i-viewStart-1;
-      if(_nextVi<ei) ei=Math.max(viC,_nextVi);
+    // Не даём заливке ЗАКРЫТОЙ сделки наезжать на бар входа следующего сигнала
+    // (открытую сделку — exit_bar===null — не трогаем, её заливка всегда до края вьюпорта)
+    if(s.exit_bar!==null){{
+      const _next=SIGNALS[_si+1];
+      if(_next && _next.bar_i>s.bar_i && _next.bar_i<=s.exit_bar){{
+        const _nextVi=_next.bar_i-viewStart-1;
+        if(_nextVi<ei) ei=Math.max(viC,_nextVi);
+      }}
     }}
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
     ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
