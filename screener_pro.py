@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.336
+WickFill Optimizer v3.337
+- v3.337: фикс наложения заливки сигналов на графике — заливка закрытой сделки
+  включала весь бар выхода (exit_bar+1), и если следующая сделка входила на
+  этом же баре (закрытие по реверс-сигналу + немедленный новый вход), заливки
+  перекрывались на один бар. Теперь правая граница заливки текущего сигнала
+  ограничивается баром входа следующего сигнала.
 - v3.336: убран режим безубытка (BE) полностью — параметры use_be/be_trigger_pct/
   be_offset_pct удалены из PARAM_SPACE и FILTER_GROUPS; мёртвый код BE (be_trig,
   be_off, be_triggered, be_trig_lvl) удалён из _simulate (BE-логика реально
@@ -366,7 +371,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.336"
+APP_VERSION = "3.337"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2524,10 +2529,17 @@ function render(){{
     ctx.fillStyle='rgba(200,180,80,0.85)';
     ctx.fillText('⏳',_px,py(_pc.l)+_arrowOff+_arrowSz+14);
   }}
-  for(const s of SIGNALS){{
+  for(let _si=0;_si<SIGNALS.length;_si++){{
+    const s=SIGNALS[_si];
     const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
     const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
-    const ei=Math.min(Math.max(viC,eiR),vis.length-1);
+    let ei=Math.min(Math.max(viC,eiR),vis.length-1);
+    // Не даём заливке текущего сигнала наезжать на бар входа следующего сигнала
+    const _next=SIGNALS[_si+1];
+    if(_next && _next.bar_i>s.bar_i){{
+      const _nextVi=_next.bar_i-viewStart-1;
+      if(_nextVi<ei) ei=Math.max(viC,_nextVi);
+    }}
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
     ctx.fillStyle='rgba(58,125,82,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.tp)),x2-x1,Math.abs(py(s.ep)-py(s.tp)));
     ctx.fillStyle='rgba(160,48,48,0.08)';ctx.fillRect(x1,Math.min(py(s.ep),py(s.sl)),x2-x1,Math.abs(py(s.ep)-py(s.sl)));
