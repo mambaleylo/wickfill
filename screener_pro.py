@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.339
+WickFill Optimizer v3.340
+- v3.340: fix "TP/SL заливка тянется от старого сигнала, хотя появился новый" —
+  _carry_forward_open_signal проверял совпадение старого открытого сигнала с
+  новыми только по времени входа (t). Если старая позиция закрылась по
+  реверс-сигналу (sig_close) и тут же открылась новая (другой t), старый
+  "открытый" сигнал не находил совпадения и переносился повторно (TP/SL-скан
+  carry-forward не находит закрытие, т.к. реальный выход был по реверсу, не
+  TP/SL) — получались ДВА открытых сигнала с заливками до края графика
+  одновременно. Теперь carry-forward не переносит старый сигнал, если в новых
+  сигналах уже есть любая другая открытая позиция.
 - v3.339: fix "график то нормальный, то кривой, то снова нормальный" — между
   тиками SW best_p мог меняться (новый рекорд цикла / GitHub-синхронизация
   trade_best), а _carry_forward_open_signal переносил ОТКРЫТЫЙ сигнал из
@@ -385,7 +394,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.339"
+APP_VERSION = "3.340"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3018,6 +3027,11 @@ def _carry_forward_open_signal(prev_signals, new_signals, new_candles, prev_best
     # Уже есть в новых сигналах (по времени входа)?
     if any(s.get("t") == prev_open.get("t") and s.get("exit_bar") is None and not s.get("open_end")
            for s in new_signals):
+        return new_signals
+    # В новых сигналах уже есть ДРУГАЯ открытая позиция (старая закрылась по
+    # реверс-сигналу, открылась новая) — старую переносить не нужно, иначе
+    # получится два "открытых" сигнала с заливками до края графика.
+    if any(s.get("exit_bar") is None and not s.get("open_end") for s in new_signals):
         return new_signals
     # Найдём индекс свечи входа в new_candles по timestamp
     t_in = prev_open.get("t")
