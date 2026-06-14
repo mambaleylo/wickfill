@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.342
+WickFill Optimizer v3.343
+- v3.343: ещё один экземпляр гонки SW-тред / reload-по-границе-TF из v3.341 —
+  на той же границе TF SW-тред умеет "синтезировать" вход после
+  ⏳-pending-сигнала (carry-forward, v3.271), если он выпал из
+  chart_signals_data из-за сдвига окна; reload-по-границе-TF этого не делал
+  и мог перезаписать chart_signals/chart_pending_bar версией без синтеза —
+  вход и его TP/SL пропадали с графика, а _check_new_candle_signal не находил
+  сигнал на свече входа → автосделка не открывалась. Логика синтеза вынесена
+  в общую _carry_forward_pending_signal() и теперь применяется в обоих путях
+  симметрично (как и _carry_forward_open_signal из v3.341).
 - v3.342: fix "лучший конфиг локально не хуже GitHub, но автосохранение не
   срабатывает" — гейт автосохранения (`new_vfit > _last_autosave_vfit`)
   сравнивался с all_time_best["validated_fitness"] ПОСЛЕ WF slope-штрафа.
@@ -417,7 +426,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.342"
+APP_VERSION = "3.343"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -711,6 +720,7 @@ def _live_candle_updater():
                             with opt_lock:
                                 _rb_prev_signals = list(opt_state.get("chart_signals") or [])
                                 _rb_prev_params  = opt_state.get("chart_signals_params")
+                                _rb_prev_pending_info = opt_state.get("chart_pending_info")
                             _rb_best_p = (best or {}).get("params", {}) if best else {}
                             try:
                                 with htf_lock:
@@ -729,8 +739,6 @@ def _live_candle_updater():
                             else:
                                 sigs_rb = []
                                 _pb_rb = _pd_rb = _pt_rb = None
-                            _pending_info_rb = ({"t": _pt_rb, "dir": _pd_rb}
-                                                 if _pb_rb is not None else None)
 
                             # Carry-forward открытого сигнала — без этого данный путь
                             # (reload по границе TF, без carry-forward) и тик SW-треда
@@ -741,6 +749,18 @@ def _live_candle_updater():
                             sigs_rb = _carry_forward_open_signal(
                                 _rb_prev_signals, sigs_rb, fresh_reload,
                                 prev_best_p=_rb_prev_params, cur_best_p=_rb_best_p)
+
+                            # Carry-forward pending-сигнала (v3.271) — та же проблема, что и
+                            # выше с открытым сигналом: если этот путь синхронизирует
+                            # chart_pending_bar/chart_signals из fresh_reload без синтеза
+                            # отложенного входа (⏳→вход на этой свече), а тик SW-треда
+                            # это синтезировал — следующая запись из этого пути может
+                            # "стереть" синтезированный вход и chart_pending_info обратно
+                            # в ⏳, из-за чего _check_new_candle_signal не найдёт сигнал
+                            # на свече входа и автосделка не откроется.
+                            sigs_rb, _pb_rb, _pd_rb, _pt_rb, _pending_info_rb = \
+                                _carry_forward_pending_signal(_rb_prev_pending_info, sigs_rb, fresh_reload,
+                                                               _rb_best_p, _pb_rb, _pd_rb, _pt_rb)
 
                             new_cc_rb = [{"t":c["t"],"o":c["open"],"h":c["high"],
                                           "l":c["low"],"c":c["close"]} for c in fresh_reload]
@@ -3107,6 +3127,49 @@ def _carry_forward_open_signal(prev_signals, new_signals, new_candles, prev_best
     return new_signals + [sig]
 
 
+def _carry_forward_pending_signal(prev_pending_info, new_signals, new_candles, best_p,
+                                   pending_bar, pending_dir, pending_t):
+    """
+    Carry-forward входа после pending-сигнала (use_next_bar): на прошлой свече сигнал
+    был "ожидающим" (⏳, prev_pending_info), а на ЭТОЙ свече должен был открыться вход
+    (bar_i = pending_bar+1, t == new_candles[-1].t). Если из-за сдвига окна (start_i)
+    сигнальная свеча выпала из расчёта раньше времени и новый _simulate не зафиксировал
+    этот вход в new_signals — синтезируем его вручную: запись о сделке
+    (bar_i = последняя свеча, t = её timestamp, ep = close).
+
+    Без этого (v3.271): сигнальная свеча уходит за start_i до того, как наступает свеча
+    входа, вход никогда не появляется в chart_signals → TP/SL не рисуются, а
+    _check_new_candle_signal не находит сигнал на свече входа → автосделка не открывается.
+
+    Возвращает (new_signals, pending_bar, pending_dir, pending_t, pending_info) — если
+    синтез сработал, pending_bar/dir/t сбрасываются в None (ожидание разрешилось входом).
+    """
+    if (prev_pending_info and prev_pending_info.get("t") is not None
+            and len(new_candles) >= 2
+            and prev_pending_info["t"] == new_candles[-2]["t"]
+            and not any(s.get("t") == new_candles[-1]["t"] for s in new_signals)):
+        _pp_dir = prev_pending_info.get("dir")
+        if _pp_dir in (1, -1):
+            _entry_c = new_candles[-1]
+            _ep = _entry_c["close"]
+            _sl_p = (best_p or {}).get("sl_pct", 0)
+            _tp_p = (best_p or {}).get("tp_pct", 0)
+            if _pp_dir == 1:
+                _tp = _ep * (1 + _tp_p / 100); _sl = _ep * (1 - _sl_p / 100)
+            else:
+                _tp = _ep * (1 - _tp_p / 100); _sl = _ep * (1 + _sl_p / 100)
+            new_signals = new_signals + [{
+                "bar_i": len(new_candles) - 1, "dir": _pp_dir, "ep": _ep, "tp": _tp, "sl": _sl,
+                "t": _entry_c["t"], "exit_bar": None, "win": None,
+                "signal_bar": len(new_candles) - 2,
+            }]
+            pending_bar = None
+            pending_dir = None
+            pending_t = None
+    pending_info = ({"t": pending_t, "dir": pending_dir} if pending_bar is not None else None)
+    return new_signals, pending_bar, pending_dir, pending_t, pending_info
+
+
 def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pct=None, sl_pct=None):
     """Находит сделки, которые только что закрылись, и шлёт Telegram-уведомление."""
     if not alert_cfg or not prev_signals or not new_signals:
@@ -3551,36 +3614,11 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             # и TP/SL ещё не выбит — переносим его, пересчитав exit на новых свечах.
             chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles, prev_best_p=prev_signals_params, cur_best_p=best_p)
 
-            # Carry-forward входа после pending-сигнала (use_next_bar): на прошлой свече сигнал
-            # был "ожидающим" (⏳), а на этой свече должен был открыться вход (bar_i = pending_bar+1).
-            # Если из-за сдвига окна (start_i) сигнальная свеча выпала из расчёта раньше времени
-            # и новый _simulate не зафиксировал этот вход в chart_signals_data — синтезируем его
-            # вручную: запись о сделке (bar_i = последняя свеча, t = её timestamp, ep = close).
-            if (prev_pending_info and prev_pending_info.get("t") is not None
-                    and len(new_candles) >= 2
-                    and prev_pending_info["t"] == new_candles[-2]["t"]
-                    and not any(s.get("t") == new_candles[-1]["t"] for s in chart_signals_data)):
-                _pp_dir = prev_pending_info.get("dir")
-                if _pp_dir in (1, -1):
-                    _entry_c = new_candles[-1]
-                    _ep = _entry_c["close"]
-                    _sl_p = (best_p or {}).get("sl_pct", 0)
-                    _tp_p = (best_p or {}).get("tp_pct", 0)
-                    if _pp_dir == 1:
-                        _tp = _ep * (1 + _tp_p / 100); _sl = _ep * (1 - _sl_p / 100)
-                    else:
-                        _tp = _ep * (1 - _tp_p / 100); _sl = _ep * (1 + _sl_p / 100)
-                    chart_signals_data = chart_signals_data + [{
-                        "bar_i": len(new_candles) - 1, "dir": _pp_dir, "ep": _ep, "tp": _tp, "sl": _sl,
-                        "t": _entry_c["t"], "exit_bar": None, "win": None,
-                        "signal_bar": len(new_candles) - 2,
-                    }]
-                    _sw_pending_bar = None
-                    _sw_pending_dir = None
-                    _sw_pending_t = None
-
-            _sw_pending_info = ({"t": _sw_pending_t, "dir": _sw_pending_dir}
-                                 if _sw_pending_bar is not None else None)
+            # Carry-forward входа после pending-сигнала (use_next_bar, v3.271) —
+            # вынесено в общую функцию _carry_forward_pending_signal, см. её докстринг.
+            chart_signals_data, _sw_pending_bar, _sw_pending_dir, _sw_pending_t, _sw_pending_info = \
+                _carry_forward_pending_signal(prev_pending_info, chart_signals_data, new_candles, best_p,
+                                               _sw_pending_bar, _sw_pending_dir, _sw_pending_t)
 
             # Строим chart_candles_fmt с заполнением временных пропусков
             # (если в new_candles пропущен интервал — вставляем flat-свечу чтобы не было визуального разрыва)
