@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.338
+WickFill Optimizer v3.339
+- v3.339: fix "график то нормальный, то кривой, то снова нормальный" — между
+  тиками SW best_p мог меняться (новый рекорд цикла / GitHub-синхронизация
+  trade_best), а _carry_forward_open_signal переносил ОТКРЫТЫЙ сигнал из
+  prev_signals, посчитанный со СТАРЫМ best_p (старые tp/sl/ep), в новый
+  chart_signals_data — на графике появлялся открытый сигнал с SL/TP, не
+  соответствующим текущей ЛУЧШЕЙ КОМБИНАЦИИ (огромная/смещённая заливка,
+  неверные уровни SL/TP). Добавлен снимок chart_signals_params (sl_pct/tp_pct)
+  рядом с chart_signals; carry-forward теперь пропускается, если best_p
+  изменился с прошлого тика.
 - v3.338: фикс регрессии v3.337 — ограничение заливки правым краем следующего
   сигнала случайно обрезало заливку ОТКРЫТОЙ (текущей) сделки (то нормально, то
   обрезано — зависело от наличия "хвостовых" записей в SIGNALS после открытой
@@ -376,7 +385,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.338"
+APP_VERSION = "3.339"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -524,7 +533,7 @@ opt_state = {
     "current_param": "", "logs": [], "logs_dropped": 0, "best": None, "all_time_best": None, "trade_best": None, "top20": [], "valid": None, "windows": [], "min_stable_days": None,
     "started_at": "", "elapsed": 0.0, "error": "", "cycle_times": [], "avg_cycle_s": None,
     "days": 3,
-    "chart_candles": [], "chart_signals": [], "chart_symbol": "", "chart_tf": "",
+    "chart_candles": [], "chart_signals": [], "chart_signals_params": None, "chart_symbol": "", "chart_tf": "",
     "chart_path": "", "chart_updated_at": 0,
     "chart_pending_bar": None, "chart_pending_info": None,
     # sliding window
@@ -626,6 +635,7 @@ def _live_candle_updater():
                                 if opt_state.get("chart_symbol", "") == symbol:
                                     opt_state["chart_candles"] = new_cc
                                     opt_state["chart_signals"]  = sigs
+                                    opt_state["chart_signals_params"] = best_p if best_p else None
                                     cc = new_cc
                                     _last_refresh = now
                                     _net_errors = 0
@@ -700,6 +710,7 @@ def _live_candle_updater():
                                 if opt_state.get("chart_symbol", "") == symbol:
                                     opt_state["chart_candles"]      = new_cc_rb
                                     opt_state["chart_signals"]      = sigs_rb
+                                    opt_state["chart_signals_params"] = dict(_rb_best_p) if _rb_best_p else None
                                     opt_state["chart_pending_bar"]  = _pb_rb
                                     opt_state["chart_pending_info"] = _pending_info_rb
                                     opt_state["chart_updated_at"]   = now
@@ -2978,7 +2989,7 @@ def _write_trade_log(symbol, tf, line):
             print(f"[trade_log] ошибка GitHub: {e}", flush=True)
     threading.Thread(target=_push, daemon=True).start()
 
-def _carry_forward_open_signal(prev_signals, new_signals, new_candles):
+def _carry_forward_open_signal(prev_signals, new_signals, new_candles, prev_best_p=None, cur_best_p=None):
     """
     При сдвиге скользящего окна (new_candles = candles[1:] + [new_c]) свеча входа открытой
     сделки может оказаться раньше нового start_i внутри _simulate, и пересчёт _csigs
@@ -2988,9 +2999,18 @@ def _carry_forward_open_signal(prev_signals, new_signals, new_candles):
     Здесь проверяем: был ли в prev_signals открытый сигнал (exit_bar is None, не open_end),
     и есть ли в new_signals сигнал с тем же временем входа (t). Если нет — переносим
     старый сигнал, пересчитав возможное закрытие (TP/SL) по новым свечам new_candles.
+
+    Если между предыдущим и текущим тиком изменился best_p (sl_pct/tp_pct) — старый
+    открытый сигнал посчитан под другие TP/SL и больше не релевантен текущему
+    конфигу; не переносим его (иначе на графике появляется "чужой" SL/TP, не
+    соответствующий отображаемой ЛУЧШЕЙ КОМБИНАЦИИ — выглядит как "кривой" график).
     """
     if not prev_signals:
         return new_signals
+    if prev_best_p is not None and cur_best_p is not None:
+        if (round(prev_best_p.get("sl_pct", 0), 6) != round(cur_best_p.get("sl_pct", 0), 6)
+                or round(prev_best_p.get("tp_pct", 0), 6) != round(cur_best_p.get("tp_pct", 0), 6)):
+            return new_signals
     prev_open = next((s for s in prev_signals
                        if s.get("exit_bar") is None and not s.get("open_end")), None)
     if not prev_open:
@@ -3359,7 +3379,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             with opt_lock:
                 _sw_candles = new_c
 
-    def _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=None, pending_info=None):
+    def _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=None, pending_info=None, signals_params=None):
         """Обновляет chart в opt_state (всегда) и в opt_states[symbol] (для мультирежима)."""
         ts = int(time.time())
         with opt_lock:
@@ -3367,6 +3387,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             if not is_multi or symbol == _active_chart_symbol:
                 opt_state["chart_candles"]   = chart_candles_fmt
                 opt_state["chart_signals"]   = chart_signals_data
+                opt_state["chart_signals_params"] = signals_params
                 opt_state["chart_pending_bar"] = pending_bar
                 opt_state["chart_pending_info"] = pending_info
                 opt_state["chart_updated_at"] = ts
@@ -3377,6 +3398,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                 s = opt_states.get(symbol, {})
                 s["chart_candles"]    = chart_candles_fmt
                 s["chart_signals"]    = chart_signals_data
+                s["chart_signals_params"] = signals_params
                 s["chart_pending_bar"] = pending_bar
                 s["chart_pending_info"] = pending_info
                 s["chart_updated_at"] = ts
@@ -3452,15 +3474,18 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
 
             # prev_signals для проверки закрытия сделки и для carry-forward открытого сигнала
             prev_signals_for_close = []
+            prev_signals_params = None
             prev_pending_info = None
             with opt_lock:
                 if not is_multi or symbol == _active_chart_symbol:
                     prev_signals_for_close = list(opt_state.get("chart_signals") or [])
+                    prev_signals_params = opt_state.get("chart_signals_params")
                     prev_pending_info = opt_state.get("chart_pending_info")
             if is_multi:
                 with opt_states_lock:
                     _sym_st = opt_states.get(symbol, {})
                     prev_signals_for_close = list(_sym_st.get("chart_signals") or []) or prev_signals_for_close
+                    prev_signals_params = _sym_st.get("chart_signals_params") or prev_signals_params
                     prev_pending_info = _sym_st.get("chart_pending_info") or prev_pending_info
 
             sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
@@ -3472,7 +3497,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             # Carry-forward: если предыдущий открытый сигнал (exit_bar=None / open_end) "вылетел"
             # из chart_signals_data из-за сдвига окна (start_i), но его свеча t ещё в new_candles
             # и TP/SL ещё не выбит — переносим его, пересчитав exit на новых свечах.
-            chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles)
+            chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles, prev_best_p=prev_signals_params, cur_best_p=best_p)
 
             # Carry-forward входа после pending-сигнала (use_next_bar): на прошлой свече сигнал
             # был "ожидающим" (⏳), а на этой свече должен был открыться вход (bar_i = pending_bar+1).
@@ -3538,7 +3563,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                     br = dict(opt_state.get("trade_best") or opt_state.get("best") or {})
 
             chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar, pending_info=_sw_pending_info)
+            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar, pending_info=_sw_pending_info, signals_params=best_p)
 
             with opt_lock:
                 opt_state["sw_last_update"]  = int(time.time())
