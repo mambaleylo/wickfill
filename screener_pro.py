@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.341
+WickFill Optimizer v3.342
+- v3.342: fix "лучший конфиг локально не хуже GitHub, но автосохранение не
+  срабатывает" — гейт автосохранения (`new_vfit > _last_autosave_vfit`)
+  сравнивался с all_time_best["validated_fitness"] ПОСЛЕ WF slope-штрафа.
+  Этот штраф (wf_trend_penalty) пересчитывается каждый цикл от свежих
+  WF-окон и колеблется независимо от _global_best_ever — поэтому "удачный"
+  цикл с малым штрафом мог поднять _last_autosave_vfit выше, чем штрафованный
+  vfit любого последующего цикла, даже если _global_best_ever реально
+  установил новый рекорд. В итоге _do_autosave больше никогда не запускался,
+  и локальный (не худший) рекорд не уходил на GitHub. Теперь гейт сравнивает
+  «сырой» vfit _global_best_ever (до slope-штрафа, _raw_vfit_for_autosave),
+  который монотонно неубывает — как и должен быть высокий рубеж.
 - v3.341: fix "сигналы/заливки на графике разные при двух почти-одновременных
   загрузках (разница ~1-2с)" — пересборка chart_signals по границе TF
   выполняется ДВУМЯ независимыми путями: SW-тредом (5с grace, со сдвигом окна
@@ -406,7 +417,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.341"
+APP_VERSION = "3.342"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4962,6 +4973,14 @@ def run_optimizer(params):
             else:
                 _stagnation_cycles += 1  # нет улучшения — наращиваем
             all_time_best = dict(_global_best_ever)  # копия — slope-штраф не мутирует _global_best_ever
+            # «Сырой» vfit рекорда ДО WF slope-штрафа — используется для автосохранения
+            # ниже (slope-штраф пересчитывается каждый цикл от свежих WF-окон и может
+            # колебаться независимо от того, улучшился ли реальный рекорд, поэтому
+            # сравнивать с _last_autosave_vfit нужно именно это, а не all_time_best["validated_fitness"]
+            # после штрафа — иначе "удачный" цикл с малым штрафом ставит планку,
+            # которую штрафованные значения следующих циклов уже не превысят, и
+            # автосохранение нового (реально лучшего) рекорда на GitHub не запускается)
+            _raw_vfit_for_autosave = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
             prev_best_params = dict(cycle_best["params"])  # следующий цикл стартует с лучшего этого цикла
 
             _prev_best_eq = getattr(run_optimizer, '_prev_reported_eq', 0)
@@ -5176,7 +5195,11 @@ def run_optimizer(params):
                 opt_state["min_stable_days"] = min_stable_days
 
             # Автосохранение — запускаем в фоновом потоке чтобы не блокировать перебор
-            new_vfit = all_time_best.get("validated_fitness", all_time_best.get("fitness", 0))
+            # Гейтим по «сырому» vfit рекорда (см. _raw_vfit_for_autosave выше), а не по
+            # all_time_best["validated_fitness"] — последний уже может быть домножен на
+            # wf_trend_penalty этого цикла и быть НИЖЕ исторического максимума даже при
+            # появлении нового реального рекорда.
+            new_vfit = _raw_vfit_for_autosave
             if new_vfit > _last_autosave_vfit:
                 _last_autosave_vfit = new_vfit  # обновляем сразу чтобы не запускать повторно
                 _save_snapshot = (symbol, tf, days, risk_pct,
