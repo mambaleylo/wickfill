@@ -3,3 +3,4 @@
 [2026-06-15 21:10:15] СИГНАЛ ШОРТ ep=0.08944 tp=0.0883667 sl=0.089753 tg=fail
 [2026-06-15 21:10:15] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
 [2026-06-15 21:10:15]   leverage=29× (risk=10.0% sl=0.35%)
+[2026-06-15 21:11:02]   Ошибка получения баланса: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
