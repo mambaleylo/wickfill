@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.349
+WickFill Optimizer v3.350
+- v3.350: AMOLED-сейвер — вместо равно одного equity вернул строку значений
+  без подписей: депозит ($, цвет по прибыли/убытку), winrate (%), кол-во
+  сделок и баланс на бирже Gate.io ($, отдельный приглушённый цвет) — формат
+  значений (знаки $/%) сам подсказывает, что где, без текстовых лейблов.
+  Баланс Gate.io берётся через новый /opt_status поле gate_balance
+  (_get_cached_gate_balance, кеш 60с, запрашивается только если включена
+  автоторговля и заданы ключи — чтобы не дёргать API Gate.io на каждый опрос).
 - v3.349: fix "мелко и фигня получилась" — после минималистичного редизайна
   AMOLED-сейвера (v3.348) equity-строка была слишком мелкой (.78rem,
   letter-spacing .34em) относительно времени. Увеличены время (5.4→5.8rem,
@@ -478,7 +485,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.349"
+APP_VERSION = "3.350"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -671,6 +678,24 @@ alert_state = {
     "signals": [], "sent": 0,
 }
 alert_lock = threading.Lock()
+
+# Кеш баланса Gate.io для AMOLED-сейвера/опроса — чтобы не дёргать API на каждый /opt_status
+_gate_balance_cache = {"value": None, "ts": 0}
+_gate_balance_lock = threading.Lock()
+_GATE_BALANCE_TTL = 60  # секунд
+
+def _get_cached_gate_balance(cfg):
+    """Возвращает баланс USDT фьючерсного кошелька с кешем на _GATE_BALANCE_TTL секунд."""
+    now = time.time()
+    with _gate_balance_lock:
+        if now - _gate_balance_cache["ts"] < _GATE_BALANCE_TTL:
+            return _gate_balance_cache["value"]
+    bal, err = _gate_get_balance(cfg)
+    with _gate_balance_lock:
+        if not err and bal is not None:
+            _gate_balance_cache["value"] = bal
+        _gate_balance_cache["ts"] = now
+    return _gate_balance_cache["value"]
 
 # Кеш текущей незакрытой свечи — обновляется фоновым потоком
 _live_candle_cache = {}   # {"symbol_tf": {t,o,h,l,c,_fetched_at}}
@@ -6600,14 +6625,17 @@ details summary::-webkit-details-marker{display:none}
   user-select:none;pointer-events:none;white-space:nowrap;
 }
 #amoledContent .as-time{font-size:5.8rem;font-weight:300;letter-spacing:.04em;line-height:1;font-variant-numeric:tabular-nums}
-#amoledContent .as-eq{font-size:2.2rem;font-weight:600;letter-spacing:.02em;margin-top:14px;font-family:'DM Mono',monospace;color:inherit}
-#amoledContent .as-meta{font-size:.72rem;font-weight:500;letter-spacing:.22em;margin-top:12px;opacity:.5;text-transform:uppercase}
+#amoledContent .as-row{display:flex;align-items:baseline;justify-content:center;gap:18px;margin-top:14px;font-family:'DM Mono',monospace;font-variant-numeric:tabular-nums}
+#amoledContent .as-row .v1{font-size:2.2rem;font-weight:600;color:inherit}
+#amoledContent .as-row .v2,#amoledContent .as-row .v3{font-size:1.15rem;font-weight:500;opacity:.5}
+#amoledContent .as-row .v4{font-size:1.15rem;font-weight:500;opacity:.65}
 #amoledContent.night{color:rgba(255,255,255,.06)}
 #amoledContent.night .as-time{font-weight:200}
 @media (max-width:480px){
   #amoledContent .as-time{font-size:3.8rem}
-  #amoledContent .as-eq{font-size:1.5rem;margin-top:10px}
-  #amoledContent .as-meta{font-size:.62rem;margin-top:8px}
+  #amoledContent .as-row{gap:12px;margin-top:10px}
+  #amoledContent .as-row .v1{font-size:1.5rem}
+  #amoledContent .as-row .v2,#amoledContent .as-row .v3,#amoledContent .as-row .v4{font-size:.85rem}
 }
 </style></head><body>
 
@@ -8113,15 +8141,16 @@ function _amoledRender(night){
   const now=new Date();
   const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   let html=`<div class="as-time">${time}</div>`;
+  const row=[];
   if(best.equity!==undefined){
     const eq=best.equity, pos=eq>=100;
     const eqCol=night?'inherit':(pos?'rgba(163,191,111,.9)':'rgba(224,122,95,.85)');
-    html+=`<div class="as-eq" style="color:${eqCol}">$${eq.toFixed(0)}</div>`;
+    row.push(`<span class="v1" style="color:${eqCol}">$${eq.toFixed(0)}</span>`);
   }
-  const cycleStr=d.infinite?('Цикл '+(d.cycle||0)):'';
-  const elapsed=document.getElementById('progTime')?.textContent||'';
-  const meta=[cycleStr,elapsed].filter(Boolean).join(' · ');
-  if(meta) html+=`<div class="as-meta">${meta}</div>`;
+  if(best.winrate!=null)  row.push(`<span class="v2">${best.winrate.toFixed(0)}%</span>`);
+  if(best.trades!=null)   row.push(`<span class="v3">${best.trades}</span>`);
+  if(d.gate_balance!=null) row.push(`<span class="v4">$${d.gate_balance.toFixed(0)}</span>`);
+  if(row.length) html+=`<div class="as-row">${row.join('')}</div>`;
   return html;
 }
 
@@ -8292,6 +8321,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/opt_status":
             with opt_lock:
                 cr = opt_state.get("chart_path","")
+                _acfg = opt_state.get("alert_cfg") or {}
                 st = {
                     "running":        opt_state["running"],
                     "done":           opt_state["done"],
@@ -8329,6 +8359,12 @@ class Handler(BaseHTTPRequestHandler):
                     "htf_last_update": htf_state.get("last_update", 0),
                     "htf_stats":      opt_state.get("htf_stats"),
                 }
+            _gauto = _acfg.get("gate_auto_enabled", False)
+            _gauto = (_gauto is True) or (str(_gauto).lower() == "true")
+            if _gauto and _acfg.get("gate_key") and _acfg.get("gate_secret"):
+                st["gate_balance"] = _get_cached_gate_balance(_acfg)
+            else:
+                st["gate_balance"] = None
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
             self._json(st)
