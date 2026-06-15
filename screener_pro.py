@@ -454,7 +454,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.346"
+APP_VERSION = "3.347"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -647,6 +647,11 @@ alert_state = {
     "signals": [], "sent": 0,
 }
 alert_lock = threading.Lock()
+
+# Кэш баланса Gate — обновляется при /opt_status раз в 30с
+_gate_bal_cache = {"bal": None, "ts": 0}
+_gate_bal_lock  = threading.Lock()
+GATE_BAL_TTL    = 30  # секунд
 
 # Кеш текущей незакрытой свечи — обновляется фоновым потоком
 _live_candle_cache = {}   # {"symbol_tf": {t,o,h,l,c,_fetched_at}}
@@ -6562,23 +6567,37 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   text-align:center;font-family:'DM Mono',monospace;
-  color:rgba(255,255,255,.32);
+  color:rgba(255,255,255,.38);
   transition:opacity 1.1s ease,color 1.1s ease,top 1.1s ease,left 1.1s ease;
   user-select:none;pointer-events:none;white-space:nowrap;
+  min-width:280px;
 }
-#amoledContent .as-time{font-size:3.4rem;font-weight:500;letter-spacing:.04em;line-height:1}
-#amoledContent .as-date{font-size:.8rem;margin-top:6px;opacity:.65;text-transform:capitalize}
-#amoledContent .as-divider{width:34px;height:1px;background:currentColor;opacity:.25;margin:16px auto}
-#amoledContent .as-label{font-size:.62rem;letter-spacing:.18em;text-transform:uppercase;opacity:.5;margin-bottom:8px}
-#amoledContent .as-row{display:flex;gap:22px;justify-content:center}
-#amoledContent .as-row b{font-size:1.5rem;font-weight:600;display:block;color:inherit}
-#amoledContent .as-row span{font-size:.58rem;opacity:.55;display:block;margin-top:3px;letter-spacing:.12em;text-transform:uppercase}
-#amoledContent.night{color:rgba(255,255,255,.09)}
+#amoledContent .as-time{font-size:4.6rem;font-weight:500;letter-spacing:.04em;line-height:1}
+#amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.65;text-transform:capitalize}
+#amoledContent .as-divider{width:40px;height:1px;background:currentColor;opacity:.22;margin:18px auto}
+#amoledContent .as-label{font-size:.82rem;letter-spacing:.16em;text-transform:uppercase;opacity:.55;margin-bottom:10px}
+#amoledContent .as-row{display:flex;gap:26px;justify-content:center;flex-wrap:wrap}
+#amoledContent .as-row b{font-size:2rem;font-weight:600;display:block;color:inherit;line-height:1.1}
+#amoledContent .as-row span{font-size:.72rem;opacity:.55;display:block;margin-top:4px;letter-spacing:.12em;text-transform:uppercase}
+/* активная сделка */
+#amoledContent .as-trade{margin-top:14px;display:flex;align-items:center;justify-content:center;gap:14px}
+#amoledContent .as-trade-dir{font-size:1.5rem;font-weight:700;letter-spacing:.06em}
+#amoledContent .as-trade-info{text-align:left}
+#amoledContent .as-trade-info .as-ti-main{font-size:1.35rem;font-weight:600;line-height:1.1}
+#amoledContent .as-trade-info .as-ti-sub{font-size:.75rem;opacity:.6;margin-top:4px;letter-spacing:.07em}
+/* мини-свечи */
+#amoledContent .as-mini-chart{margin:12px auto 0;display:block;opacity:.75}
+/* статус сети */
+#amoledContent .as-net{display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:.85rem;opacity:.62}
+#amoledContent .as-net svg{flex-shrink:0}
+#amoledContent.night{color:rgba(255,255,255,.10)}
 #amoledContent.night .as-time{font-weight:400}
 @media (max-width:480px){
-  #amoledContent .as-time{font-size:2.6rem}
-  #amoledContent .as-row{gap:16px}
-  #amoledContent .as-row b{font-size:1.2rem}
+  #amoledContent .as-time{font-size:3.4rem}
+  #amoledContent .as-row{gap:18px}
+  #amoledContent .as-row b{font-size:1.6rem}
+  #amoledContent .as-trade-dir{font-size:1.2rem}
+  #amoledContent .as-trade-info .as-ti-main{font-size:1.1rem}
 }
 </style></head><body>
 
@@ -7375,6 +7394,8 @@ function _loadChartFrame(sym){
       .then(d=>{
         if(d.candles&&d.signals&&frame.contentWindow){
           frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals,pending_bar:d.pending_bar??null},'*');
+          window._chartCandles=d.candles;
+          window._chartSignals=d.signals;
         }
       })
       .catch(()=>{});
@@ -8080,48 +8101,122 @@ function _amoledIsNight(){
   return (h>=22 || h<7); // 22:00–07:00 — приглушённый режим, не слепит
 }
 
+/* Иконка сети Windows 10 tray */
+function _amoledNetIcon(online){
+  if(online){
+    return `<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="currentColor"/>
+      <path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".6"/>
+      <path d="M1 7a13 13 0 0 1 20 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".35"/>
+    </svg>`;
+  } else {
+    return `<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="rgba(255,75,55,.9)"/>
+      <path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="rgba(255,75,55,.4)" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="rgba(255,75,55,.25)" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <line x1="6" y1="4" x2="16" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="16" y1="4" x2="6" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>`;
+  }
+}
+
+/* Мини SVG-свечи от первой свечи сделки */
+function _amoledMiniChart(candles, entryIdx){
+  if(!candles||candles.length<2) return '';
+  const C=candles.slice(Math.max(0,entryIdx));
+  if(C.length<2) return '';
+  const W=180, H=54, cw=Math.max(Math.floor(W/C.length),3), gap=1;
+  const lo=Math.min(...C.map(c=>c[3])), hi=Math.max(...C.map(c=>c[2]));
+  const rng=hi-lo||1;
+  const py=v=>H-2-Math.round((v-lo)/rng*(H-4));
+  let bars='';
+  C.forEach((c,i)=>{
+    const x=i*cw, bw=Math.max(cw-gap,2);
+    const up=c[4]>=c[1];
+    const col=up?'rgba(140,210,100,.8)':'rgba(255,90,75,.8)';
+    const y1=py(Math.max(c[1],c[4])), y2=py(Math.min(c[1],c[4]));
+    const bh=Math.max(Math.abs(y1-y2),1);
+    const mx=x+Math.floor(bw/2);
+    bars+=`<rect x="${x}" y="${y1}" width="${bw}" height="${bh}" fill="${col}" rx="1"/>`;
+    bars+=`<line x1="${mx}" y1="${py(c[2])}" x2="${mx}" y2="${y1}" stroke="${col}" stroke-width="1"/>`;
+    bars+=`<line x1="${mx}" y1="${y2+bh}" x2="${mx}" y2="${py(c[3])}" stroke="${col}" stroke-width="1"/>`;
+  });
+  /* пунктир уровня входа — первая open цена */
+  const ep=py(C[0][1]);
+  bars+=`<line x1="0" y1="${ep}" x2="${W}" y2="${ep}" stroke="rgba(255,255,255,.28)" stroke-width="1" stroke-dasharray="3,3"/>`;
+  return `<svg class="as-mini-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bars}</svg>`;
+}
+
 function _amoledPanels(night){
   const d=window._lastPoll||{}, best=window._lastBest||{};
   const now=new Date();
   const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   const date=now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
   const head=`<div class="as-time">${time}</div><div class="as-date">${date}</div><div class="as-divider"></div>`;
-  const panels=[];
+  const online=!_connLost;
+  const sym=(document.getElementById('wf_symbol')?.value||'').trim().toUpperCase();
+  const tf=document.getElementById('wf_tf_sel')?.value||'';
 
+  /* — Депозит лучшего конфига — */
+  let depositBlock='';
   if(best.equity!==undefined){
-    const eq=best.equity, pos=eq>=100;
-    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.85)':'rgba(255,130,52,.8)');
-    panels.push(head+
-      `<div class="as-label">Лучший результат</div>`+
+    const eq=best.equity;
+    const eqCol=night?'inherit':(eq>=100?'rgba(163,210,100,.9)':'rgba(255,130,52,.9)');
+    depositBlock=
+      `<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''} · депозит</div>`+
       `<div class="as-row">`+
         `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b><span>Equity</span></div>`+
         `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>Winrate</span></div>`+
         `<div><b>${best.trades||0}</b><span>Сделок</span></div>`+
-        `<div><b>${(best.max_dd||0).toFixed(0)}%</b><span>DD</span></div>`+
-      `</div>`);
+      `</div>`;
+  } else {
+    depositBlock=`<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''}</div>`;
   }
 
-  const sym=(document.getElementById('wf_symbol')?.value||'').trim().toUpperCase();
-  const tf=document.getElementById('wf_tf_sel')?.value||'';
-  const cycleStr=d.infinite?('#'+(d.cycle||0)):'—';
-  const elapsed=document.getElementById('progTime')?.textContent||'—';
-  panels.push(head+
-    `<div class="as-label">${sym||'WickFill'}${tf?(' · '+tf):''}</div>`+
-    `<div class="as-row">`+
-      `<div><b>${cycleStr}</b><span>Цикл</span></div>`+
-      `<div><b>${elapsed}</b><span>В работе</span></div>`+
-    `</div>`);
+  /* — Баланс Gate — */
+  let balBlock='';
+  const gb=d.gate_bal;
+  if(gb!=null){
+    const gbCol=night?'inherit':'rgba(120,190,255,.9)';
+    balBlock=
+      `<div class="as-divider"></div>`+
+      `<div class="as-label">Gate.io · баланс</div>`+
+      `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b><span>USDT</span></div></div>`;
+  }
 
-  const cpu=document.getElementById('cpuTempText')?.textContent||'—';
-  const pf=(best.profit_factor!=null)?best.profit_factor.toFixed(2):'—';
-  panels.push(head+
-    `<div class="as-label">Состояние</div>`+
-    `<div class="as-row">`+
-      `<div><b>${cpu}</b><span>CPU</span></div>`+
-      `<div><b>${pf}</b><span>Profit F.</span></div>`+
-    `</div>`);
+  /* — Активная сделка из кэша chart_signals — */
+  let tradeBlock='', miniChart='';
+  const sigs=window._chartSignals||[];
+  const openSig=sigs.find(s=>s.open&&!s.closed);
+  if(openSig){
+    const isLong=openSig.dir==='long';
+    const dirLabel=isLong?'▲ LONG':'▼ SHORT';
+    const dirCol=night?'inherit':(isLong?'rgba(140,210,100,.95)':'rgba(255,90,75,.95)');
+    const ep=openSig.ep!=null?' EP $'+openSig.ep.toFixed(2):'';
+    const tp=openSig.tp!=null?' TP $'+openSig.tp.toFixed(2):'';
+    const sl=openSig.sl!=null?' SL $'+openSig.sl.toFixed(2):'';
+    tradeBlock=
+      `<div class="as-divider"></div>`+
+      `<div class="as-label">Активная сделка</div>`+
+      `<div class="as-trade">`+
+        `<div class="as-trade-dir" style="color:${dirCol}">${dirLabel}</div>`+
+        `<div class="as-trade-info">`+
+          `<div class="as-ti-main">${ep.trim()}</div>`+
+          `<div class="as-ti-sub">${(tp+' '+sl).trim()}</div>`+
+        `</div>`+
+      `</div>`;
+    const candles=window._chartCandles||[];
+    const entryIdx=openSig.bar_idx>=0?openSig.bar_idx:Math.max(0,candles.length-14);
+    const mc=_amoledMiniChart(candles,entryIdx);
+    if(mc) miniChart=mc;
+  }
 
-  return panels.length?panels:[head+`<div class="as-label">WickFill</div>`];
+  /* — Статус сети — */
+  const netLabel=online?'Подключено':'Нет связи';
+  const netBlock=`<div class="as-net">${_amoledNetIcon(online)}<span>${netLabel}</span></div>`;
+
+  return [head+depositBlock+balBlock+tradeBlock+miniChart+netBlock];
 }
 
 function _amoledShift(){
@@ -8334,6 +8429,24 @@ class Handler(BaseHTTPRequestHandler):
                 }
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
+            # Баланс Gate — не чаще раза в 30с
+            import time as _tm
+            _now = _tm.time()
+            with _gate_bal_lock:
+                _need = (_now - _gate_bal_cache["ts"]) > GATE_BAL_TTL
+                _cb = _gate_bal_cache["bal"]
+            if _need:
+                try:
+                    _ac = opt_state.get("alert_cfg") or alert_cfg
+                    _b, _e = _gate_get_balance(_ac)
+                    if not _e:
+                        with _gate_bal_lock:
+                            _gate_bal_cache["bal"] = round(_b, 2)
+                            _gate_bal_cache["ts"]  = _now
+                        _cb = _gate_bal_cache["bal"]
+                except Exception:
+                    pass
+            st["gate_bal"] = _cb
             self._json(st)
         elif parsed.path == "/opt_status_all":
             with opt_states_lock:
