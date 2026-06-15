@@ -1,27 +1,11 @@
-[2026-06-15 16:39:41] alert_cfg обновлён: auto=True key=да
-[2026-06-15 17:15:16] СИГНАЛ ЛОНГ ep=0.09006 tp=0.0911407 sl=0.0895647 tg=ok
-[2026-06-15 17:15:16] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
-[2026-06-15 17:15:16]   leverage=18× (risk=10.0% sl=0.55%)
-[2026-06-15 17:15:39]   ✓ Старая позиция закрыта (или не было)
-[2026-06-15 17:15:39]   ✓ Баланс: 42.48 USDT
-[2026-06-15 17:15:39]   ✓ Плечо: 18× (запрошено 18×)
-[2026-06-15 17:15:39]   [debug] balance=42.48 × 95.0% = margin=40.36 USDT × lev=18 → позиция~726.49 USDT
-[2026-06-15 17:15:39]   [debug] margin=40.36 × lev=18 / (ep=0.09 × qm=10.0) → size=807
-[2026-06-15 17:15:39]   ✓ Размер: 807 контр. | маржа 726.78 USDT | позиция 13082.12 USDT (18×)
-[2026-06-15 17:15:39]   ✓ Ордер: ЛОНГ DOGE_USDT TP=0.09114072000000001 ✅ | SL=0.08956467 ✅
-[2026-06-15 17:15:39] gate ✓ ЛОНГ lev=18 — итог
-[2026-06-15 17:40:21]   cleanup: отменено 1 зависших TP/SL ордеров (позиция закрыта)
-[2026-06-15 20:20:39] СИГНАЛ ЛОНГ ep=0.08956 tp=0.0906347 sl=0.0890674 tg=ok
-[2026-06-15 20:20:39] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
-[2026-06-15 20:20:39]   leverage=18× (risk=10.0% sl=0.55%)
-[2026-06-15 20:21:07]   ✓ Старая позиция закрыта (или не было)
-[2026-06-15 20:21:07]   ✓ Баланс: 37.64 USDT
-[2026-06-15 20:21:07]   ✓ Плечо: 18× (запрошено 18×)
-[2026-06-15 20:21:07]   [debug] balance=37.64 × 95.0% = margin=35.75 USDT × lev=18 → позиция~643.57 USDT
-[2026-06-15 20:21:07]   [debug] margin=35.75 × lev=18 / (ep=0.09 × qm=10.0) → size=719
-[2026-06-15 20:21:07]   ✓ Размер: 719 контр. | маржа 643.94 USDT | позиция 11590.86 USDT (18×)
-[2026-06-15 20:21:07]   ✓ Ордер: ЛОНГ DOGE_USDT TP=0.09063472 ✅ | SL=0.08906742000000001 ✅
-[2026-06-15 20:21:07] gate ✓ ЛОНГ lev=18 — итог
-[2026-06-15 20:36:20]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
-[2026-06-15 20:56:20]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
-[2026-06-15 21:15:49]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-15 19:51:42] alert_cfg обновлён: auto=True key=да
+[2026-06-15 20:05:27]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-15 21:10:15] СИГНАЛ ШОРТ ep=0.08944 tp=0.0883667 sl=0.089753 tg=fail
+[2026-06-15 21:10:15] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
+[2026-06-15 21:10:15]   leverage=29× (risk=10.0% sl=0.35%)
+[2026-06-15 21:11:02]   Ошибка получения баланса: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-15 21:11:02] gate ✕ ШОРТ lev=29 — итог
+[2026-06-15 21:15:22] СИГНАЛ ЛОНГ ep=0.08945 tp=0.0905234 sl=0.0891369 tg=fail
+[2026-06-15 21:15:22] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
+[2026-06-15 21:15:22]   leverage=29× (risk=10.0% sl=0.35%)
+[2026-06-15 21:15:57]   ✓ Старая позиция закрыта (или не было)
