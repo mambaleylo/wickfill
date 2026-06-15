@@ -74,7 +74,7 @@
     "pending_signal_t": null,
     "stability_ratio": 1.0,
     "validated_fitness": 69.7139,
-    "wf_slope": 1.68,
+    "wf_slope": 3.88,
     "wf_trend_penalty": 1.0
   },
   "top20": [
@@ -615,5 +615,5 @@
   "tf": "5m",
   "days": 12,
   "risk_pct": 10.0,
-  "saved_at": "2026-06-14 17:14:54"
+  "saved_at": "2026-06-15 08:22:07"
 }
