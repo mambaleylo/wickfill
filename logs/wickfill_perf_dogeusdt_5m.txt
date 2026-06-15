@@ -1,8 +1,8 @@
-WickFill perf-log  symbol=DOGE_USDT  tf=5m  saved=2026-06-15 10:38:55
+WickFill perf-log  symbol=DOGE_USDT  tf=5m  saved=2026-06-15 10:40:34
    время  событие                       детали
 --------------------------------------------------------------------------------
      0.0s  start                         symbol=DOGE_USDT  tf=5m  days=12  risk=10.0  pool=process  cpus=8
-    19.6s  pool_create                   workers=8  pool_type=process  n_candles=3456  ⚠ +19.6s
-    22.8s  pool_ready                    sec=22.8  workers=8
-    22.8s  cycle_start                   cycle=1  n_candles=3456
-    22.9s  crash                         error=Cannot choose from an empty sequence
+    18.4s  pool_create                   workers=8  pool_type=process  n_candles=3456  ⚠ +18.4s
+    21.7s  pool_ready                    sec=21.7  workers=8
+    21.7s  cycle_start                   cycle=1  n_candles=3456
+    21.7s  crash                         error=Cannot choose from an empty sequence
