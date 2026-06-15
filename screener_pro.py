@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.348
+WickFill Optimizer v3.349
+- v3.349: fix "мелко и фигня получилась" — после минималистичного редизайна
+  AMOLED-сейвера (v3.348) equity-строка была слишком мелкой (.78rem,
+  letter-spacing .34em) относительно времени. Увеличены время (5.4→5.8rem,
+  weight 200→300 — чуть плотнее) и equity (.78→2.2rem, теперь крупный
+  цветной акцент DM Mono вместо мелкого разреженного DM Sans). Возвращена
+  строка метаданных "Цикл N · время в работе" мелким текстом под equity
+  (как и раньше, но без даты/символа/USDT и без ротации панелей).
 - v3.348: редизайн AMOLED-сейвера — максимально минималистично: только
   время (HH:MM, крупное, тончайшее начертание DM Mono 200, широкий трекинг)
   и под ним equity ($X, мелкий DM Sans с разрядкой, цвет зависит от
@@ -471,7 +478,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.348"
+APP_VERSION = "3.349"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6592,13 +6599,15 @@ details summary::-webkit-details-marker{display:none}
   transition:opacity 1.2s ease,color 1.2s ease,top 1.2s ease,left 1.2s ease;
   user-select:none;pointer-events:none;white-space:nowrap;
 }
-#amoledContent .as-time{font-size:5.4rem;font-weight:200;letter-spacing:.09em;line-height:1;font-variant-numeric:tabular-nums}
-#amoledContent .as-eq{font-size:.78rem;font-weight:500;letter-spacing:.34em;margin-top:24px;font-family:'DM Sans',sans-serif;color:inherit;opacity:.75}
-#amoledContent.night{color:rgba(255,255,255,.045)}
-#amoledContent.night .as-time{font-weight:100}
+#amoledContent .as-time{font-size:5.8rem;font-weight:300;letter-spacing:.04em;line-height:1;font-variant-numeric:tabular-nums}
+#amoledContent .as-eq{font-size:2.2rem;font-weight:600;letter-spacing:.02em;margin-top:14px;font-family:'DM Mono',monospace;color:inherit}
+#amoledContent .as-meta{font-size:.72rem;font-weight:500;letter-spacing:.22em;margin-top:12px;opacity:.5;text-transform:uppercase}
+#amoledContent.night{color:rgba(255,255,255,.06)}
+#amoledContent.night .as-time{font-weight:200}
 @media (max-width:480px){
-  #amoledContent .as-time{font-size:3.6rem}
-  #amoledContent .as-eq{font-size:.62rem;margin-top:14px;letter-spacing:.26em}
+  #amoledContent .as-time{font-size:3.8rem}
+  #amoledContent .as-eq{font-size:1.5rem;margin-top:10px}
+  #amoledContent .as-meta{font-size:.62rem;margin-top:8px}
 }
 </style></head><body>
 
@@ -8100,15 +8109,19 @@ function _amoledIsNight(){
 }
 
 function _amoledRender(night){
-  const best=window._lastBest||{};
+  const best=window._lastBest||{}, d=window._lastPoll||{};
   const now=new Date();
   const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   let html=`<div class="as-time">${time}</div>`;
   if(best.equity!==undefined){
     const eq=best.equity, pos=eq>=100;
-    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.85)':'rgba(224,122,95,.8)');
+    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.9)':'rgba(224,122,95,.85)');
     html+=`<div class="as-eq" style="color:${eqCol}">$${eq.toFixed(0)}</div>`;
   }
+  const cycleStr=d.infinite?('Цикл '+(d.cycle||0)):'';
+  const elapsed=document.getElementById('progTime')?.textContent||'';
+  const meta=[cycleStr,elapsed].filter(Boolean).join(' · ');
+  if(meta) html+=`<div class="as-meta">${meta}</div>`;
   return html;
 }
 
