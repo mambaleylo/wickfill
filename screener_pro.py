@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.347
+WickFill Optimizer v3.348
+- v3.348: редизайн AMOLED-сейвера — максимально минималистично: только
+  время (HH:MM, крупное, тончайшее начертание DM Mono 200, широкий трекинг)
+  и под ним equity ($X, мелкий DM Sans с разрядкой, цвет зависит от
+  профита/убытка). Убраны "Цикл N · время в работе" и прочая мета-инфа,
+  убрана ротация панелей (panels[]/_amoledPanelIdx) — один стабильный вид,
+  каждые 30с обновляются значения и сдвигается позиция (анти-выгорание).
+  Ночной режим (22:00-07:00) — почти невидимый текст.
 - v3.347: fix "график всё равно иногда перекрывает" — в _carry_forward_open_signal
   не было проверки на случай, когда new_signals уже содержит сигнал с
   open_end=True (т.е. _simulate сам видит активную позицию на конец данных).
@@ -464,7 +471,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.347"
+APP_VERSION = "3.348"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6581,17 +6588,17 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   text-align:center;font-family:'DM Mono',monospace;
-  color:rgba(255,255,255,.30);
-  transition:opacity 1.1s ease,color 1.1s ease,top 1.1s ease,left 1.1s ease;
+  color:rgba(255,255,255,.26);
+  transition:opacity 1.2s ease,color 1.2s ease,top 1.2s ease,left 1.2s ease;
   user-select:none;pointer-events:none;white-space:nowrap;
 }
-#amoledContent .as-time{font-size:4.4rem;font-weight:300;letter-spacing:.05em;line-height:1;font-variant-numeric:tabular-nums}
-#amoledContent .as-sub{font-size:1.05rem;font-weight:500;letter-spacing:.14em;margin-top:18px;color:inherit}
-#amoledContent.night{color:rgba(255,255,255,.06)}
-#amoledContent.night .as-time{font-weight:200}
+#amoledContent .as-time{font-size:5.4rem;font-weight:200;letter-spacing:.09em;line-height:1;font-variant-numeric:tabular-nums}
+#amoledContent .as-eq{font-size:.78rem;font-weight:500;letter-spacing:.34em;margin-top:24px;font-family:'DM Sans',sans-serif;color:inherit;opacity:.75}
+#amoledContent.night{color:rgba(255,255,255,.045)}
+#amoledContent.night .as-time{font-weight:100}
 @media (max-width:480px){
-  #amoledContent .as-time{font-size:3.2rem}
-  #amoledContent .as-sub{font-size:.8rem;margin-top:12px}
+  #amoledContent .as-time{font-size:3.6rem}
+  #amoledContent .as-eq{font-size:.62rem;margin-top:14px;letter-spacing:.26em}
 }
 </style></head><body>
 
@@ -8083,35 +8090,26 @@ let _amoledOn = localStorage.getItem('wf_amoled')==='1';
 let _amoledTimer = null;
 const AMOLED_DELAY = 60000; // 1 минута
 
-/* ── AMOLED screensaver — ротация панелей + сдвиг позиции каждые 30с ── */
+/* ── AMOLED screensaver — время + equity, сдвиг позиции каждые 30с ── */
 const AMOLED_SHIFT_INTERVAL = 30000; // 30с
 let _amoledShiftTimer = null;
-let _amoledPanelIdx = 0;
 
 function _amoledIsNight(){
   const h=new Date().getHours();
   return (h>=22 || h<7); // 22:00–07:00 — приглушённый режим, не слепит
 }
 
-function _amoledPanels(night){
-  const d=window._lastPoll||{}, best=window._lastBest||{};
+function _amoledRender(night){
+  const best=window._lastBest||{};
   const now=new Date();
   const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
-  const head=`<div class="as-time">${time}</div>`;
-  const panels=[];
-
+  let html=`<div class="as-time">${time}</div>`;
   if(best.equity!==undefined){
     const eq=best.equity, pos=eq>=100;
-    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.85)':'rgba(255,130,52,.8)');
-    panels.push(head+`<div class="as-sub" style="color:${eqCol}">$${eq.toFixed(0)}</div>`);
+    const eqCol=night?'inherit':(pos?'rgba(163,191,111,.85)':'rgba(224,122,95,.8)');
+    html+=`<div class="as-eq" style="color:${eqCol}">$${eq.toFixed(0)}</div>`;
   }
-
-  const cycleStr=d.infinite?('Цикл '+(d.cycle||0)):'';
-  const elapsed=document.getElementById('progTime')?.textContent||'';
-  const meta=[cycleStr,elapsed].filter(Boolean).join(' · ');
-  if(meta) panels.push(head+`<div class="as-sub">${meta}</div>`);
-
-  return panels.length?panels:[head];
+  return html;
 }
 
 function _amoledShift(){
@@ -8119,23 +8117,19 @@ function _amoledShift(){
   const content=document.getElementById('amoledContent');
   if(!ov||!content||ov.style.display!=='block') return;
   const night=_amoledIsNight();
-  const panels=_amoledPanels(night);
-  const idx=_amoledPanelIdx%panels.length;
-  _amoledPanelIdx++;
   content.style.opacity='0';
   setTimeout(()=>{
     if(ov.style.display!=='block') return; // уже разбудили — не дорисовываем
     content.classList.toggle('night',night);
-    content.innerHTML=panels[idx];
+    content.innerHTML=_amoledRender(night);
     // случайное смещение в пределах центральной зоны — защита от выгорания AMOLED
-    content.style.top=(32+Math.random()*36)+'%';
-    content.style.left=(28+Math.random()*44)+'%';
+    content.style.top=(34+Math.random()*32)+'%';
+    content.style.left=(30+Math.random()*40)+'%';
     content.style.opacity='1';
   },350);
 }
 
 function _amoledStartScreensaver(){
-  _amoledPanelIdx=0;
   _amoledShift();
   if(_amoledShiftTimer) clearInterval(_amoledShiftTimer);
   _amoledShiftTimer=setInterval(_amoledShift, AMOLED_SHIFT_INTERVAL);
