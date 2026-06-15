@@ -11,3 +11,9 @@
 [2026-06-15 11:20:41]   ✓ Ордер: ШОРТ DOGE_USDT TP=0.08745776 ✅ | SL=0.08878555999999999 ✅
 [2026-06-15 11:20:41] gate ✓ ШОРТ lev=33 — итог
 [2026-06-15 11:23:27] alert_cfg обновлён: auto=False key=да
+[2026-06-15 11:23:27] alert_cfg обновлён: auto=False key=да
+[2026-06-15 11:25:10] СИГНАЛ ЛОНГ ep=0.08847 tp=0.0895316 sl=0.0882046 tg=ok
+[2026-06-15 11:25:10] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
+[2026-06-15 11:29:05] alert_cfg обновлён: auto=False key=да
+[2026-06-15 11:29:05] alert_cfg обновлён: auto=False key=да
+[2026-06-15 11:29:05] alert_cfg обновлён: auto=False key=да
