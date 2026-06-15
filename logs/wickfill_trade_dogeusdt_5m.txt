@@ -1,6 +1,4 @@
-[2026-06-15 12:52:54] alert_cfg обновлён: auto=False key=да
-[2026-06-15 13:10:09] СИГНАЛ ШОРТ ep=0.08861 tp=0.0875467 sl=0.0891417 tg=ok
-[2026-06-15 13:10:09] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
-[2026-06-15 13:32:51] alert_cfg обновлён: auto=False key=да
-[2026-06-15 15:20:11] СИГНАЛ ЛОНГ ep=0.08963 tp=0.0907056 sl=0.089137 tg=ok
-[2026-06-15 15:20:11] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
+[2026-06-15 14:54:12] alert_cfg обновлён: auto=True key=да
+[2026-06-15 15:20:19] СИГНАЛ ЛОНГ ep=0.08963 tp=0.0907056 sl=0.089137 tg=ok
+[2026-06-15 15:20:19] gate_check key=да secret=да pct=95.0 auto_on=True raw=True
+[2026-06-15 15:20:19]   leverage=18× (risk=10.0% sl=0.55%)
