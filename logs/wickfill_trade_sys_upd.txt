@@ -2,3 +2,5 @@
 [2026-06-15 17:15:09] СИГНАЛ ЛОНГ ep=0.09006 tp=0.0911407 sl=0.0895647 tg=ok
 [2026-06-15 17:15:09] gate_check key=да secret=да pct=90.0 auto_on=False raw=False
 [2026-06-15 18:05:58] alert_cfg обновлён: auto=True key=да
+[2026-06-15 18:05:58] alert_cfg обновлён: auto=True key=да
+[2026-06-15 18:06:01] alert_cfg обновлён: auto=True key=да
