@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.345
+WickFill Optimizer v3.346
+- v3.346: fix "график раз в ~5 минут перерисовывается и сделка на секунду
+  выглядит незакрытой (заливка/TP-SL до правого края), потом становится
+  норм" — пересборка chart_signals по завершении ЦИКЛА оптимизатора
+  (отдельный путь от SW-треда и reload-по-границе-TF, см. v3.339-3.343) не
+  делала carry-forward открытого/pending сигнала и НЕ обновляла
+  chart_signals_params после записи chart_signals. Из-за этого: (1) активная
+  открытая сделка могла "пропасть"/измениться при пересборке по итогам
+  цикла; (2) последующий тик SW-треда/reload-по-границе-TF сравнивал
+  prev_best_p со старыми (не обновлёнными) chart_signals_params и либо
+  ошибочно делал carry-forward, либо ошибочно пропускал его — сделка
+  попеременно отображалась то открытой (заливка до края), то закрытой
+  (с %-лейблом). Этот путь срабатывает по завершении цикла (~15 мин),
+  не привязан к границе TF (5 мин) — поэтому "редраун" мог произойти
+  посреди свечи. Теперь пересборка по завершении цикла снимает прежние
+  chart_signals/chart_signals_params/chart_pending_info ДО перезаписи,
+  применяет _carry_forward_open_signal/_carry_forward_pending_signal (как
+  два других пути) и сохраняет chart_signals_params=_tp/chart_pending_info
+  после записи.
 - v3.345: AMOLED-режим — минималистичный скринсейвер на чёрном экране вместо
   пустого оверлея. Показывает время/дату и ротирует 3 панели (лучший результат
   цикла: equity/WR/сделки/DD; символ+TF+цикл+время в работе; CPU+profit factor),
@@ -436,7 +454,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.346"
+APP_VERSION = "3.347"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -630,7 +648,7 @@ alert_state = {
 }
 alert_lock = threading.Lock()
 
-# Кэш баланса Gate — обновляется при каждом /opt_status запросе (раз в 30с)
+# Кэш баланса Gate — обновляется при /opt_status раз в 30с
 _gate_bal_cache = {"bal": None, "ts": 0}
 _gate_bal_lock  = threading.Lock()
 GATE_BAL_TTL    = 30  # секунд
@@ -5083,6 +5101,14 @@ def run_optimizer(params):
             # предпоследнюю свечу, которая успела закрыться во время цикла.
             with opt_lock:
                 _chart_src = list(_sw_candles) if _sw_candles else list(_cc_src_snap)
+                # Снимок текущих chart_signals/params/pending ДО перезаписи — нужен для
+                # carry-forward (см. ниже): пересборка графика по завершении цикла
+                # происходит на границе ЦИКЛА (не TF) и могла как "терять" текущую
+                # открытую сделку, так и оставлять chart_signals_params устаревшими
+                # (раньше этот путь их вообще не обновлял).
+                _prev_signals_cf = list(opt_state.get("chart_signals") or [])
+                _prev_params_cf  = opt_state.get("chart_signals_params")
+                _prev_pending_cf = opt_state.get("chart_pending_info")
             _htf_stats = None
             try:
                 with htf_lock:
@@ -5090,6 +5116,23 @@ def run_optimizer(params):
                 _sim = _simulate(_chart_src, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
+                _cpend_dir = _sim["pending_signal_dir"] if _sim else None
+                _cpend_t   = _sim["pending_signal_t"] if _sim else None
+
+                # Carry-forward открытого сигнала и pending-сигнала (см. _carry_forward_*
+                # докстринги) — без этого данный путь (пересборка по завершении цикла,
+                # без привязки к границе TF, может сработать посреди свечи) и
+                # тики SW-треда/reload-по-границе-TF (с carry-forward, см. v3.339-3.343)
+                # попеременно перезаписывали chart_signals то с "открытой" сделкой
+                # (заливка+TP/SL до правого края), то без — график на секунду
+                # показывал сделку то открытой, то закрытой (с %-лейблом),
+                # независимо от границы TF (v3.346).
+                _csig = _carry_forward_open_signal(_prev_signals_cf, _csig, _chart_src,
+                                                     prev_best_p=_prev_params_cf, cur_best_p=_tp)
+                _csig, _cpend, _cpend_dir, _cpend_t, _cpending_info = \
+                    _carry_forward_pending_signal(_prev_pending_cf, _csig, _chart_src, _tp,
+                                                   _cpend, _cpend_dir, _cpend_t)
+
                 print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
 
                 # --- HTF-фильтр: сводная статистика эффективности ---
@@ -5128,14 +5171,16 @@ def run_optimizer(params):
             except Exception as _ce:
                 import traceback
                 print(f"{_ts()} [chart] Ошибка: {_ce}\n{traceback.format_exc()}", flush=True)
-                _csig=[]; _cpend=None; _cfmt=[]; _cpath=""; _htf_stats=None
+                _csig=[]; _cpend=None; _cpending_info=None; _cfmt=[]; _cpath=""; _htf_stats=None
 
             with opt_lock:
                 _sw_params = _tp
                 opt_state["trade_best"] = _tb
                 opt_state["chart_candles"]     = _cfmt
                 opt_state["chart_signals"]     = _csig
+                opt_state["chart_signals_params"] = dict(_tp) if _tp else None
                 opt_state["chart_pending_bar"] = _cpend
+                opt_state["chart_pending_info"] = _cpending_info
                 opt_state["chart_path"]        = _cpath or ""
                 opt_state["chart_updated_at"]  = int(time.time())
                 opt_state["htf_stats"]         = _htf_stats
@@ -6530,21 +6575,20 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent .as-time{font-size:4.6rem;font-weight:500;letter-spacing:.04em;line-height:1}
 #amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.65;text-transform:capitalize}
 #amoledContent .as-divider{width:40px;height:1px;background:currentColor;opacity:.22;margin:18px auto}
-#amoledContent .as-label{font-size:.75rem;letter-spacing:.18em;text-transform:uppercase;opacity:.5;margin-bottom:10px}
-/* сетка данных */
+#amoledContent .as-label{font-size:.82rem;letter-spacing:.16em;text-transform:uppercase;opacity:.55;margin-bottom:10px}
 #amoledContent .as-row{display:flex;gap:26px;justify-content:center;flex-wrap:wrap}
 #amoledContent .as-row b{font-size:2rem;font-weight:600;display:block;color:inherit;line-height:1.1}
 #amoledContent .as-row span{font-size:.72rem;opacity:.55;display:block;margin-top:4px;letter-spacing:.12em;text-transform:uppercase}
 /* активная сделка */
-#amoledContent .as-trade{margin-top:14px;display:flex;align-items:center;justify-content:center;gap:12px}
-#amoledContent .as-trade-dir{font-size:1.45rem;font-weight:700;letter-spacing:.06em}
+#amoledContent .as-trade{margin-top:14px;display:flex;align-items:center;justify-content:center;gap:14px}
+#amoledContent .as-trade-dir{font-size:1.5rem;font-weight:700;letter-spacing:.06em}
 #amoledContent .as-trade-info{text-align:left}
 #amoledContent .as-trade-info .as-ti-main{font-size:1.35rem;font-weight:600;line-height:1.1}
-#amoledContent .as-trade-info .as-ti-sub{font-size:.72rem;opacity:.6;margin-top:3px;letter-spacing:.08em}
-/* мини-свечи сделки */
-#amoledContent .as-mini-chart{margin:12px auto 0;display:block;opacity:.7}
+#amoledContent .as-trade-info .as-ti-sub{font-size:.75rem;opacity:.6;margin-top:4px;letter-spacing:.07em}
+/* мини-свечи */
+#amoledContent .as-mini-chart{margin:12px auto 0;display:block;opacity:.75}
 /* статус сети */
-#amoledContent .as-net{display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:.82rem;opacity:.6}
+#amoledContent .as-net{display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:.85rem;opacity:.62}
 #amoledContent .as-net svg{flex-shrink:0}
 #amoledContent.night{color:rgba(255,255,255,.10)}
 #amoledContent.night .as-time{font-weight:400}
@@ -8057,34 +8101,32 @@ function _amoledIsNight(){
   return (h>=22 || h<7); // 22:00–07:00 — приглушённый режим, не слепит
 }
 
-/* Иконка сети в стиле Windows 10 трей */
+/* Иконка сети Windows 10 tray */
 function _amoledNetIcon(online){
   if(online){
-    /* Четыре дуги Wi-Fi / сигнала — все заполнены */
-    return `<svg class="as-net-ico" width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="9.5" y="15" width="3" height="3" rx="1.5" fill="currentColor"/>
-      <path d="M7 13a5.5 5.5 0 0 1 8 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-      <path d="M4 10a9.5 9.5 0 0 1 14 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none" opacity=".6"/>
-      <path d="M1.5 7a13 13 0 0 1 19 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none" opacity=".35"/>
+    return `<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="currentColor"/>
+      <path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".6"/>
+      <path d="M1 7a13 13 0 0 1 20 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".35"/>
     </svg>`;
   } else {
-    /* Крестик — нет связи */
-    return `<svg class="as-net-ico" width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="9.5" y="15" width="3" height="3" rx="1.5" fill="rgba(255,80,60,.9)"/>
-      <path d="M7 13a5.5 5.5 0 0 1 8 0" stroke="rgba(255,80,60,.5)" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-      <path d="M4 10a9.5 9.5 0 0 1 14 0" stroke="rgba(255,80,60,.3)" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-      <line x1="6" y1="5" x2="16" y2="5" stroke="rgba(255,80,60,.9)" stroke-width="2" stroke-linecap="round"/>
-      <line x1="6" y1="9" x2="16" y2="5" stroke="rgba(255,80,60,.9)" stroke-width="2" stroke-linecap="round"/>
+    return `<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="rgba(255,75,55,.9)"/>
+      <path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="rgba(255,75,55,.4)" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="rgba(255,75,55,.25)" stroke-width="1.7" stroke-linecap="round" fill="none"/>
+      <line x1="6" y1="4" x2="16" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="16" y1="4" x2="6" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>
     </svg>`;
   }
 }
 
-/* Мини SVG-свечи для активной сделки */
-function _amoledMiniChart(candles, entryIdx, dir){
+/* Мини SVG-свечи от первой свечи сделки */
+function _amoledMiniChart(candles, entryIdx){
   if(!candles||candles.length<2) return '';
-  const C=candles.slice(entryIdx>=0?entryIdx:Math.max(0,candles.length-14));
+  const C=candles.slice(Math.max(0,entryIdx));
   if(C.length<2) return '';
-  const W=180,H=52,cw=Math.floor(W/C.length),gap=1;
+  const W=180, H=54, cw=Math.max(Math.floor(W/C.length),3), gap=1;
   const lo=Math.min(...C.map(c=>c[3])), hi=Math.max(...C.map(c=>c[2]));
   const rng=hi-lo||1;
   const py=v=>H-2-Math.round((v-lo)/rng*(H-4));
@@ -8092,19 +8134,17 @@ function _amoledMiniChart(candles, entryIdx, dir){
   C.forEach((c,i)=>{
     const x=i*cw, bw=Math.max(cw-gap,2);
     const up=c[4]>=c[1];
-    const col=up?'rgba(140,210,100,.75)':'rgba(255,95,80,.75)';
-    const oy=py(Math.max(c[1],c[4])), cy=py(Math.min(c[1],c[4]));
-    const bh=Math.max(Math.abs(oy-cy),1);
-    bars+=`<rect x="${x}" y="${oy}" width="${bw}" height="${bh}" fill="${col}" rx="1"/>`;
-    bars+=`<line x1="${x+Math.floor(bw/2)}" y1="${py(c[2])}" x2="${x+Math.floor(bw/2)}" y2="${oy}" stroke="${col}" stroke-width="1"/>`;
-    bars+=`<line x1="${x+Math.floor(bw/2)}" y1="${cy+bh}" x2="${x+Math.floor(bw/2)}" y2="${py(c[3])}" stroke="${col}" stroke-width="1"/>`;
+    const col=up?'rgba(140,210,100,.8)':'rgba(255,90,75,.8)';
+    const y1=py(Math.max(c[1],c[4])), y2=py(Math.min(c[1],c[4]));
+    const bh=Math.max(Math.abs(y1-y2),1);
+    const mx=x+Math.floor(bw/2);
+    bars+=`<rect x="${x}" y="${y1}" width="${bw}" height="${bh}" fill="${col}" rx="1"/>`;
+    bars+=`<line x1="${mx}" y1="${py(c[2])}" x2="${mx}" y2="${y1}" stroke="${col}" stroke-width="1"/>`;
+    bars+=`<line x1="${mx}" y1="${y2+bh}" x2="${mx}" y2="${py(c[3])}" stroke="${col}" stroke-width="1"/>`;
   });
-  /* линия входа */
-  const entryC = C[0];
-  if(entryC){
-    const ep=py(entryC[1]);
-    bars+=`<line x1="0" y1="${ep}" x2="${W}" y2="${ep}" stroke="rgba(255,255,255,.3)" stroke-width="1" stroke-dasharray="3,3"/>`;
-  }
+  /* пунктир уровня входа — первая open цена */
+  const ep=py(C[0][1]);
+  bars+=`<line x1="0" y1="${ep}" x2="${W}" y2="${ep}" stroke="rgba(255,255,255,.28)" stroke-width="1" stroke-dasharray="3,3"/>`;
   return `<svg class="as-mini-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bars}</svg>`;
 }
 
@@ -8114,72 +8154,69 @@ function _amoledPanels(night){
   const time=now.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   const date=now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
   const head=`<div class="as-time">${time}</div><div class="as-date">${date}</div><div class="as-divider"></div>`;
-  const online=!window._connLost;
+  const online=!_connLost;
   const sym=(document.getElementById('wf_symbol')?.value||'').trim().toUpperCase();
   const tf=document.getElementById('wf_tf_sel')?.value||'';
 
-  /* ── Блок депозита лучшего конфига ── */
+  /* — Депозит лучшего конфига — */
   let depositBlock='';
   if(best.equity!==undefined){
     const eq=best.equity;
-    const pos=eq>=100;
-    const eqCol=night?'inherit':(pos?'rgba(163,210,100,.9)':'rgba(255,130,52,.9)');
-    const wr=(best.winrate||0).toFixed(0);
+    const eqCol=night?'inherit':(eq>=100?'rgba(163,210,100,.9)':'rgba(255,130,52,.9)');
     depositBlock=
-      `<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''} · Депозит</div>`+
+      `<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''} · депозит</div>`+
       `<div class="as-row">`+
         `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b><span>Equity</span></div>`+
-        `<div><b>${wr}%</b><span>Winrate</span></div>`+
+        `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>Winrate</span></div>`+
         `<div><b>${best.trades||0}</b><span>Сделок</span></div>`+
       `</div>`;
   } else {
-    depositBlock=`<div class="as-label">WickFill${sym?' · '+sym:''}${tf?' · '+tf:''}</div>`;
+    depositBlock=`<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''}</div>`;
   }
 
-  /* ── Блок баланса Gate ── */
+  /* — Баланс Gate — */
   let balBlock='';
   const gb=d.gate_bal;
   if(gb!=null){
     const gbCol=night?'inherit':'rgba(120,190,255,.9)';
     balBlock=
       `<div class="as-divider"></div>`+
-      `<div class="as-label">Gate.io · Баланс</div>`+
+      `<div class="as-label">Gate.io · баланс</div>`+
       `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b><span>USDT</span></div></div>`;
   }
 
-  /* ── Активная сделка из chart_signals ── */
+  /* — Активная сделка из кэша chart_signals — */
   let tradeBlock='', miniChart='';
   const sigs=window._chartSignals||[];
   const openSig=sigs.find(s=>s.open&&!s.closed);
   if(openSig){
-    const dirLabel=openSig.dir==='long'?'▲ LONG':'▼ SHORT';
-    const dirCol=night?'inherit':(openSig.dir==='long'?'rgba(163,210,100,.95)':'rgba(255,95,80,.95)');
-    const ep=openSig.ep!=null?'EP $'+openSig.ep.toFixed(2):'';
-    const tp=openSig.tp!=null?' · TP $'+openSig.tp.toFixed(2):'';
-    const sl=openSig.sl!=null?' · SL $'+openSig.sl.toFixed(2):'';
+    const isLong=openSig.dir==='long';
+    const dirLabel=isLong?'▲ LONG':'▼ SHORT';
+    const dirCol=night?'inherit':(isLong?'rgba(140,210,100,.95)':'rgba(255,90,75,.95)');
+    const ep=openSig.ep!=null?' EP $'+openSig.ep.toFixed(2):'';
+    const tp=openSig.tp!=null?' TP $'+openSig.tp.toFixed(2):'';
+    const sl=openSig.sl!=null?' SL $'+openSig.sl.toFixed(2):'';
     tradeBlock=
       `<div class="as-divider"></div>`+
       `<div class="as-label">Активная сделка</div>`+
       `<div class="as-trade">`+
         `<div class="as-trade-dir" style="color:${dirCol}">${dirLabel}</div>`+
         `<div class="as-trade-info">`+
-          `<div class="as-ti-main">${ep}</div>`+
-          `<div class="as-ti-sub">${(tp+sl).replace(/^ · /,'')}</div>`+
+          `<div class="as-ti-main">${ep.trim()}</div>`+
+          `<div class="as-ti-sub">${(tp+' '+sl).trim()}</div>`+
         `</div>`+
       `</div>`;
-    /* Мини-график с начала сделки */
     const candles=window._chartCandles||[];
     const entryIdx=openSig.bar_idx>=0?openSig.bar_idx:Math.max(0,candles.length-14);
-    miniChart=_amoledMiniChart(candles,entryIdx,openSig.dir);
+    const mc=_amoledMiniChart(candles,entryIdx);
+    if(mc) miniChart=mc;
   }
 
-  /* ── Статус сети ── */
+  /* — Статус сети — */
   const netLabel=online?'Подключено':'Нет связи';
-  const netBlock=
-    `<div class="as-net">${_amoledNetIcon(online)}<span>${netLabel}</span></div>`;
+  const netBlock=`<div class="as-net">${_amoledNetIcon(online)}<span>${netLabel}</span></div>`;
 
-  const content=head+depositBlock+balBlock+tradeBlock+miniChart+netBlock;
-  return [content];
+  return [head+depositBlock+balBlock+tradeBlock+miniChart+netBlock];
 }
 
 function _amoledShift(){
@@ -8392,24 +8429,24 @@ class Handler(BaseHTTPRequestHandler):
                 }
             with alert_lock:
                 st["alert_sent"] = alert_state["sent"]
-            # Баланс Gate — обновляем не чаще раза в 30с
-            import time as _time_mod
-            now_ts = _time_mod.time()
+            # Баланс Gate — не чаще раза в 30с
+            import time as _tm
+            _now = _tm.time()
             with _gate_bal_lock:
-                need_refresh = (now_ts - _gate_bal_cache["ts"]) > GATE_BAL_TTL
-                cached_bal = _gate_bal_cache["bal"]
-            if need_refresh:
+                _need = (_now - _gate_bal_cache["ts"]) > GATE_BAL_TTL
+                _cb = _gate_bal_cache["bal"]
+            if _need:
                 try:
                     _ac = opt_state.get("alert_cfg") or alert_cfg
                     _b, _e = _gate_get_balance(_ac)
                     if not _e:
                         with _gate_bal_lock:
                             _gate_bal_cache["bal"] = round(_b, 2)
-                            _gate_bal_cache["ts"]  = now_ts
-                        cached_bal = _gate_bal_cache["bal"]
+                            _gate_bal_cache["ts"]  = _now
+                        _cb = _gate_bal_cache["bal"]
                 except Exception:
                     pass
-            st["gate_bal"] = cached_bal
+            st["gate_bal"] = _cb
             self._json(st)
         elif parsed.path == "/opt_status_all":
             with opt_states_lock:
@@ -9208,6 +9245,5 @@ if __name__ == "__main__":
     print(f"  По сети:   http://{local_ip}:{port}")
     print(f"Остановить: Ctrl+C")
     ReusableHTTPServer(("",port),Handler).serve_forever()
-
 
 
