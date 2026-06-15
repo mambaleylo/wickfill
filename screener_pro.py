@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.345
+WickFill Optimizer v3.346
+- v3.346: fix "график раз в ~5 минут перерисовывается и сделка на секунду
+  выглядит незакрытой (заливка/TP-SL до правого края), потом становится
+  норм" — пересборка chart_signals по завершении ЦИКЛА оптимизатора
+  (отдельный путь от SW-треда и reload-по-границе-TF, см. v3.339-3.343) не
+  делала carry-forward открытого/pending сигнала и НЕ обновляла
+  chart_signals_params после записи chart_signals. Из-за этого: (1) активная
+  открытая сделка могла "пропасть"/измениться при пересборке по итогам
+  цикла; (2) последующий тик SW-треда/reload-по-границе-TF сравнивал
+  prev_best_p со старыми (не обновлёнными) chart_signals_params и либо
+  ошибочно делал carry-forward, либо ошибочно пропускал его — сделка
+  попеременно отображалась то открытой (заливка до края), то закрытой
+  (с %-лейблом). Этот путь срабатывает по завершении цикла (~15 мин),
+  не привязан к границе TF (5 мин) — поэтому "редраун" мог произойти
+  посреди свечи. Теперь пересборка по завершении цикла снимает прежние
+  chart_signals/chart_signals_params/chart_pending_info ДО перезаписи,
+  применяет _carry_forward_open_signal/_carry_forward_pending_signal (как
+  два других пути) и сохраняет chart_signals_params=_tp/chart_pending_info
+  после записи.
 - v3.345: AMOLED-режим — минималистичный скринсейвер на чёрном экране вместо
   пустого оверлея. Показывает время/дату и ротирует 3 панели (лучший результат
   цикла: equity/WR/сделки/DD; символ+TF+цикл+время в работе; CPU+profit factor),
@@ -436,7 +454,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.345"
+APP_VERSION = "3.346"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5078,6 +5096,14 @@ def run_optimizer(params):
             # предпоследнюю свечу, которая успела закрыться во время цикла.
             with opt_lock:
                 _chart_src = list(_sw_candles) if _sw_candles else list(_cc_src_snap)
+                # Снимок текущих chart_signals/params/pending ДО перезаписи — нужен для
+                # carry-forward (см. ниже): пересборка графика по завершении цикла
+                # происходит на границе ЦИКЛА (не TF) и могла как "терять" текущую
+                # открытую сделку, так и оставлять chart_signals_params устаревшими
+                # (раньше этот путь их вообще не обновлял).
+                _prev_signals_cf = list(opt_state.get("chart_signals") or [])
+                _prev_params_cf  = opt_state.get("chart_signals_params")
+                _prev_pending_cf = opt_state.get("chart_pending_info")
             _htf_stats = None
             try:
                 with htf_lock:
@@ -5085,6 +5111,23 @@ def run_optimizer(params):
                 _sim = _simulate(_chart_src, _tp, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_d, htf_index=_htf_index)
                 _csig = _sim["_signals"] if _sim else []
                 _cpend = _sim["pending_signal_bar"] if _sim else None
+                _cpend_dir = _sim["pending_signal_dir"] if _sim else None
+                _cpend_t   = _sim["pending_signal_t"] if _sim else None
+
+                # Carry-forward открытого сигнала и pending-сигнала (см. _carry_forward_*
+                # докстринги) — без этого данный путь (пересборка по завершении цикла,
+                # без привязки к границе TF, может сработать посреди свечи) и
+                # тики SW-треда/reload-по-границе-TF (с carry-forward, см. v3.339-3.343)
+                # попеременно перезаписывали chart_signals то с "открытой" сделкой
+                # (заливка+TP/SL до правого края), то без — график на секунду
+                # показывал сделку то открытой, то закрытой (с %-лейблом),
+                # независимо от границы TF (v3.346).
+                _csig = _carry_forward_open_signal(_prev_signals_cf, _csig, _chart_src,
+                                                     prev_best_p=_prev_params_cf, cur_best_p=_tp)
+                _csig, _cpend, _cpend_dir, _cpend_t, _cpending_info = \
+                    _carry_forward_pending_signal(_prev_pending_cf, _csig, _chart_src, _tp,
+                                                   _cpend, _cpend_dir, _cpend_t)
+
                 print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
 
                 # --- HTF-фильтр: сводная статистика эффективности ---
@@ -5123,14 +5166,16 @@ def run_optimizer(params):
             except Exception as _ce:
                 import traceback
                 print(f"{_ts()} [chart] Ошибка: {_ce}\n{traceback.format_exc()}", flush=True)
-                _csig=[]; _cpend=None; _cfmt=[]; _cpath=""; _htf_stats=None
+                _csig=[]; _cpend=None; _cpending_info=None; _cfmt=[]; _cpath=""; _htf_stats=None
 
             with opt_lock:
                 _sw_params = _tp
                 opt_state["trade_best"] = _tb
                 opt_state["chart_candles"]     = _cfmt
                 opt_state["chart_signals"]     = _csig
+                opt_state["chart_signals_params"] = dict(_tp) if _tp else None
                 opt_state["chart_pending_bar"] = _cpend
+                opt_state["chart_pending_info"] = _cpending_info
                 opt_state["chart_path"]        = _cpath or ""
                 opt_state["chart_updated_at"]  = int(time.time())
                 opt_state["htf_stats"]         = _htf_stats
