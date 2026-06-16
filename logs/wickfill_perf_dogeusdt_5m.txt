@@ -1,13 +1,7 @@
-WickFill perf-log  symbol=DOGE_USDT  tf=5m  saved=2026-06-16 13:37:21
+WickFill perf-log  symbol=DOGE_USDT  tf=5m  saved=2026-06-16 14:55:32
    время  событие                       детали
 --------------------------------------------------------------------------------
      0.0s  start                         symbol=DOGE_USDT  tf=5m  days=12  risk=10.0  pool=process  cpus=8
-    77.9s  pool_create                   workers=8  pool_type=process  n_candles=3458  🔴 +77.9s ЗАТЫК
-    78.8s  pool_create                   workers=8  pool_type=process  n_candles=3456
-    79.6s  pool_ready                    sec=589.1  workers=8
-    79.6s  optimizer_done                reason=stop_flag
-    80.0s  pool_ready                    sec=80.0  workers=8
-    80.0s  optimizer_done                reason=stop_flag
-    95.0s  pool_create                   workers=8  pool_type=process  n_candles=3458  ⚠ +15.0s
-    95.6s  pool_ready                    sec=588.3  workers=8
-    95.6s  optimizer_done                reason=stop_flag
+    24.9s  pool_create                   workers=8  pool_type=process  n_candles=3456  ⚠ +24.9s
+    31.0s  pool_ready                    sec=31.0  workers=8  ⚠ +6.2s
+    31.0s  optimizer_done                reason=stop_flag
