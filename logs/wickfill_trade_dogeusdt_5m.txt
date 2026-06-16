@@ -1,2 +1,2 @@
-[2026-06-15 22:18:14] alert_cfg обновлён: auto=True key=да
-[2026-06-15 23:05:29]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-16 20:49:13] alert_cfg обновлён: auto=True key=да
+[2026-06-16 21:10:26]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
