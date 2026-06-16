@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.355
+WickFill Optimizer v3.356
 - v3.355: GitHub Token вынесен из кода — читается из ~/.wf_token / env GH_TOKEN;
   UI-поле + кнопка «Сохранить» в блоке Gate.io (эндпоинт /set_gh_token);
   _GH_TOKEN обновляется в памяти без перезапуска. Фикс: конфиги не
@@ -503,7 +503,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.355"
+APP_VERSION = "3.356"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4337,6 +4337,8 @@ def _find_auto_config(symbol, tf, days, risk_pct):
 
     # 1. Попытка с GitHub
     try:
+        if not _GH_TOKEN:
+            raise ValueError("_GH_TOKEN не задан")
         gh_files = _gh_list_folder("configs")
         for f in gh_files:
             name = f["name"]
@@ -4984,6 +4986,10 @@ def run_optimizer(params):
             all_wf = _glob2.glob(os.path.join(d, "wickfill_*.json"))
             if all_wf:
                 olog(f"   📁 {d}: {[os.path.basename(f) for f in all_wf]}", "info")
+        if _GH_TOKEN:
+            olog(f"🔑 GitHub токен: есть ({_GH_TOKEN[:8]}…)", "info")
+        else:
+            olog("⚠ GitHub токен не задан — конфиг с GitHub не загрузить. Введи токен в блоке Gate.io и нажми «Сохранить».", "warn")
         auto_path, auto_data = _find_auto_config(symbol, tf, days, risk_pct)
         if auto_data:
             seed = {"best": auto_data["best"], "top20": auto_data.get("top20", [])}
