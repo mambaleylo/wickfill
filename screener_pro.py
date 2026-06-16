@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.353
-- v3.353: fix граф показывает локальный конфиг, а GitHub не обновляется —
-  корень: в _auto_save_config проверка «файл с таким же именем уже на GitHub»
-  блокировала PUT даже когда наш validated_fitness строго лучше (одинаковое
-  имя = одинаковый equity+sl+tp, но разные параметры / лучшая WF-стабильность).
+WickFill Optimizer v3.355
+- v3.355: GitHub Token вынесен из кода — читается из ~/.wf_token / env GH_TOKEN;
+  UI-поле + кнопка «Сохранить» в блоке Gate.io (эндпоинт /set_gh_token);
+  _GH_TOKEN обновляется в памяти без перезапуска. Фикс: конфиги не
+  грузились и не сохранялись — старый токен был в коде и инвалидирован.
   Теперь пропуск только если our_fit ≤ gh_best_fit; если наш vfit выше —
   перезаписываем (PUT обновляет файл по SHA, имя то же, данные лучше).
 - v3.352: AMOLED-сейвер — полный откат к "богатой" версии редизайна 3.347
@@ -503,7 +503,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.353"
+APP_VERSION = "3.355"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4164,7 +4164,21 @@ _AUTO_DIRS = [
 ]
 
 # ── GitHub Sync ──────────────────────────────────────────────────────────────
-_GH_TOKEN  = "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"
+# Токен НЕ хранится в коде (GitHub secret scanning блокирует push).
+# Приоритет: env GH_TOKEN → ~/.wf_token → /sdcard/Download/WickFill/.wf_token
+def _load_gh_token():
+    import os as _os
+    t = _os.environ.get("GH_TOKEN", "").strip()
+    if t: return t
+    for p in [_os.path.expanduser("~/.wf_token"),
+              "/sdcard/Download/WickFill/.wf_token",
+              _os.path.join(_script_dir(), ".wf_token")]:
+        try:
+            v = open(p).read().strip()
+            if v: return v
+        except Exception: pass
+    return ""
+_GH_TOKEN  = _load_gh_token()
 _GH_REPO   = "mambaleylo/wickfill"
 _GH_API    = "https://api.github.com"
 _GH_SYNC_PENDING = []   # [(local_path, gh_path, content_str)] — очередь на синхронизацию
@@ -6937,6 +6951,18 @@ details summary::-webkit-details-marker{display:none}
           <button class="btn-tg-test" style="flex:1;background:rgba(58,125,82,0.15);color:var(--green);border-color:var(--green)" onclick="gateTestTrade(1)">🔵 Лонг $5×5</button>
           <button class="btn-tg-test" style="flex:1;background:rgba(160,48,48,0.12);color:#c0514a;border-color:#c0514a" onclick="gateTestTrade(-1)">🔴 Шорт $5×5</button>
         </div>
+        <!-- GitHub Token -->
+        <div class="field" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+          <label>GitHub Token</label>
+          <div style="display:flex;gap:6px">
+            <input type="password" id="gh_token_input" placeholder="ghp_..." autocomplete="off"
+              style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text1);font-size:.8rem">
+            <button class="btn-tg-test" onclick="saveGhToken()" style="white-space:nowrap">💾 Сохранить</button>
+          </div>
+          <div id="ghTokenStatus" style="font-size:.7rem;color:var(--text3);margin-top:4px">
+            Токен хранится в ~/.wf_token, не в коде. Нужен для загрузки и сохранения конфигов.
+          </div>
+        </div>
       </div>
     </details>
 
@@ -7188,6 +7214,20 @@ function saveAlertCfg(){
     .then(r=>r.json()).then(d=>{
       if(!d.ok) console.warn('[WickFill] update_alert_cfg failed:',d.msg);
     }).catch(e=>console.warn('[WickFill] update_alert_cfg error:',e));
+}
+
+function saveGhToken(){
+  const inp=document.getElementById('gh_token_input');
+  const st=document.getElementById('ghTokenStatus');
+  const tok=(inp?.value||'').trim();
+  if(!tok){if(st)st.textContent='❌ Введи токен';return;}
+  if(st)st.textContent='Сохраняю...';
+  fetch('/set_gh_token',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:tok})})
+    .then(r=>r.json()).then(d=>{
+      if(st)st.textContent=d.ok?'✅ Токен сохранён в ~/.wf_token':'❌ '+d.msg;
+      if(d.ok&&inp)inp.value='';
+    }).catch(e=>{if(st)st.textContent='❌ '+e;});
 }
 
 function sendTestNtfy(){
@@ -9131,7 +9171,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
 
-        if parsed.path == "/update_script":
+        if parsed.path == "/set_gh_token":
+            global _GH_TOKEN
+            try: params = json.loads(body)
+            except: self._json({"ok": False, "msg": "bad JSON"}); return
+            tok = (params.get("token") or "").strip()
+            if not tok:
+                self._json({"ok": False, "msg": "пустой токен"}); return
+            # Сохраняем в ~/.wf_token
+            try:
+                import os as _os
+                tok_path = _os.path.expanduser("~/.wf_token")
+                with open(tok_path, "w") as _tf:
+                    _tf.write(tok)
+            except Exception as _e:
+                self._json({"ok": False, "msg": f"ошибка записи: {_e}"}); return
+            _GH_TOKEN = tok  # обновляем в памяти без перезапуска
+            print(f"{_ts()} [gh] ✅ _GH_TOKEN обновлён через UI", flush=True)
+            self._json({"ok": True})
+            return
             try:
                 import urllib.request as _ur
                 _raw_url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/screener_pro.py"
