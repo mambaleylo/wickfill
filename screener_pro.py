@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.352
+WickFill Optimizer v3.353
+- v3.353: fix граф показывает локальный конфиг, а GitHub не обновляется —
+  корень: в _auto_save_config проверка «файл с таким же именем уже на GitHub»
+  блокировала PUT даже когда наш validated_fitness строго лучше (одинаковое
+  имя = одинаковый equity+sl+tp, но разные параметры / лучшая WF-стабильность).
+  Теперь пропуск только если our_fit ≤ gh_best_fit; если наш vfit выше —
+  перезаписываем (PUT обновляет файл по SHA, имя то же, данные лучше).
 - v3.352: AMOLED-сейвер — полный откат к "богатой" версии редизайна 3.347
   (00b913e, до revert): время+дата, депозит (equity/winrate/сделок),
   баланс Gate.io, блок активной сделки (направление, EP/TP/SL) с
@@ -497,7 +503,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.352"
+APP_VERSION = "3.353"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4445,9 +4451,12 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         if gh_best_fit > our_fit:
             _log(f"⏭ GitHub уже лучше (gh={gh_best_fit:.2f} > our={our_fit:.2f}), пропускаем сохранение", "info")
             return fpath
-        # Если файл с точно таким же именем уже есть на GitHub — не перезаписываем (идентичный конфиг)
-        if any(_ef["name"] == fname for _ef in existing_files):
-            _log(f"⏭ Конфиг {fname} уже на GitHub, пропускаем", "info")
+        # Если файл с точно таким же именем уже есть на GitHub — пропускаем ТОЛЬКО если
+        # наш vfit не лучше. Если наш vfit строго выше (лучшая стабильность / WF),
+        # перезаписываем — иначе более качественный локальный конфиг никогда не попадёт
+        # на GitHub когда equity/sl/tp совпадают с уже лежащим там файлом.
+        if any(_ef["name"] == fname for _ef in existing_files) and our_fit <= gh_best_fit:
+            _log(f"⏭ Конфиг {fname} уже на GitHub (vfit не лучше: our={our_fit:.2f} ≤ gh={gh_best_fit:.2f}), пропускаем", "info")
             return fpath
         # Защита от перезаписи конфига с сильно лучшей прибылью (даже если vfit хуже)
         # Не перезаписываем если новый equity < 70% от текущего на GitHub
