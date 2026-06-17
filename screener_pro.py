@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.366: fitness high-equity mode — порог зависит от days_limit:
+  1-10 дней → 3000-5000, >10 дней → 6000-8000.
 - v3.365: fitness high-equity mode — порог изменён 8000-12000 → 6000-8000.
 - v3.364: SL/TP sweep — модальное окно поверх страницы (fixed overlay),
   не обрезается sidebar; кнопка ✕ и клик по тени закрывают; max-height 82vh со скроллом.
@@ -545,7 +547,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.365"
+APP_VERSION = "3.366"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1587,10 +1589,13 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         net_return=equity-100.0
 
         # --- Режим насыщения по депозиту ---
-        # При equity > 6000 депозит достаточно вырос — переключаемся на максимизацию
-        # числа сделок и винрейта (стабильность стратегии), снижая приоритет роста депозита.
-        # Переход плавный: 0.0 при equity<=6000, 1.0 при equity>=8000.
-        _high_eq_mode = min(1.0, max(0.0, (equity - 6000.0) / 2000.0))
+        # Короткие окна (1-10 дней): порог 3000-5000 (быстрый рост за малый период → раньше насыщение).
+        # Длинные окна (>10 дней): порог 6000-8000.
+        if days_limit and days_limit <= 10:
+            _heq_lo, _heq_hi = 3000.0, 5000.0
+        else:
+            _heq_lo, _heq_hi = 6000.0, 8000.0
+        _high_eq_mode = min(1.0, max(0.0, (equity - _heq_lo) / (_heq_hi - _heq_lo)))
 
         # --- Calmar: логарифмически нормирован ---
         # DD>=20% — полный обрыв calmar
