@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.358
+WickFill Optimizer v3.359
+- v3.359: на планшете (701-1024px) #chartFrame занимал flex:1/height:100% — всё
+  оставшееся вертикальное место под top-strip, слишком много экрана. Добавлен
+  отдельный media-брейкпоинт: график теперь 45vh (~в 1.5 раза меньше). Значение
+  оценочное без точных размеров устройства — если криво, скажи насколько, подкручу.
 - v3.358: баланс Gate.io в кеше (_gate_balance_cache) больше не обновляется по таймеру
   (TTL 60с) — из-за этого на AMOLED-скринсейвере число плыло вместе с floating PnL
   открытой позиции, выглядело как мерцание. Теперь обновляется только (1) при первом
@@ -519,7 +523,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.358"
+APP_VERSION = "3.359"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6590,6 +6594,16 @@ details summary:hover{color:var(--bark)}
 details summary::before{content:'›';font-size:1rem;transition:transform .2s}
 details[open] summary::before{transform:rotate(90deg)}
 details summary::-webkit-details-marker{display:none}
+
+/* ── Responsive tablet (701–1024px) — на планшете десктопный layout с sidebar+chart-area
+   рендерится как есть, но #chartFrame{flex:1;height:100%} занимает ВСЁ оставшееся
+   вертикальное место под top-strip — на планшете это слишком много экрана. Уменьшаем
+   график ~в 1.5 раза (примерная оценка без точных пикселей устройства — если криво,
+   скажи насколько именно, подкручу значение). */
+@media(min-width:701px) and (max-width:1024px){
+  .chart-area{flex:0 0 auto;height:45vh;min-height:0}
+  #chartFrame{flex:none;height:45vh}
+}
 
 /* ── Responsive mobile ── */
 @media(max-width:700px){
