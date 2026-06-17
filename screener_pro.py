@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.357
+WickFill Optimizer v3.358
+- v3.358: баланс Gate.io в кеше (_gate_balance_cache) больше не обновляется по таймеру
+  (TTL 60с) — из-за этого на AMOLED-скринсейвере число плыло вместе с floating PnL
+  открытой позиции, выглядело как мерцание. Теперь обновляется только (1) при первом
+  запросе после старта и (2) сразу после закрытия сделки тейком/стопом — пишет
+  _check_trade_close. Между закрытиями значение зафиксировано (realized only).
 - v3.357: (1) Метрополис-критерий в Basin Hopping — раньше bh_current двигался ТОЛЬКО
   при улучшении глобального лучшего (hill-climbing с рестартами, не настоящий БХ);
   любой временно-худший путь (напр. больший SL, который сразу выглядит хуже до
@@ -514,7 +519,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.357"
+APP_VERSION = "3.358"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -708,22 +713,25 @@ alert_state = {
 }
 alert_lock = threading.Lock()
 
-# Кеш баланса Gate.io для AMOLED-сейвера/опроса — чтобы не дёргать API на каждый /opt_status
+# Кеш баланса Gate.io для AMOLED-сейвера/опроса. v3.358: раньше обновлялся по таймеру
+# (TTL 60с) — из-за этого на скринсейвере число "плыло" вместе с floating PnL открытой
+# позиции, выглядело как мерцание. Теперь обновляется ТОЛЬКО (1) при первом запросе и
+# (2) сразу после закрытия сделки тейком/стопом — см. _check_trade_close, который пишет
+# в _gate_balance_cache напрямую. Между закрытиями значение зафиксировано (только realized).
 _gate_balance_cache = {"value": None, "ts": 0}
 _gate_balance_lock = threading.Lock()
-_GATE_BALANCE_TTL = 60  # секунд
 
 def _get_cached_gate_balance(cfg):
-    """Возвращает баланс USDT фьючерсного кошелька с кешем на _GATE_BALANCE_TTL секунд."""
-    now = time.time()
+    """Возвращает баланс USDT фьючерсного кошелька. Обновляется только при первом вызове
+    и при закрытии сделки (тейк/стоп) — НЕ по таймеру, см. комментарий у _gate_balance_cache."""
     with _gate_balance_lock:
-        if now - _gate_balance_cache["ts"] < _GATE_BALANCE_TTL:
+        if _gate_balance_cache["ts"] > 0:
             return _gate_balance_cache["value"]
     bal, err = _gate_get_balance(cfg)
     with _gate_balance_lock:
         if not err and bal is not None:
             _gate_balance_cache["value"] = bal
-        _gate_balance_cache["ts"] = now
+        _gate_balance_cache["ts"] = time.time()
     return _gate_balance_cache["value"]
 
 # Кеш текущей незакрытой свечи — обновляется фоновым потоком
@@ -3309,6 +3317,11 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pc
         bal, err = _gate_get_balance(alert_cfg)
         if not err and bal is not None:
             balance = bal
+            # v3.358: пишем сразу в общий кеш — баланс на скринсейвере/UI обновляется
+            # именно в момент закрытия сделки (тейк/стоп), а не по таймеру
+            with _gate_balance_lock:
+                _gate_balance_cache["value"] = bal
+                _gate_balance_cache["ts"] = time.time()
 
     for s in new_signals:
         bar_i = s["bar_i"]
