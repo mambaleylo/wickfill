@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.371: динамический ATR-стоп (use_atr_sl + atr_sl_mult). При use_atr_sl=True стоп
+  каждой сделки вычисляется как ATR[i] / ep * 100 * atr_sl_mult вместо фиксированного
+  sl_pct; sl_pct остаётся нижней границей (floor). Оба параметра оптимизируются;
+  atr_sl_mult включён в _SHAKE_KEYS_NUMERIC_ESCALATED для эскалированной встряски.
+  Telegram-уведомление о новом лучшем конфиге показывает ⚡ATR×N если режим активен.
 - v3.370: fix — сделка шла "онлайн", потом после Restart с тем же конфигом появилась
   сделка, которой не было видно живьём. Причина: тело тика _sliding_window_thread
   (расчёт _simulate/carry-forward/_save_chart на каждой новой свече) не было обёрнуто
@@ -573,7 +578,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.370"
+APP_VERSION = "3.371"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -675,6 +680,8 @@ PARAM_SPACE = {
     "ms_lookback":        {"min": 20,   "max": 60,   "step": 10,   "type": "int",   "label": "Структура — период"},
     "use_ema_filter":     {"values": [False, True], "type": "bool", "label": "EMA тренд-фильтр"},
     "ema_period":         {"min": 20,   "max": 200,  "step": 20,   "type": "int",   "label": "EMA — период"},
+    "use_atr_sl":         {"values": [False, True], "type": "bool", "label": "Динам. SL (ATR×мульт)"},
+    "atr_sl_mult":        {"min": 0.5,  "max": 3.0,  "step": 0.25, "type": "float", "label": "ATR SL — множитель"},
 }
 
 def _param_grid(spec):
@@ -708,6 +715,7 @@ FILTER_GROUPS = {
     "quiet_atr_len": "use_quiet_filter", "quiet_max_ratio": "use_quiet_filter", "quiet_min_ratio": "use_quiet_filter",
     "ms_lookback": "use_ms_filter",
     "ema_period":  "use_ema_filter",
+    "atr_sl_mult": "use_atr_sl",
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1087,6 +1095,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     uswf=p["use_sweep_filter"]; sw_len=p["sweep_len"]; sw_tol=p["sweep_toler_pct"]
     umsf=p["use_ms_filter"]; ms_lb=p["ms_lookback"]
     uemaf=p.get("use_ema_filter", False); ema_per=p.get("ema_period", 50)
+    uatrsl=p.get("use_atr_sl", False); atr_sl_m=p.get("atr_sl_mult", 1.0)
 
     if not candles_list or len(candles_list) < max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20) + 10:
         return None
@@ -1274,6 +1283,20 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
 
     start_i=max(ll if ulf else 0, gl if ugf else 0, rl if urf else 0, q_atr if uqf else 0, sw_len if uswf else 0, ms_lb if umsf else 0, ema_per if uemaf else 0, ret_lb if uretf else 0, rep_lb if urepf else 0, clu_lb if ucluf else 0, 20)+2
     start_i=min(start_i,n-1)
+
+    def _dyn_sl_pct(i, ep):
+        """Вычисляет динамический SL в % от цены входа на основе ATR.
+        Если use_atr_sl выключен — возвращает фиксированный sl_p.
+        Результат зажат снизу min(sl_p, 0.1) и сверху max(sl_p*3, 5.0)."""
+        if not uatrsl:
+            return sl_p
+        atr_now = atr_series[i] if i < len(atr_series) else 0.0
+        if atr_now <= 0 or ep <= 0:
+            return sl_p
+        dsl = atr_now / ep * 100.0 * atr_sl_m
+        # зажимаем: не меньше sl_p (защита от экстремально тихого рынка)
+        # и не больше 3× sl_p (защита от аномальных ATR)
+        return max(sl_p, min(dsl, sl_p * 3.0))
 
     # Предвычисляем HTF-direction по истории через bisect.
     # _htf_ts/_htf_dir передаются предвычисленными из _worker_init (нет аллокаций).
@@ -1517,12 +1540,14 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 if _confirm():
                     ep=cl; pos=min(equity,max_pos)
                     if pending_sig==1:
-                        t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos
+                        _sl_now=_dyn_sl_pct(i,ep)
+                        t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-_sl_now/100)
+                        t_orig_sl=_sl_now;t_pos=pos
                         in_trade=True;t_entry_bar=i
                     elif pending_sig==-1:
-                        t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos
+                        _sl_now=_dyn_sl_pct(i,ep)
+                        t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+_sl_now/100)
+                        t_orig_sl=_sl_now;t_pos=pos
                         in_trade=True;t_entry_bar=i
                     if _collect and in_trade:
                         _csigs.append({"bar_i":i,"dir":t_dir,"ep":t_ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None,"signal_bar":sig_bar})
@@ -1569,27 +1594,31 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     in_trade=False
                     if short_sig_base and _confirm():
                         ep=cl;pos=min(equity,max_pos)
-                        t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos
+                        _sl_now=_dyn_sl_pct(i,ep)
+                        t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+_sl_now/100)
+                        t_orig_sl=_sl_now;t_pos=pos
                         in_trade=True;t_entry_bar=i
                         if _collect: _csigs.append({"bar_i":i,"dir":-1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
                     elif long_sig_base and _confirm():
                         ep=cl;pos=min(equity,max_pos)
-                        t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                        t_orig_sl=sl_p;t_pos=pos
+                        _sl_now=_dyn_sl_pct(i,ep)
+                        t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-_sl_now/100)
+                        t_orig_sl=_sl_now;t_pos=pos
                         in_trade=True;t_entry_bar=i
                         if _collect: _csigs.append({"bar_i":i,"dir":1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
 
             if long_sig_base and not in_trade and _confirm():
                 ep=cl;pos=min(equity,max_pos)
-                t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-sl_p/100)
-                t_orig_sl=sl_p;t_pos=pos
+                _sl_now=_dyn_sl_pct(i,ep)
+                t_dir=1;t_ep=ep;t_tp=ep*(1+tp_p/100);t_sl=ep*(1-_sl_now/100)
+                t_orig_sl=_sl_now;t_pos=pos
                 in_trade=True;t_entry_bar=i
                 if _collect: _csigs.append({"bar_i":i,"dir":1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
             elif short_sig_base and not in_trade and _confirm():
                 ep=cl;pos=min(equity,max_pos)
-                t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+sl_p/100)
-                t_orig_sl=sl_p;t_pos=pos
+                _sl_now=_dyn_sl_pct(i,ep)
+                t_dir=-1;t_ep=ep;t_tp=ep*(1-tp_p/100);t_sl=ep*(1+_sl_now/100)
+                t_orig_sl=_sl_now;t_pos=pos
                 in_trade=True;t_entry_bar=i
                 if _collect: _csigs.append({"bar_i":i,"dir":-1,"ep":ep,"tp":t_tp,"sl":t_sl,"t":c["t"],"exit_bar":None,"win":None})
 
@@ -4085,6 +4114,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         "sweep_len", "sweep_toler_pct",
         "ms_lookback", "ema_period",
         "min_wick_pct", "min_wick_pct_price", "confirm_body_pct",
+        "atr_sl_mult",
     ]
 
     def _shake_individual(ind):
@@ -4692,13 +4722,16 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                     _vf  = best.get("validated_fitness") or best.get("fitness", 0)
                     _sl  = best.get("params", {}).get("sl_pct", 0)
                     _tp  = best.get("params", {}).get("tp_pct", 0)
+                    _use_atrsl = best.get("params", {}).get("use_atr_sl", False)
+                    _atr_m = best.get("params", {}).get("atr_sl_mult", 1.0)
+                    _sl_str = f"{_sl:.2f}% {'⚡ATR×'+str(_atr_m) if _use_atrsl else ''}"
                     _stab = best.get("stability", None)
                     _stab_str = f"  стаб: {_stab:.0f}%" if _stab is not None else ""
                     _tg_text = (
                         f"🏆 <b>Новый лучший конфиг — {symbol} {tf}</b>" + "\n" +
                         f"💰 Депо: <b>${eq:.0f}</b>  WR: <b>{_wr:.0f}%</b>" + "\n" +
                         f"📉 DD: {_dd:.1f}%  Сделок: {_tr}  PF: {_pf:.2f}" + "\n" +
-                        f"🎯 SL: {_sl:.2f}%  TP: {_tp:.2f}%{_stab_str}" + "\n" +
+                        f"🎯 SL: {_sl_str}  TP: {_tp:.2f}%{_stab_str}" + "\n" +
                         f"📊 fit: {_vf:.2f}  ({days}д · r{int(round(risk_pct))}%)" + "\n" +
                         f"💾 {fname}"
                     )
