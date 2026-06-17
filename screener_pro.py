@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.368: WF валидация ужесточена:
+  - число окон зависит от days: ≤7д→4 окна, 8-20д→5, >20д→6
+  - порог прохождения окна: WR≥70% трейна (было 55%) И equity>100 в окне
+  - multiplier 0.4..1.0 (было 0.5..1.0)
+  - штраф за WR>82% (признак оверфита): 90%→×0.8, 95%→×0.7
 - v3.367: Telegram-уведомление при сохранении нового лучшего конфига на GitHub —
   отправляется только при реальном gh_ok, содержит депо/WR/DD/сделки/PF/SL/TP/fit/имя файла.
 - v3.366: fitness high-equity mode — порог зависит от days_limit:
@@ -549,7 +554,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.367"
+APP_VERSION = "3.368"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4183,52 +4188,76 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     final_params = dict(final_result["params"])
 
     # --- Валидация стабильности финального результата цикла ---
-    # Прогоняем по 3 окнам (старая треть / средняя / свежая треть)
-    # Штрафуем validated_fitness если окна сильно расходятся с трейном
+    # Число окон зависит от периода:
+    #   ≤7 дней  → 4 окна по ~25% (минимум 1 день)
+    #   8-20 дней → 5 окон по ~20%
+    #   >20 дней  → 6 окон по ~16%
+    # Порог прохождения окна: WR ≥ 70% от тренировочного (было 55% — слишком мягко).
+    # Дополнительно проверяем equity окна: должен быть > 100 (прибыльное окно).
+    # Штраф: стабильность = ok/total → multiplier 0.4..1.0 (было 0.5..1.0 — ужесточено).
     train_wr_cycle = final_result.get("winrate", 0)
+    train_eq_cycle = final_result.get("equity", 100)
     now_ts_cycle = time.time()
     def _quick_window(d_from, d_to):
         cutoff_f = now_ts_cycle - d_from * 86400
         cutoff_t = now_ts_cycle - d_to * 86400
         sl = [c for c in candles if cutoff_f <= c.get("t", 0) < cutoff_t]
-        if len(sl) < 8: return None
+        if len(sl) < 6: return None
         return _simulate(sl, final_params, 0, risk_pct=risk_pct, htf_index=htf_index)
-    window_size_c = days / 3.0
+
+    if days <= 7:
+        _n_windows = 4
+    elif days <= 20:
+        _n_windows = 5
+    else:
+        _n_windows = 6
+    window_size_c = days / _n_windows
     ok_windows = 0; total_windows = 0
-    _wrs_cycle = []
-    for wi in range(3):
+    _wrs_cycle = []; _eqs_cycle = []
+    for wi in range(_n_windows):
         wres = _quick_window(days - wi * window_size_c, days - (wi + 1) * window_size_c)
-        if wres and wres["trades"] >= 5:
+        if wres and wres["trades"] >= 3:
             total_windows += 1
-            if train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.55:
+            _wr_ok = train_wr_cycle > 0 and wres["winrate"] >= train_wr_cycle * 0.70
+            _eq_ok = wres["equity"] > 100.0
+            if _wr_ok and _eq_ok:
                 ok_windows += 1
             _wrs_cycle.append(wres["winrate"])
+            _eqs_cycle.append(wres["equity"])
+
     stability_ratio = (ok_windows / total_windows) if total_windows > 0 else 1.0
-    # validated_fitness учитывает стабильность: нестабильная стратегия штрафуется до 50%
-    stability_multiplier = 0.5 + 0.5 * stability_ratio
+    # Ужесточённый multiplier: 0.4 (0 окон) → 1.0 (все окна)
+    stability_multiplier = 0.4 + 0.6 * stability_ratio
 
     # Штраф за деградирующий тренд winrate по окнам (slope penalty)
-    # Линейная регрессия по winrate окон: отрицательный slope → штраф
     if len(_wrs_cycle) >= 3:
         _n = len(_wrs_cycle)
         _xs = list(range(_n))
         _xm = sum(_xs) / _n; _ym = sum(_wrs_cycle) / _n
         _num = sum((_xs[i] - _xm) * (_wrs_cycle[i] - _ym) for i in range(_n))
         _den = sum((_xs[i] - _xm) ** 2 for i in range(_n)) or 1e-9
-        _slope = _num / _den  # winrate/окно
-        # Нормализуем: slope = -10%/окно → penalty ~0.2 (потеря 20%); порог активации -5%, max штраф 30%
+        _slope = _num / _den
         if _slope < -5.0:
-            _trend_penalty = max(0.7, 1.0 + _slope / 50.0)  # slope=-50 → ×0.0, slope=0 → ×1.0; max штраф 30%
+            _trend_penalty = max(0.7, 1.0 + _slope / 50.0)
             stability_multiplier *= _trend_penalty
         else:
             _trend_penalty = 1.0
     else:
         _slope = 0.0; _trend_penalty = 1.0
 
+    # Дополнительный штраф за экстремальный WR (>82%) — признак оверфита
+    # При WR 93% конфиг почти наверняка запомнил историю, а не нашёл закономерность
+    _overfit_wr_penalty = 1.0
+    if train_wr_cycle > 82.0:
+        # 82%→×1.0, 90%→×0.8, 95%→×0.7
+        _overfit_wr_penalty = max(0.65, 1.0 - (train_wr_cycle - 82.0) / 65.0)
+        stability_multiplier *= _overfit_wr_penalty
+
     final_result["stability_ratio"] = round(stability_ratio, 2)
     final_result["validated_fitness"] = round(final_result["fitness"] * stability_multiplier, 4)
     _slope_str = f" slope={_slope:+.1f}%/окно trend×{_trend_penalty:.2f}" if _slope != 0 else ""
-    olog(f"  📐 Стабильность: {ok_windows}/{total_windows} окон ({'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}){_slope_str} → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 and _trend_penalty >= 0.8 else "warn")
+    _wr_str = f" wr_overfit×{_overfit_wr_penalty:.2f}" if _overfit_wr_penalty < 1.0 else ""
+    olog(f"  📐 Стаб: {ok_windows}/{total_windows} окон ({_n_windows} шт, {'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}){_slope_str}{_wr_str} → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 and _trend_penalty >= 0.8 else "warn")
 
     # Обновляем validated_fitness для всего top20
     for r in top20_global:
