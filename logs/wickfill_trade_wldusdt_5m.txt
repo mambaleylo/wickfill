@@ -9,3 +9,4 @@
 [2026-06-17 18:25:13]   cleanup error: POSITION_NOT_FOUND
 [2026-06-17 18:30:15]   cleanup error: POSITION_NOT_FOUND
 [2026-06-17 20:50:28]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-17 20:55:34]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
