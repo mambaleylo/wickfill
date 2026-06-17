@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.356
+WickFill Optimizer v3.357
+- v3.357: (1) Метрополис-критерий в Basin Hopping — раньше bh_current двигался ТОЛЬКО
+  при улучшении глобального лучшего (hill-climbing с рестартами, не настоящий БХ);
+  любой временно-худший путь (напр. больший SL, который сразу выглядит хуже до
+  реоптимизации остальных параметров) отбрасывался навсегда. Теперь bh_anchor может
+  принять худший шаг с вероятностью exp(delta/T), T калибруется по разбросу fitness
+  фазы 1 и охлаждается к 0 к концу прохода — должно снизить разброс результатов между
+  холодными стартами и выбраться из тупика "увеличение стопа = всегда хуже".
+  (2) Добавлен GET /sl_tp_sweep + кнопка "📊 SL/TP sweep" в UI — прогоняет ВЕСЬ
+  диапазон sl_pct/tp_pct (текущие _GRIDS) с зафиксированными остальными параметрами
+  лучшего конфига, отдаёт таблицу equity/winrate/trades/DD/fitness по каждому значению —
+  визуальная проверка "а вдруг с большим стопом было бы лучше" без догадок.
 - v3.355: GitHub Token вынесен из кода — читается из ~/.wf_token / env GH_TOKEN;
   UI-поле + кнопка «Сохранить» в блоке Gate.io (эндпоинт /set_gh_token);
   _GH_TOKEN обновляется в памяти без перезапуска. Фикс: конфиги не
@@ -503,7 +514,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.356"
+APP_VERSION = "3.357"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4033,8 +4044,22 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     # OPT: early-stop после N итераций подряд без улучшения (экономит ~60% времени BH)
     BH_MAX = _BH_MAX_eff; BH_PATIENCE = _BH_PATIENCE_eff
     olog(f"━━ ФАЗА 2: Basin Hopping (макс {BH_MAX} итераций, patience={BH_PATIENCE}{', ШАГ×2.4 ВСТРЯСКА' if shake else ''}) ━━━━━━━━", "ok")
-    bh_current=dict(best_p1); bh_best=best_r1; final_result=best_r1; final_params=best_p1
-    bh_no_improve = 0  # OPT: счётчик подряд идущих неудач
+    # v3.357: Метрополис-критерий — раньше bh_current двигался ТОЛЬКО при улучшении
+    # глобального лучшего, т.е. это был hill-climbing с рестартами от одной и той же точки,
+    # а не настоящий Basin Hopping. Любой путь, который временно ухудшает результат
+    # (например больший SL — сразу хуже, пока остальные параметры не подстроены), отбрасывался
+    # навсегда и никогда не исследовался дальше. Теперь bh_anchor (точка, от которой идёт
+    # следующее возмущение) может двигаться в худшую сторону с вероятностью exp(delta/T);
+    # T калибруется по разбросу fitness фазы 1 и охлаждается к 0 к концу прохода — в начале
+    # гуляем шире, к концу почти чистый hill-climbing.
+    bh_anchor=dict(best_p1); bh_anchor_result=best_r1
+    bh_best=best_r1; final_result=best_r1; final_params=best_p1
+    bh_no_improve = 0  # OPT: счётчик подряд идущих неудач (без улучшения ГЛОБАЛЬНОГО лучшего)
+    _valid_fits = [f for f,_,_ in local_bests if f > -9000]
+    _fit_spread = (max(_valid_fits) - min(_valid_fits)) if len(_valid_fits) > 1 else 1.0
+    _T0 = max(_fit_spread * 0.35, 0.3)
+    _T_min = 0.02
+    _T_cooling = (_T_min/_T0) ** (1.0/max(BH_MAX-1,1))
     try:
       for bh_i in range(BH_MAX):
         if stop_flag(): break
@@ -4045,7 +4070,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         # OPT: при perturbation учитываем FILTER_GROUPS — не меняем зависимые параметры
         # если их родительский use_* = False (симуляция всё равно их игнорирует,
         # но coordinate_descent потом не найдёт улучшения и тратит время впустую)
-        perturbed=dict(bh_current)
+        perturbed=dict(bh_anchor)
         keys_to_perturb = random.sample(_KEYS, max(1, int(len(_KEYS)*_PERTURB_FRAC)))
         for k in keys_to_perturb:
             # Пропускаем зависимый параметр если его родитель отключён
@@ -4055,7 +4080,7 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
             spec=PARAM_SPACE[k]; grid=_grids_local[k]
             if spec["type"] in ("bool","cat"): perturbed[k]=random.choice(spec["values"])
             else:
-                idx=grid.index(bh_current[k]) if bh_current[k] in grid else len(grid)//2
+                idx=grid.index(bh_anchor[k]) if bh_anchor[k] in grid else len(grid)//2
                 step=random.randint(1,max(1,int(len(grid)*_BH_STEP_FRAC)))
                 perturbed[k]=grid[min(max(0,idx+random.choice([-step,step])),len(grid)-1)]
         with opt_lock: opt_state["current_param"]=f"Basin Hopping {bh_i+1}/{BH_MAX}"
@@ -4064,10 +4089,21 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
         bh_r, bh_p, top20_global = _coordinate_descent_from(
             perturbed, pmap, olog, t0, top20_global, f"BH-{bh_i+1}", max_passes=4, stop_flag=stop_flag, grids=_grids_local)
         improved = bh_r["fitness"] > bh_best["fitness"]
+        # Метрополис: шаг анкера принимается всегда если лучше анкера; если хуже — с
+        # вероятностью exp(delta/T), где T убывает почти до 0 к концу прохода
+        _delta = bh_r["fitness"] - bh_anchor_result["fitness"]
+        _T_i = _T0 * (_T_cooling ** bh_i)
+        if _delta >= 0:
+            accepted = True
+        else:
+            _prob = _math.exp(max(_delta, -50.0*_T_i)/_T_i) if _T_i > 1e-9 else 0.0
+            accepted = random.random() < _prob
         _plog("bh_done", bh=bh_i+1, sec=round(time.time()-_bht0,1),
-              equity=round(bh_r["equity"],2), improved=improved)
+              equity=round(bh_r["equity"],2), improved=improved, accepted=accepted, T=round(_T_i,3))
+        if accepted:
+            bh_anchor=bh_p; bh_anchor_result=bh_r
         if improved:
-            bh_best=bh_r; bh_current=bh_p; final_result=bh_r; final_params=bh_p
+            bh_best=bh_r; final_result=bh_r; final_params=bh_p
             bh_no_improve = 0  # OPT: сбрасываем счётчик при успехе
             olog(f"  ✅ BH {bh_i+1}: ЛУЧШЕ ${bh_r['equity']:.2f}","found")
             with opt_lock:
@@ -4075,6 +4111,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
                 # best и all_time_best НЕ трогаем здесь — только в конце цикла
         else:
             bh_no_improve += 1  # OPT: увеличиваем счётчик неудач
+            if accepted:
+                olog(f"  ↺ BH {bh_i+1}: принято временное ухудшение (T={_T_i:.2f}) — уходим из локального оптимума","info")
         with opt_lock:
             opt_state["cycle_step"] = len(start_points) + bh_i + 1
 
@@ -4752,6 +4790,22 @@ def _build_htf_index(symbol, base_tf, days):
         print(f"[HTF] _build_htf_index ошибка: {e}", flush=True)
         return None
 
+
+def _sl_tp_sweep(base_params, candles, days, risk_pct):
+    """v3.357: диагностика "а что если стоп/тейк другой" — прогоняет ВЕСЬ диапазон
+    sl_pct и tp_pct (текущие _GRIDS, т.е. ровно тот диапазон что задан в UI), с
+    остальными параметрами зафиксированными как в base_params (лучший найденный конфиг).
+    Без HTF (упрощённо, это диагностика формы ландшафта, а не точный финальный прогон)."""
+    def _row(val, key):
+        p = dict(base_params); p[key] = val
+        r = _simulate(candles, p, days, risk_pct=risk_pct)
+        if not r:
+            return {"val": val, "equity": 100.0, "winrate": 0.0, "trades": 0, "max_dd": 0.0, "fitness": -9999.0}
+        return {"val": val, "equity": r["equity"], "winrate": r["winrate"], "trades": r["trades"],
+                "max_dd": r["max_dd"], "fitness": r["fitness"]}
+    sl_rows = [_row(v, "sl_pct") for v in _GRIDS["sl_pct"]]
+    tp_rows = [_row(v, "tp_pct") for v in _GRIDS["tp_pct"]]
+    return sl_rows, tp_rows
 
 def run_optimizer(params):
     global _sw_candles, _sw_params, _sw_risk
@@ -6856,6 +6910,11 @@ details summary::-webkit-details-marker{display:none}
       <span style="flex:1"></span>
     </div>
 
+    <div style="display:flex;gap:8px;margin:4px 2px 0">
+      <button class="btn-ghost" id="sweepBtn" onclick="runSlTpSweep()" title="Прогнать весь диапазон SL и TP с текущими лучшими остальными параметрами — проверить форму ландшафта фитнеса">📊 SL/TP sweep</button>
+    </div>
+    <div id="sweepWrap" style="display:none;margin:6px 2px;padding:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);font-size:.78rem;overflow-x:auto"></div>
+
 
     <!-- Best result (desktop) -->
     <div id="bestSection" style="display:none">
@@ -7905,6 +7964,30 @@ function toggleParams(){
   const el=document.getElementById('bestParams'),vis=el.style.display!=='none';
   el.style.display=vis?'none':'block';
 }
+async function runSlTpSweep(){
+  const btn=document.getElementById('sweepBtn');
+  const wrap=document.getElementById('sweepWrap');
+  if(btn){btn.disabled=true;btn.textContent='⏳ считаю...';}
+  try{
+    const res=await fetch('/sl_tp_sweep');
+    const d=await res.json();
+    if(!d.ok){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">'+(d.error||'ошибка')+'</b>'; return; }
+    const row=(r,baseVal)=>{
+      const isBase=Math.abs(r.val-baseVal)<1e-9;
+      const style=isBase?' style="font-weight:700;color:var(--accent)"':'';
+      return `<tr${style}><td>${r.val}${isBase?' ★':''}</td><td>$${r.equity.toFixed(0)}</td><td>${r.winrate.toFixed(0)}%</td><td>${r.trades}</td><td>${r.max_dd.toFixed(0)}%</td><td>${r.fitness.toFixed(2)}</td></tr>`;
+    };
+    const tbl=(title,rows,baseVal)=>`<div style="margin-bottom:10px"><div style="font-weight:700;margin-bottom:4px">${title}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem">
+      <tr style="color:var(--text3)"><td>знач.%</td><td>$</td><td>WR</td><td>сд</td><td>DD</td><td>fit</td></tr>
+      ${rows.map(r=>row(r,baseVal)).join('')}
+      </table></div>`;
+    wrap.innerHTML = tbl('SL sweep', d.sl, d.base_sl) + tbl('TP sweep', d.tp, d.base_tp)
+      + '<div style="color:var(--text3);font-size:.7rem">★ — текущий лучший. Остальные параметры зафиксированы как в лучшем конфиге; HTF-фильтр в свипе не учитывается.</div>';
+    wrap.style.display='block';
+  }catch(e){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">Ошибка: '+e+'</b>'; }
+  finally{ if(btn){btn.disabled=false;btn.textContent='📊 SL/TP sweep';} }
+}
 
 function renderValid(v, best, windows, minDays, days){
   const wrap=document.getElementById('validSection');
@@ -8505,6 +8588,22 @@ class Handler(BaseHTTPRequestHandler):
             self._html(HTML.encode())
         elif parsed.path == "/version":
             self._json({"version": APP_VERSION})
+        elif parsed.path == "/sl_tp_sweep":
+            with opt_lock:
+                tb = opt_state.get("trade_best") or opt_state.get("all_time_best")
+                days = opt_state.get("days", 30)
+            if not tb or not tb.get("params"):
+                self._json({"ok": False, "error": "нет результата оптимизации — запусти прогон"})
+            else:
+                base_params = dict(tb["params"])
+                candles = list(_sw_candles)
+                risk_pct = _sw_risk
+                if not candles or len(candles) < 50:
+                    self._json({"ok": False, "error": "нет кэша свечей (_sw_candles пуст) — подожди пока тред SW наберёт данные"})
+                else:
+                    sl_rows, tp_rows = _sl_tp_sweep(base_params, candles, days, risk_pct)
+                    self._json({"ok": True, "sl": sl_rows, "tp": tp_rows,
+                                "base_sl": base_params.get("sl_pct"), "base_tp": base_params.get("tp_pct")})
         elif parsed.path == "/opt_status":
             with opt_lock:
                 cr = opt_state.get("chart_path","")
