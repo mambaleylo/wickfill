@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.361: fitness — режим насыщения по депозиту: при equity > 8000 плавно (до equity=12000)
+  переключается с роста депозита на максимизацию числа сделок и WR.
+  _high_eq_mode (0→1): wr_weight 0.06→0.20, trade_weight 2.2→6.0, trade_cap 60→100,
+  profit_weight×(1-mode×0.7) т.е. 4.0→1.2. При equity<=8000 поведение не меняется.
 - v3.360: fix — заливка зоны сделки (EP-TP/EP-SL) пропадала целиком, если точка входа
   (bar_i) уходила за левый край вьюпорта больше чем на 1 бар при скролле — даже если
   сама сделка (её exit_bar или открытый хвост) была ещё частично видна. Теперь скип
@@ -529,7 +533,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.360"
+APP_VERSION = "3.361"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1570,6 +1574,12 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     else:
         net_return=equity-100.0
 
+        # --- Режим насыщения по депозиту ---
+        # При equity > 8000 депозит достаточно вырос — переключаемся на максимизацию
+        # числа сделок и винрейта (стабильность стратегии), снижая приоритет роста депозита.
+        # Переход плавный: 0.0 при equity<=8000, 1.0 при equity>=12000.
+        _high_eq_mode = min(1.0, max(0.0, (equity - 8000.0) / 4000.0))
+
         # --- Calmar: логарифмически нормирован ---
         # DD>=20% — полный обрыв calmar
         min_dd_floor=max(1.0, 15.0/_math.sqrt(max(trades,1)))
@@ -1580,39 +1590,36 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
             calmar_score=_math.log(max(net_return/effective_dd, 1.0)+1.0)
         dd_penalty=max(0.0,max_dd-15.0)*0.2
 
-        # --- WR: линейный бонус с 50%, без экспоненциального буста ---
-        # Убран буст WR 86%+ — он толкал к редким "идеальным" сделкам (оверфиттинг)
-        # При RR 1:5 достаточно WR 50%, при RR 1:2 — WR 60%
-        # v3.264: вес снижен 0.08→0.06 — даём чуть больше веса количеству сделок
-        # (trade_bonus), допуская просадку WR на ~5% ради большего числа сигналов
-        wr_bonus=max(0.0,wr_val-50.0)*0.06
+        # --- WR: линейный бонус с 50% ---
+        # Базовый вес 0.06; при высоком депозите (>8000) усиливается до 0.20 —
+        # оптимизатор активно тянет WR вверх когда депозит уже вырос.
+        _wr_weight = 0.06 + _high_eq_mode * 0.14  # 0.06 → 0.20
+        wr_bonus=max(0.0,wr_val-50.0)*_wr_weight
 
         # --- Депозит: log(equity) × нормализация плотности сделок ---
-        # Цель: не давать системе получать полный profit_bonus за 3 сделки за 90 дней.
-        # Ожидаемый темп: 1 сделка на каждые ~7 дней (умеренная стратегия).
-        # Если дней > 0 — считаем ожидаемое кол-во сделок пропорционально периоду,
-        # но мягко: минимальный порог 15, чтобы короткие окна (3-10 дней) не штрафовались.
+        # При высоком equity вес profit_bonus снижается — не гонимся за ростом депозита
+        # в ущерб надёжности (число сделок / WR).
         if days_limit and days_limit > 0:
             _expected = max(15.0, days_limit / 7.0)
         else:
-            _expected = 25.0  # fallback: дней нет — ожидаем 25 сделок
+            _expected = 25.0
         _density_norm = min(1.0, trades / _expected)
-        profit_bonus=_math.log(max(equity,1.0))*4.0*_density_norm
+        _profit_weight = 4.0 * (1.0 - _high_eq_mode * 0.7)  # 4.0 → 1.2
+        profit_bonus=_math.log(max(equity,1.0))*_profit_weight*_density_norm
 
-        # --- Сделки: поощряем 15-60, плавно штрафуем >80 ---
-        # Статистическая надёжность важнее: 25 сделок лучше 5, 40 лучше 25.
-        # v3.264: усилен вес (1.5→2.2) и расширен диапазон поощрения 40→60 —
-        # даёт приоритет конфигам с бОльшим числом сделок (даже в ущерб WR на ~5%),
-        # т.к. больше сделок = больше дохода при сопоставимом риске на сделку.
-        if trades<=60:
-            trade_bonus=_math.log(max(trades/15.0,1.0)+1)*2.2
-        elif trades<=80:
-            trade_bonus=_math.log(max(60/15.0,1.0)+1)*2.2-(trades-60)*0.05
+        # --- Сделки: поощряем 15-60 (база), при >8000 — до 100 сделок ---
+        # Базовый вес 2.2; при высоком депозите растёт до 6.0 — стратегия должна
+        # давать больше сигналов, верхняя граница поощрения расширяется 60→100.
+        _trade_weight = 2.2 + _high_eq_mode * 3.8   # 2.2 → 6.0
+        _trade_cap    = int(60 + _high_eq_mode * 40)  # 60 → 100
+        if trades<=_trade_cap:
+            trade_bonus=_math.log(max(trades/15.0,1.0)+1)*_trade_weight
+        elif trades<=_trade_cap+20:
+            trade_bonus=_math.log(max(_trade_cap/15.0,1.0)+1)*_trade_weight-(trades-_trade_cap)*0.05
         else:
-            trade_bonus=_math.log(max(60/15.0,1.0)+1)*2.2-20*0.05-(trades-80)*0.15
+            trade_bonus=_math.log(max(_trade_cap/15.0,1.0)+1)*_trade_weight-20*0.05-(trades-_trade_cap-20)*0.15
 
         # --- RR (Risk/Reward): средний выигрыш / средний проигрыш ---
-        # Стратегия RR 1:5 + WR 50% лучше RR 1:1 + WR 80%
         wins_pnl=[x for x in pnls if x>0]
         loss_pnl=[abs(x) for x in pnls if x<0]
         if wins_pnl and loss_pnl:
