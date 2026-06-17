@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.364: SL/TP sweep — модальное окно поверх страницы (fixed overlay),
+  не обрезается sidebar; кнопка ✕ и клик по тени закрывают; max-height 82vh со скроллом.
+- v3.364: SL/TP sweep — fixed modal overlay (position:fixed, z-index:9999),
+  закрывается по ✕ и тапу по тени; корректно вынесен из sidebar и из chart f-string.
 - v3.363: SL/TP sweep — компактная таблица-сетка с заголовком, фоновая подсветка строк
   (зелёный/жёлтый/красный относительно лучшего fit в серии), без overflow-x.
 - v3.363: SL/TP sweep — компактная таблица с заголовком и фоновой подсветкой строк
@@ -540,7 +544,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.363"
+APP_VERSION = "3.364"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6967,7 +6971,6 @@ details summary::-webkit-details-marker{display:none}
     <div style="display:flex;gap:8px;margin:4px 2px 0">
       <button class="btn-ghost" id="sweepBtn" onclick="runSlTpSweep()" title="Прогнать весь диапазон SL и TP с текущими лучшими остальными параметрами — проверить форму ландшафта фитнеса">📊 SL/TP sweep</button>
     </div>
-    <div id="sweepWrap" style="display:none;margin:6px 2px;padding:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);font-size:.78rem"></div>
 
 
     <!-- Best result (desktop) -->
@@ -8025,7 +8028,7 @@ async function runSlTpSweep(){
   try{
     const res=await fetch('/sl_tp_sweep');
     const d=await res.json();
-    if(!d.ok){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">'+(d.error||'ошибка')+'</b>'; return; }
+    if(!d.ok){ document.getElementById('sweepOverlay').style.display='block'; wrap.style.display='block'; document.getElementById('sweepContent').innerHTML='<b style="color:var(--red)">'+(d.error||'ошибка')+'</b>'; return; }
     const eqC=eq=>eq>=100?'var(--green)':eq<80?'var(--red)':'var(--yellow)';
     const ddC=dd=>dd<15?'var(--green)':dd>25?'var(--red)':'var(--yellow)';
     const wrC=wr=>wr>=60?'var(--green)':wr<50?'var(--red)':'var(--yellow)';
@@ -8057,10 +8060,11 @@ async function runSlTpSweep(){
       }).join('');
       return `<div style="margin-bottom:10px"><div style="font-size:.75rem;font-weight:700;color:var(--text2);margin-bottom:3px">${title}</div>${hdr}${body}</div>`;
     };
-    wrap.innerHTML = tbl('SL sweep', d.sl, d.base_sl) + tbl('TP sweep', d.tp, d.base_tp)
+    document.getElementById('sweepContent').innerHTML = tbl('SL sweep', d.sl, d.base_sl) + tbl('TP sweep', d.tp, d.base_tp)
       + '<div style="color:var(--text3);font-size:.65rem;margin-top:2px">★ текущий · 🟢 топ ≥90% · 🟡 ok ≥70% · 🔴 слабый</div>';
+    document.getElementById('sweepOverlay').style.display='block';
     wrap.style.display='block';
-  }catch(e){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">Ошибка: '+e+'</b>'; }
+  }catch(e){ document.getElementById('sweepOverlay').style.display='block'; wrap.style.display='block'; document.getElementById('sweepContent').innerHTML='<b style="color:var(--red)">Ошибка: '+e+'</b>'; }
   finally{ if(btn){btn.disabled=false;btn.textContent='📊 SL/TP sweep';} }
 }
 
@@ -8649,7 +8653,18 @@ function toggleAmoled(){
 _amoledBtnRefresh();
 if(_amoledOn){ _acquireWakeLock(); _resetAmoledTimer(); }
 
-</script></body></html>"""
+</script>
+
+<!-- SL/TP Sweep overlay modal -->
+<div id="sweepOverlay" style="display:none;position:fixed;inset:0;z-index:9990;background:rgba(0,0,0,0.55);touch-action:none" onclick="if(event.target===this){this.style.display='none';document.getElementById('sweepWrap').style.display='none';}"></div>
+<div id="sweepWrap" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;width:min(96vw,420px);max-height:82vh;overflow-y:auto;padding:14px 12px;border-radius:14px;background:var(--card-bg);border:1px solid var(--border2);box-shadow:0 8px 40px rgba(0,0,0,0.5);font-size:.78rem;-webkit-overflow-scrolling:touch">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <span style="font-size:.82rem;font-weight:700;color:var(--text2)">📊 SL/TP sweep</span>
+    <button onclick="document.getElementById('sweepWrap').style.display='none';document.getElementById('sweepOverlay').style.display='none'" style="background:none;border:none;color:var(--text3);font-size:1.2rem;cursor:pointer;padding:2px 6px;line-height:1">✕</button>
+  </div>
+  <div id="sweepContent"></div>
+</div>
+</body></html>"""
 
 # ═══════════════════════════════════════════════════════════════
 # HTTP SERVER
