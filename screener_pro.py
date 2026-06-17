@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.363: SL/TP sweep — компактная таблица-сетка с заголовком, фоновая подсветка строк
+  (зелёный/жёлтый/красный относительно лучшего fit в серии), без overflow-x.
+- v3.363: SL/TP sweep — компактная таблица с заголовком и фоновой подсветкой строк
+  по relative fitness (🟢≥90% 🟡≥70% 🔴слабый), колонки выровнены grid, без overflow-x.
 - v3.362: SL/TP sweep — вместо однострочной таблицы карточки как у деградации:
   каждое значение в отдельной строке-карточке с цветовой индикацией (депо/WR/DD/fit),
   цвет fit относительный (лучший в серии = зелёный). Мёртвые конфиги (fit<-999) подписаны.
@@ -536,7 +540,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.362"
+APP_VERSION = "3.363"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6963,7 +6967,7 @@ details summary::-webkit-details-marker{display:none}
     <div style="display:flex;gap:8px;margin:4px 2px 0">
       <button class="btn-ghost" id="sweepBtn" onclick="runSlTpSweep()" title="Прогнать весь диапазон SL и TP с текущими лучшими остальными параметрами — проверить форму ландшафта фитнеса">📊 SL/TP sweep</button>
     </div>
-    <div id="sweepWrap" style="display:none;margin:6px 2px;padding:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);font-size:.78rem;overflow-x:auto"></div>
+    <div id="sweepWrap" style="display:none;margin:6px 2px;padding:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2);font-size:.78rem"></div>
 
 
     <!-- Best result (desktop) -->
@@ -8025,33 +8029,36 @@ async function runSlTpSweep(){
     const eqC=eq=>eq>=100?'var(--green)':eq<80?'var(--red)':'var(--yellow)';
     const ddC=dd=>dd<15?'var(--green)':dd>25?'var(--red)':'var(--yellow)';
     const wrC=wr=>wr>=60?'var(--green)':wr<50?'var(--red)':'var(--yellow)';
-    const fitC=(fit,rows)=>{
-      const fits=rows.map(r=>r.fitness).filter(f=>f>-999);
-      if(!fits.length) return 'var(--text2)';
-      const mx=Math.max(...fits);
-      return fit>=mx*0.9?'var(--green)':fit>=mx*0.7?'var(--yellow)':'var(--red)';
+    const fitBg=(fit,mx)=>{
+      if(fit<=-9000||mx<=0) return 'rgba(180,40,40,0.15)';
+      const ratio=fit/mx;
+      return ratio>=0.9?'rgba(72,187,120,0.18)':ratio>=0.7?'rgba(236,201,75,0.14)':'rgba(180,40,40,0.13)';
     };
-    const row=(r,baseVal,allRows)=>{
-      const isBase=Math.abs(r.val-baseVal)<1e-9;
-      const dead=r.fitness<=-9000;
-      const baseBorder=isBase?';border:1.5px solid var(--accent)':'';
-      const bg=isBase?'background:rgba(99,179,237,0.08);':'';
-      return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 1fr 1fr;gap:2px 6px;align-items:center;padding:5px 8px;border-radius:8px;margin-bottom:3px;${bg}border:1px solid var(--border2)${baseBorder}">
-        <div style="font-size:.82rem;font-weight:${isBase?700:500};color:${isBase?'var(--accent)':'var(--text2)'}">${r.val}%${isBase?' ★':''}</div>
-        ${dead?`<div style="grid-column:2/7;color:var(--red);font-size:.75rem">нет сделок / DD>50%</div>`:`
-        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">депо</div><div style="font-size:.8rem;color:${eqC(r.equity)};font-weight:600">$${r.equity.toFixed(0)}</div></div>
-        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">WR</div><div style="font-size:.8rem;color:${wrC(r.winrate)};font-weight:600">${r.winrate.toFixed(0)}%</div></div>
-        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">сд</div><div style="font-size:.8rem;color:var(--text2)">${r.trades}</div></div>
-        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">DD</div><div style="font-size:.8rem;color:${ddC(r.max_dd)};font-weight:600">${r.max_dd.toFixed(0)}%</div></div>
-        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">fit</div><div style="font-size:.8rem;color:${fitC(r.fitness,allRows)}">${r.fitness.toFixed(1)}</div></div>`}
-      </div>`;
+    const tbl=(title,rows,baseVal)=>{
+      const validFits=rows.map(r=>r.fitness).filter(f=>f>-999);
+      const mx=validFits.length?Math.max(...validFits):0;
+      const hdr=`<div style="display:grid;grid-template-columns:56px 1fr 1fr 1fr 1fr 1fr;padding:2px 8px 4px;font-size:.64rem;color:var(--text3);font-weight:600">
+        <div>знач</div><div style="text-align:center">депо</div><div style="text-align:center">WR</div><div style="text-align:center">сд</div><div style="text-align:center">DD</div><div style="text-align:center">fit</div></div>`;
+      const body=rows.map(r=>{
+        const isBase=Math.abs(r.val-baseVal)<1e-9;
+        const dead=r.fitness<=-9000;
+        const border=isBase?'border:1.5px solid var(--accent)':'border:1px solid transparent';
+        return `<div style="display:grid;grid-template-columns:56px 1fr 1fr 1fr 1fr 1fr;align-items:center;padding:5px 8px;border-radius:7px;margin-bottom:2px;background:${fitBg(r.fitness,mx)};${border}">
+          <div style="font-size:.79rem;font-weight:${isBase?700:500};color:${isBase?'var(--accent)':'var(--text1)'}">${r.val}%${isBase?' ★':''}</div>
+          ${dead
+            ?`<div style="grid-column:2/7;font-size:.72rem;color:var(--red);opacity:.75">— нет сделок —</div>`
+            :`<div style="text-align:center;font-size:.79rem;font-weight:600;color:${eqC(r.equity)}">$${r.equity.toFixed(0)}</div>
+              <div style="text-align:center;font-size:.79rem;font-weight:600;color:${wrC(r.winrate)}">${r.winrate.toFixed(0)}%</div>
+              <div style="text-align:center;font-size:.79rem;color:var(--text2)">${r.trades}</div>
+              <div style="text-align:center;font-size:.79rem;font-weight:600;color:${ddC(r.max_dd)}">${r.max_dd.toFixed(0)}%</div>
+              <div style="text-align:center;font-size:.79rem;color:var(--text2)">${r.fitness.toFixed(1)}</div>`
+          }
+        </div>`;
+      }).join('');
+      return `<div style="margin-bottom:10px"><div style="font-size:.75rem;font-weight:700;color:var(--text2);margin-bottom:3px">${title}</div>${hdr}${body}</div>`;
     };
-    const tbl=(title,rows,baseVal)=>`<div style="margin-bottom:12px">
-      <div style="font-weight:700;font-size:.82rem;margin-bottom:6px;color:var(--text2)">${title}</div>
-      ${rows.map(r=>row(r,baseVal,rows)).join('')}
-      </div>`;
     wrap.innerHTML = tbl('SL sweep', d.sl, d.base_sl) + tbl('TP sweep', d.tp, d.base_tp)
-      + '<div style="color:var(--text3);font-size:.68rem;margin-top:4px">★ — текущий лучший. Цвет fit — относительно лучшего в серии. HTF-фильтр не учитывается.</div>';
+      + '<div style="color:var(--text3);font-size:.65rem;margin-top:2px">★ текущий · 🟢 топ ≥90% · 🟡 ok ≥70% · 🔴 слабый</div>';
     wrap.style.display='block';
   }catch(e){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">Ошибка: '+e+'</b>'; }
   finally{ if(btn){btn.disabled=false;btn.textContent='📊 SL/TP sweep';} }
