@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.367: Telegram-уведомление при сохранении нового лучшего конфига на GitHub —
+  отправляется только при реальном gh_ok, содержит депо/WR/DD/сделки/PF/SL/TP/fit/имя файла.
 - v3.366: fitness high-equity mode — порог зависит от days_limit:
   1-10 дней → 3000-5000, >10 дней → 6000-8000.
 - v3.365: fitness high-equity mode — порог изменён 8000-12000 → 6000-8000.
@@ -547,7 +549,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.366"
+APP_VERSION = "3.367"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4603,6 +4605,30 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
             else:
                 with opt_lock:
                     opt_state["logs"].append({"ts": time.strftime("%H:%M:%S"), "msg": f"✅ GitHub: {fname}", "level": "found"})
+            # Telegram: уведомление о новом лучшем конфиге (только при реальном сохранении)
+            try:
+                _acfg = opt_state.get("alert_cfg") or {}
+                if _acfg.get("tg_token") and _acfg.get("tg_chat_id"):
+                    _wr  = best.get("winrate", 0)
+                    _dd  = best.get("max_dd", 0)
+                    _tr  = best.get("trades", 0)
+                    _pf  = best.get("profit_factor", 0)
+                    _vf  = best.get("validated_fitness") or best.get("fitness", 0)
+                    _sl  = best.get("params", {}).get("sl_pct", 0)
+                    _tp  = best.get("params", {}).get("tp_pct", 0)
+                    _stab = best.get("stability", None)
+                    _stab_str = f"  стаб: {_stab:.0f}%" if _stab is not None else ""
+                    _tg_text = (
+                        f"🏆 <b>Новый лучший конфиг — {symbol} {tf}</b>" + "\n" +
+                        f"💰 Депо: <b>${eq:.0f}</b>  WR: <b>{_wr:.0f}%</b>" + "\n" +
+                        f"📉 DD: {_dd:.1f}%  Сделок: {_tr}  PF: {_pf:.2f}" + "\n" +
+                        f"🎯 SL: {_sl:.2f}%  TP: {_tp:.2f}%{_stab_str}" + "\n" +
+                        f"📊 fit: {_vf:.2f}  ({days}д · r{int(round(risk_pct))}%)" + "\n" +
+                        f"💾 {fname}"
+                    )
+                    threading.Thread(target=_send_telegram, args=(_acfg, _tg_text), daemon=True).start()
+            except Exception as _tge:
+                print(f"{_ts()} [tg] ⚠ Ошибка TG уведомления: {_tge}", flush=True)
     except Exception as e:
         print(f"{_ts()} [gh] ⚠ GitHub ошибка: {type(e).__name__}: {e}", flush=True)
         if olog: olog(f"⚠ GitHub: {type(e).__name__}: {e}", "warn")
