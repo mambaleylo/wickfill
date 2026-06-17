@@ -16,3 +16,5 @@
 [2026-06-17 23:06:36] alert_cfg обновлён: auto=True key=НЕТ
 [2026-06-17 23:06:39] alert_cfg обновлён: auto=True key=НЕТ
 [2026-06-17 23:06:56] alert_cfg обновлён: auto=True key=НЕТ
+[2026-06-17 23:10:11] alert_cfg обновлён: auto=True key=НЕТ
+[2026-06-17 23:10:24] alert_cfg обновлён: auto=True key=да
