@@ -1,2 +1,4 @@
-[2026-06-16 22:30:04] alert_cfg обновлён: auto=True key=да
-[2026-06-17 05:40:13]   cleanup: отменено 1 зависших TP/SL ордеров (позиция закрыта)
+[2026-06-17 10:21:57] alert_cfg обновлён: auto=False key=да
+[2026-06-17 10:21:58] alert_cfg обновлён: auto=False key=да
+[2026-06-17 10:35:08] СИГНАЛ ЛОНГ ep=0.08677 tp=0.0875509 sl=0.0864663 tg=fail
+[2026-06-17 10:35:08] gate_check key=да secret=да pct=95.0 auto_on=False raw=False
