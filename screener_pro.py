@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.365: fitness high-equity mode — порог изменён 8000-12000 → 6000-8000.
 - v3.364: SL/TP sweep — модальное окно поверх страницы (fixed overlay),
   не обрезается sidebar; кнопка ✕ и клик по тени закрывают; max-height 82vh со скроллом.
 - v3.364: SL/TP sweep — fixed modal overlay (position:fixed, z-index:9999),
@@ -544,7 +545,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.364"
+APP_VERSION = "3.365"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1586,10 +1587,10 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         net_return=equity-100.0
 
         # --- Режим насыщения по депозиту ---
-        # При equity > 8000 депозит достаточно вырос — переключаемся на максимизацию
+        # При equity > 6000 депозит достаточно вырос — переключаемся на максимизацию
         # числа сделок и винрейта (стабильность стратегии), снижая приоритет роста депозита.
-        # Переход плавный: 0.0 при equity<=8000, 1.0 при equity>=12000.
-        _high_eq_mode = min(1.0, max(0.0, (equity - 8000.0) / 4000.0))
+        # Переход плавный: 0.0 при equity<=6000, 1.0 при equity>=8000.
+        _high_eq_mode = min(1.0, max(0.0, (equity - 6000.0) / 2000.0))
 
         # --- Calmar: логарифмически нормирован ---
         # DD>=20% — полный обрыв calmar
