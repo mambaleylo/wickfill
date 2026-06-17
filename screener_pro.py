@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.359
+WickFill Optimizer v3.360
+- v3.360: fix — заливка зоны сделки (EP-TP/EP-SL) пропадала целиком, если точка входа
+  (bar_i) уходила за левый край вьюпорта больше чем на 1 бар при скролле — даже если
+  сама сделка (её exit_bar или открытый хвост) была ещё частично видна. Теперь скип
+  только если сделка ЦЕЛИКОМ левее (eiR<0) или ЦЕЛИКОМ правее (vi>=vis.length) вьюпорта;
+  иначе левый край заливки просто обрезается по границе экрана — отображается всегда,
+  пока хоть что-то от сделки попадает в кадр.
 - v3.359: на планшете (701-1024px) #chartFrame занимал flex:1/height:100% — всё
   оставшееся вертикальное место под top-strip, слишком много экрана. Добавлен
   отдельный media-брейкпоинт: график теперь 45vh (~в 1.5 раза меньше). Значение
@@ -523,7 +529,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.359"
+APP_VERSION = "3.360"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2732,8 +2738,15 @@ function render(){{
   }}
   for(let _si=0;_si<SIGNALS.length;_si++){{
     const s=SIGNALS[_si];
-    const vi=s.bar_i-viewStart;if(vi<-1||vi>=vis.length) continue;
-    const viC=Math.max(0,vi),eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
+    const vi=s.bar_i-viewStart;
+    const eiR=s.exit_bar!==null?s.exit_bar-viewStart:vis.length-1;
+    // v3.360: раньше скип был по vi<-1 (т.е. зона пропадала целиком, как только точка
+    // входа уходила за левый край вьюпорта более чем на 1 бар) — даже если сама сделка
+    // (включая её exit_bar/открытый хвост) всё ещё частично видна. Теперь скипаем только
+    // если сделка ЦЕЛИКОМ левее вьюпорта (eiR<0) или ЦЕЛИКОМ правее (vi>=vis.length);
+    // иначе левый край заливки просто обрезается по границе вьюпорта (viC=0).
+    if(eiR<0||vi>=vis.length) continue;
+    const viC=Math.max(0,vi);
     let ei=Math.min(Math.max(viC,eiR),vis.length-1);
     // Не даём заливке ЗАКРЫТОЙ сделки наезжать на бар входа следующего сигнала
     // (открытую сделку — exit_bar===null — не трогаем, её заливка всегда до края вьюпорта)
