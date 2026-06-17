@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.362: SL/TP sweep — вместо однострочной таблицы карточки как у деградации:
+  каждое значение в отдельной строке-карточке с цветовой индикацией (депо/WR/DD/fit),
+  цвет fit относительный (лучший в серии = зелёный). Мёртвые конфиги (fit<-999) подписаны.
 - v3.361: fitness — режим насыщения по депозиту: при equity > 8000 плавно (до equity=12000)
   переключается с роста депозита на максимизацию числа сделок и WR.
   _high_eq_mode (0→1): wr_weight 0.06→0.20, trade_weight 2.2→6.0, trade_cap 60→100,
@@ -533,7 +536,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.361"
+APP_VERSION = "3.362"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -8019,18 +8022,36 @@ async function runSlTpSweep(){
     const res=await fetch('/sl_tp_sweep');
     const d=await res.json();
     if(!d.ok){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">'+(d.error||'ошибка')+'</b>'; return; }
-    const row=(r,baseVal)=>{
-      const isBase=Math.abs(r.val-baseVal)<1e-9;
-      const style=isBase?' style="font-weight:700;color:var(--accent)"':'';
-      return `<tr${style}><td>${r.val}${isBase?' ★':''}</td><td>$${r.equity.toFixed(0)}</td><td>${r.winrate.toFixed(0)}%</td><td>${r.trades}</td><td>${r.max_dd.toFixed(0)}%</td><td>${r.fitness.toFixed(2)}</td></tr>`;
+    const eqC=eq=>eq>=100?'var(--green)':eq<80?'var(--red)':'var(--yellow)';
+    const ddC=dd=>dd<15?'var(--green)':dd>25?'var(--red)':'var(--yellow)';
+    const wrC=wr=>wr>=60?'var(--green)':wr<50?'var(--red)':'var(--yellow)';
+    const fitC=(fit,rows)=>{
+      const fits=rows.map(r=>r.fitness).filter(f=>f>-999);
+      if(!fits.length) return 'var(--text2)';
+      const mx=Math.max(...fits);
+      return fit>=mx*0.9?'var(--green)':fit>=mx*0.7?'var(--yellow)':'var(--red)';
     };
-    const tbl=(title,rows,baseVal)=>`<div style="margin-bottom:10px"><div style="font-weight:700;margin-bottom:4px">${title}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.74rem">
-      <tr style="color:var(--text3)"><td>знач.%</td><td>$</td><td>WR</td><td>сд</td><td>DD</td><td>fit</td></tr>
-      ${rows.map(r=>row(r,baseVal)).join('')}
-      </table></div>`;
+    const row=(r,baseVal,allRows)=>{
+      const isBase=Math.abs(r.val-baseVal)<1e-9;
+      const dead=r.fitness<=-9000;
+      const baseBorder=isBase?';border:1.5px solid var(--accent)':'';
+      const bg=isBase?'background:rgba(99,179,237,0.08);':'';
+      return `<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 1fr 1fr;gap:2px 6px;align-items:center;padding:5px 8px;border-radius:8px;margin-bottom:3px;${bg}border:1px solid var(--border2)${baseBorder}">
+        <div style="font-size:.82rem;font-weight:${isBase?700:500};color:${isBase?'var(--accent)':'var(--text2)'}">${r.val}%${isBase?' ★':''}</div>
+        ${dead?`<div style="grid-column:2/7;color:var(--red);font-size:.75rem">нет сделок / DD>50%</div>`:`
+        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">депо</div><div style="font-size:.8rem;color:${eqC(r.equity)};font-weight:600">$${r.equity.toFixed(0)}</div></div>
+        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">WR</div><div style="font-size:.8rem;color:${wrC(r.winrate)};font-weight:600">${r.winrate.toFixed(0)}%</div></div>
+        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">сд</div><div style="font-size:.8rem;color:var(--text2)">${r.trades}</div></div>
+        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">DD</div><div style="font-size:.8rem;color:${ddC(r.max_dd)};font-weight:600">${r.max_dd.toFixed(0)}%</div></div>
+        <div style="text-align:center"><div style="font-size:.62rem;color:var(--text3)">fit</div><div style="font-size:.8rem;color:${fitC(r.fitness,allRows)}">${r.fitness.toFixed(1)}</div></div>`}
+      </div>`;
+    };
+    const tbl=(title,rows,baseVal)=>`<div style="margin-bottom:12px">
+      <div style="font-weight:700;font-size:.82rem;margin-bottom:6px;color:var(--text2)">${title}</div>
+      ${rows.map(r=>row(r,baseVal,rows)).join('')}
+      </div>`;
     wrap.innerHTML = tbl('SL sweep', d.sl, d.base_sl) + tbl('TP sweep', d.tp, d.base_tp)
-      + '<div style="color:var(--text3);font-size:.7rem">★ — текущий лучший. Остальные параметры зафиксированы как в лучшем конфиге; HTF-фильтр в свипе не учитывается.</div>';
+      + '<div style="color:var(--text3);font-size:.68rem;margin-top:4px">★ — текущий лучший. Цвет fit — относительно лучшего в серии. HTF-фильтр не учитывается.</div>';
     wrap.style.display='block';
   }catch(e){ wrap.style.display='block'; wrap.innerHTML='<b style="color:var(--red)">Ошибка: '+e+'</b>'; }
   finally{ if(btn){btn.disabled=false;btn.textContent='📊 SL/TP sweep';} }
