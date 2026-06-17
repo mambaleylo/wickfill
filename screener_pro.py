@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.360
+WickFill Optimizer v3.370
+- v3.370: fix — сделка шла "онлайн", потом после Restart с тем же конфигом появилась
+  сделка, которой не было видно живьём. Причина: тело тика _sliding_window_thread
+  (расчёт _simulate/carry-forward/_save_chart на каждой новой свече) не было обёрнуто
+  в try/except — любое необработанное исключение (сетевой сбой, KeyError и т.п.) тихо
+  убивало весь SW-тред. opt_state["running"] при этом НЕ сбрасывался (сбрасывается
+  только после штатного выхода из while-цикла, до которого исключение не доходит) —
+  бот продолжал считать себя запущенным, график замирал на последнем тике, новые
+  сделки не попадали ни на график, ни в Telegram, пока пользователь не делал руками
+  Restart (полный перезапуск процесса), после которого свежий SW-тред пересчитывал
+  всё с нуля и показывал пропущенную сделку. Фиксы:
+  (1) тело тика обёрнуто в try/except — плохой тик логируется и пропускается,
+      тред продолжает работать вместо тихой смерти;
+  (2) watchdog в _live_candle_updater — раньше self-heal (перегрузка истории при
+      устаревших данных) срабатывал только если running=False; теперь дополнительно
+      срабатывает и при running=True, если данные устарели НАМНОГО сильнее обычного
+      (>3 интервалов вместо 2 + запас 30с) — это автоматически лечит уже умерший/
+      зависший SW-тред без необходимости ручного Restart.
 - v3.369: логи — строки warn/found теперь видны в UI (был fallthrough только на error);
   строка 📐 Стаб теперь found (зелёная) если хорошо, warn (жёлтая) если плохо.
 - v3.368: WF валидация ужесточена:
@@ -556,7 +573,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.369"
+APP_VERSION = "3.370"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -804,10 +821,22 @@ def _live_candle_updater():
                 _last_closed_for_stale = next((x for x in reversed(cc) if not x.get("live")), None) if cc else None
                 last_t = _last_closed_for_stale["t"] if _last_closed_for_stale else (cc[-1]["t"] if cc else 0)
                 stale = (now - last_t) > interval_sec * 2  # старше 2 интервалов
+                # v3.370: watchdog — если running=True, но данные протухли НАМНОГО сильнее
+                # (>3 интервалов вместо 2), это значит SW-тред завис/умер, но running
+                # никогда не сбросился (сбрасывается только после штатного выхода из его
+                # while-цикла). Раньше такой случай был не лечим без ручного Restart —
+                # граница "stale and not running" его в принципе не пускала сюда.
+                stale_watchdog = running and (now - last_t) > interval_sec * 3 + 30
 
-                # Если данные устарели и оптимизатор не бежит — перегружаем историю
-                if stale and not running and best and (now - _last_refresh) > 60:
-                    print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
+                # Если данные устарели и оптимизатор не бежит — перегружаем историю.
+                # Либо: данные устарели НАМНОГО при running=True — вероятно SW-тред мёртв,
+                # самовосстанавливаемся не дожидаясь ручного Restart (v3.370).
+                if (stale and not running or stale_watchdog) and best and (now - _last_refresh) > 60:
+                    if stale_watchdog and running:
+                        print(f"{_ts()} [SW] ⚠ Watchdog: данные протухли при running=True (last={last_t}, now={now}, "
+                              f"отставание={now - last_t}с) — похоже SW-тред умер, перегружаю историю...", flush=True)
+                    else:
+                        print(f"{_ts()} [SW] Данные устарели (last={last_t}, now={now}), перегружаю историю...", flush=True)
                     try:
                         # Берём _sw_candles — те же что у оптимизатора/SW-треда, не загружаем отдельно
                         with opt_lock:
@@ -3761,101 +3790,116 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
 
         new_candles = candles[1:] + [new_c]
 
-        if best_p:
-            with htf_lock:
-                _htf_dir = htf_state["direction"]
+        # v3.370: весь тик ниже обёрнут в try/except — раньше любое необработанное
+        # исключение здесь (сетевой сбой в _fetch_current_candle, KeyError в _simulate,
+        # ошибка _save_chart и т.п.) тихо убивало весь _sliding_window_thread.
+        # opt_state["sw_running"]/_sw_state[symbol]["running"] при этом НЕ сбрасывался
+        # (сбрасывается только ПОСЛЕ while-цикла, до которого исключение не доходит) —
+        # бот продолжал считать себя "запущенным", график замирал на последнем тике,
+        # новые сделки не попадали ни на график, ни в Telegram-алерты, пока пользователь
+        # не делал руками Restart (полный перезапуск процесса) — после которого свежий
+        # SW-тред пересчитывал всё с нуля и "внезапно" показывал сделку, которой не было
+        # видно "онлайн". try/except не даёт одному плохому тику убить тред целиком.
+        try:
+            if best_p:
+                with htf_lock:
+                    _htf_dir = htf_state["direction"]
 
-            # prev_signals для проверки закрытия сделки и для carry-forward открытого сигнала
-            prev_signals_for_close = []
-            prev_signals_params = None
-            prev_pending_info = None
-            with opt_lock:
-                if not is_multi or symbol == _active_chart_symbol:
-                    prev_signals_for_close = list(opt_state.get("chart_signals") or [])
-                    prev_signals_params = opt_state.get("chart_signals_params")
-                    prev_pending_info = opt_state.get("chart_pending_info")
-            if is_multi:
-                with opt_states_lock:
-                    _sym_st = opt_states.get(symbol, {})
-                    prev_signals_for_close = list(_sym_st.get("chart_signals") or []) or prev_signals_for_close
-                    prev_signals_params = _sym_st.get("chart_signals_params") or prev_signals_params
-                    prev_pending_info = _sym_st.get("chart_pending_info") or prev_pending_info
-
-            sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
-            chart_signals_data = sim["_signals"] if sim else []
-            _sw_pending_bar = sim["pending_signal_bar"] if sim else None
-            _sw_pending_dir = sim["pending_signal_dir"] if sim else None
-            _sw_pending_t   = sim["pending_signal_t"] if sim else None
-
-            # Carry-forward: если предыдущий открытый сигнал (exit_bar=None / open_end) "вылетел"
-            # из chart_signals_data из-за сдвига окна (start_i), но его свеча t ещё в new_candles
-            # и TP/SL ещё не выбит — переносим его, пересчитав exit на новых свечах.
-            chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles, prev_best_p=prev_signals_params, cur_best_p=best_p)
-
-            # Carry-forward входа после pending-сигнала (use_next_bar, v3.271) —
-            # вынесено в общую функцию _carry_forward_pending_signal, см. её докстринг.
-            chart_signals_data, _sw_pending_bar, _sw_pending_dir, _sw_pending_t, _sw_pending_info = \
-                _carry_forward_pending_signal(prev_pending_info, chart_signals_data, new_candles, best_p,
-                                               _sw_pending_bar, _sw_pending_dir, _sw_pending_t)
-
-            # Строим chart_candles_fmt с заполнением временных пропусков
-            # (если в new_candles пропущен интервал — вставляем flat-свечу чтобы не было визуального разрыва)
-            _raw_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
-            chart_candles_fmt = []
-            for _fi, _fc in enumerate(_raw_fmt):
-                if _fi > 0:
-                    _prev = chart_candles_fmt[-1]
-                    _gap_n = round((_fc["t"] - _prev["t"]) / interval_sec) - 1
-                    for _gi in range(min(_gap_n, 10)):  # не более 10 синтетических
-                        _gt = _prev["t"] + interval_sec * (_gi + 1)
-                        chart_candles_fmt.append({"t":_gt,"o":_prev["c"],"h":_prev["c"],"l":_prev["c"],"c":_prev["c"],"gap":True})
-                chart_candles_fmt.append(_fc)
-            cur_c2 = _fetch_current_candle(symbol, tf)
-            if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
-                # open live-свечи = close последней закрытой — нет ценового разрыва
-                _live_open = new_candles[-1]["close"]
-                chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],
-                    "o":_live_open,
-                    "h":max(_live_open, cur_c2["high"]),
-                    "l":min(_live_open, cur_c2["low"]),
-                    "c":cur_c2["close"],"live":True}]
-
-            _set_candles(new_candles)
-
-            br = {}
-            if is_multi:
-                with opt_states_lock:
-                    br = dict(opt_states.get(symbol, {}).get("trade_best") or opt_states.get(symbol, {}).get("best") or {})
-            else:
+                # prev_signals для проверки закрытия сделки и для carry-forward открытого сигнала
+                prev_signals_for_close = []
+                prev_signals_params = None
+                prev_pending_info = None
                 with opt_lock:
-                    br = dict(opt_state.get("trade_best") or opt_state.get("best") or {})
+                    if not is_multi or symbol == _active_chart_symbol:
+                        prev_signals_for_close = list(opt_state.get("chart_signals") or [])
+                        prev_signals_params = opt_state.get("chart_signals_params")
+                        prev_pending_info = opt_state.get("chart_pending_info")
+                if is_multi:
+                    with opt_states_lock:
+                        _sym_st = opt_states.get(symbol, {})
+                        prev_signals_for_close = list(_sym_st.get("chart_signals") or []) or prev_signals_for_close
+                        prev_signals_params = _sym_st.get("chart_signals_params") or prev_signals_params
+                        prev_pending_info = _sym_st.get("chart_pending_info") or prev_pending_info
 
-            chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
-            _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar, pending_info=_sw_pending_info, signals_params=best_p)
+                sim = _simulate(new_candles, best_p, 0, _collect=True, risk_pct=risk_pct, htf_direction=_htf_dir, htf_index=htf_index)
+                chart_signals_data = sim["_signals"] if sim else []
+                _sw_pending_bar = sim["pending_signal_bar"] if sim else None
+                _sw_pending_dir = sim["pending_signal_dir"] if sim else None
+                _sw_pending_t   = sim["pending_signal_t"] if sim else None
 
-            with opt_lock:
-                opt_state["sw_last_update"]  = int(time.time())
-                opt_state["sw_candle_count"] = len(new_candles)
+                # Carry-forward: если предыдущий открытый сигнал (exit_bar=None / open_end) "вылетел"
+                # из chart_signals_data из-за сдвига окна (start_i), но его свеча t ещё в new_candles
+                # и TP/SL ещё не выбит — переносим его, пересчитав exit на новых свечах.
+                chart_signals_data = _carry_forward_open_signal(prev_signals_for_close, chart_signals_data, new_candles, prev_best_p=prev_signals_params, cur_best_p=best_p)
 
-            print(f"[sw:{symbol}] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g}")
+                # Carry-forward входа после pending-сигнала (use_next_bar, v3.271) —
+                # вынесено в общую функцию _carry_forward_pending_signal, см. её докстринг.
+                chart_signals_data, _sw_pending_bar, _sw_pending_dir, _sw_pending_t, _sw_pending_info = \
+                    _carry_forward_pending_signal(prev_pending_info, chart_signals_data, new_candles, best_p,
+                                                   _sw_pending_bar, _sw_pending_dir, _sw_pending_t)
 
-            # Читаем alert_cfg динамически — пользователь мог заполнить поля после старта
-            _live_alert_cfg = None
-            with opt_lock:
-                _live_alert_cfg = opt_state.get("alert_cfg") or alert_cfg
-            if is_multi:
-                with opt_states_lock:
-                    _live_alert_cfg = opt_states.get(symbol, {}).get("alert_cfg") or _live_alert_cfg
-            if _live_alert_cfg and prev_signals_for_close:
-                _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf,
-                                    risk_pct=risk_pct, sl_pct=(best_p or {}).get("sl_pct"))
-            if _live_alert_cfg:
-                # Используем SW-сигналы (только что посчитаны на new_candles) — их t совпадает с new_candles[-1]["t"]
-                # opt_state["chart_signals"] содержит сигналы оптимизатора на другом окне свечей,
-                # их t не совпадёт с last_candle_t → сигнал никогда не найдётся
-                _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
-        else:
-            _set_candles(new_candles)
+                # Строим chart_candles_fmt с заполнением временных пропусков
+                # (если в new_candles пропущен интервал — вставляем flat-свечу чтобы не было визуального разрыва)
+                _raw_fmt = [{"t":c["t"],"o":c["open"],"h":c["high"],"l":c["low"],"c":c["close"]} for c in new_candles]
+                chart_candles_fmt = []
+                for _fi, _fc in enumerate(_raw_fmt):
+                    if _fi > 0:
+                        _prev = chart_candles_fmt[-1]
+                        _gap_n = round((_fc["t"] - _prev["t"]) / interval_sec) - 1
+                        for _gi in range(min(_gap_n, 10)):  # не более 10 синтетических
+                            _gt = _prev["t"] + interval_sec * (_gi + 1)
+                            chart_candles_fmt.append({"t":_gt,"o":_prev["c"],"h":_prev["c"],"l":_prev["c"],"c":_prev["c"],"gap":True})
+                    chart_candles_fmt.append(_fc)
+                cur_c2 = _fetch_current_candle(symbol, tf)
+                if cur_c2 and cur_c2["t"] > new_candles[-1]["t"]:
+                    # open live-свечи = close последней закрытой — нет ценового разрыва
+                    _live_open = new_candles[-1]["close"]
+                    chart_candles_fmt = chart_candles_fmt + [{"t":cur_c2["t"],
+                        "o":_live_open,
+                        "h":max(_live_open, cur_c2["high"]),
+                        "l":min(_live_open, cur_c2["low"]),
+                        "c":cur_c2["close"],"live":True}]
+
+                _set_candles(new_candles)
+
+                br = {}
+                if is_multi:
+                    with opt_states_lock:
+                        br = dict(opt_states.get(symbol, {}).get("trade_best") or opt_states.get(symbol, {}).get("best") or {})
+                else:
+                    with opt_lock:
+                        br = dict(opt_state.get("trade_best") or opt_state.get("best") or {})
+
+                chart_path_val = _save_chart(chart_candles_fmt, chart_signals_data, br or {"params":best_p,"equity":100,"winrate":0,"max_dd":0,"profit_factor":0,"trades":0}, symbol, tf, risk_pct)
+                _update_chart(chart_candles_fmt, chart_signals_data, br, chart_path_val, pending_bar=_sw_pending_bar, pending_info=_sw_pending_info, signals_params=best_p)
+
+                with opt_lock:
+                    opt_state["sw_last_update"]  = int(time.time())
+                    opt_state["sw_candle_count"] = len(new_candles)
+
+                print(f"[sw:{symbol}] Свеча добавлена t={new_c['t']} c={new_c['close']:.4g}")
+
+                # Читаем alert_cfg динамически — пользователь мог заполнить поля после старта
+                _live_alert_cfg = None
+                with opt_lock:
+                    _live_alert_cfg = opt_state.get("alert_cfg") or alert_cfg
+                if is_multi:
+                    with opt_states_lock:
+                        _live_alert_cfg = opt_states.get(symbol, {}).get("alert_cfg") or _live_alert_cfg
+                if _live_alert_cfg and prev_signals_for_close:
+                    _check_trade_close(prev_signals_for_close, chart_signals_data, _live_alert_cfg, symbol, tf,
+                                        risk_pct=risk_pct, sl_pct=(best_p or {}).get("sl_pct"))
+                if _live_alert_cfg:
+                    # Используем SW-сигналы (только что посчитаны на new_candles) — их t совпадает с new_candles[-1]["t"]
+                    # opt_state["chart_signals"] содержит сигналы оптимизатора на другом окне свечей,
+                    # их t не совпадёт с last_candle_t → сигнал никогда не найдётся
+                    _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
+            else:
+                _set_candles(new_candles)
+        except Exception as _sw_tick_err:
+            print(f"[sw:{symbol}] ❌ Ошибка в тике ({_sw_tick_err.__class__.__name__}: {_sw_tick_err}) — тред продолжает работу", flush=True)
+            import traceback as _tb_sw
+            _tb_sw.print_exc()
 
     _set_running(False)
     print(f"[sw:{symbol}] Остановлен")
