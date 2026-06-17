@@ -1,4 +1,5 @@
-[2026-06-17 10:21:57] alert_cfg обновлён: auto=False key=да
-[2026-06-17 10:21:58] alert_cfg обновлён: auto=False key=да
-[2026-06-17 10:35:08] СИГНАЛ ЛОНГ ep=0.08677 tp=0.0875509 sl=0.0864663 tg=fail
-[2026-06-17 10:35:08] gate_check key=да secret=да pct=95.0 auto_on=False raw=False
+[2026-06-17 16:29:44] alert_cfg обновлён: auto=True key=да
+[2026-06-17 16:29:47] alert_cfg обновлён: auto=True key=да
+[2026-06-17 16:38:44] alert_cfg обновлён: auto=True key=да
+[2026-06-17 16:39:25] alert_cfg обновлён: auto=True key=да
+[2026-06-17 16:55:25]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
