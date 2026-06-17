@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.360
+- v3.369: логи — строки warn/found теперь видны в UI (был fallthrough только на error);
+  строка 📐 Стаб теперь found (зелёная) если хорошо, warn (жёлтая) если плохо.
 - v3.368: WF валидация ужесточена:
   - число окон зависит от days: ≤7д→4 окна, 8-20д→5, >20д→6
   - порог прохождения окна: WR≥70% трейна (было 55%) И equity>100 в окне
@@ -554,7 +556,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.368"
+APP_VERSION = "3.369"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4257,7 +4259,8 @@ def _run_one_cycle(candles, days, risk_pct, olog, t0, tf="1h", n_restarts=8,
     final_result["validated_fitness"] = round(final_result["fitness"] * stability_multiplier, 4)
     _slope_str = f" slope={_slope:+.1f}%/окно trend×{_trend_penalty:.2f}" if _slope != 0 else ""
     _wr_str = f" wr_overfit×{_overfit_wr_penalty:.2f}" if _overfit_wr_penalty < 1.0 else ""
-    olog(f"  📐 Стаб: {ok_windows}/{total_windows} окон ({_n_windows} шт, {'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}){_slope_str}{_wr_str} → vfit={final_result['validated_fitness']:.2f}", "ok" if stability_ratio >= 0.67 and _trend_penalty >= 0.8 else "warn")
+    _stab_level = "found" if stability_ratio >= 0.67 and _trend_penalty >= 0.8 and _overfit_wr_penalty >= 0.95 else "warn"
+    olog(f"  📐 Стаб: {ok_windows}/{total_windows} окон ({_n_windows} шт, {'✅' if stability_ratio >= 0.67 else '⚠️'} {stability_ratio:.0%}){_slope_str}{_wr_str} → vfit={final_result['validated_fitness']:.2f}", _stab_level)
 
     # Обновляем validated_fitness для всего top20
     for r in top20_global:
@@ -8034,6 +8037,9 @@ function logLine(msg,level,ts){
   }
   if(/остановлен|остановлено/i.test(msg)){_clearActivity();addLogLine('⏹ '+msg.replace(/^[⏹\s]+/,''),'warn',ts);return;}
   if(level==='error') addLogLine(msg,'error',ts);
+  else if(level==='warn') addLogLine(msg,'warn',ts);
+  else if(level==='found') addLogLine(msg,'found',ts);
+  // info/ok — не показываем (слишком много технического мусора)
 }
 
 function renderBest(b){
