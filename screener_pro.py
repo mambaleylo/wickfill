@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.370
+WickFill Optimizer v3.378
+- v3.378: добавлен 1m в список ТФ walk-forward (wf_tf_sel). 3m не добавлен —
+  Gate.io futures API не поддерживает interval=3m (только 10s/1m/5m/15m/30m/1h/4h/8h/1d/7d),
+  для 3m нужен был бы ресемплинг 1m-свечей, которого в коде нет.
 - v3.377: pre-close check — за ~3с до границы TF берём live-свечу и прогоняем _simulate;
   если сигнал найден — логируем обнаружение; после официального закрытия свечи проверяем
   подтверждение на REST-данных и логируем итог (✅ подтверждён / ❌ не подтверждён).
@@ -609,7 +612,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.377"
+APP_VERSION = "3.378"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7141,6 +7144,7 @@ details summary::-webkit-details-marker{display:none}
         <div class="field-inset">
           <label>Таймфрейм</label>
           <select id="wf_tf_sel">
+            <option value="1m">1m</option>
             <option value="5m">5m</option>
             <option value="15m">15m</option>
             <option value="30m">30m</option>
