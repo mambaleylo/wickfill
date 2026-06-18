@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.373: AMOLED сейвер — убраны лейблы (WLD·5M·ДЕПОЗИТ, GATE.IO·БАЛАНС, Активная
+  сделка); текст "Подключено/Нет связи" убран, осталась только WiFi-иконка (✓=есть
+  polling, ✗=нет связи); батарея теперь SVG с заливкой как в шапке (не эмодзи),
+  выровнена в одну строку с WiFi-иконкой.
 - v3.372: заряд батареи в шапке и на AMOLED-экране. Плашка #batteryPill в шапке
   (десктоп) и #batteryPillMob (мобайл, вне .topbar-meta — всегда видна) через
   Battery Status API; SVG-иконка с заливкой пропорционально уровню, цвет: зелёный
@@ -583,7 +587,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.372"
+APP_VERSION = "3.373"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -8642,37 +8646,31 @@ function _amoledPanels(night){
   const date=now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
   const head=`<div class="as-time">${time}</div><div class="as-date">${date}</div><div class="as-divider"></div>`;
   const online=!_connLost;
-  const sym=(document.getElementById('wf_symbol')?.value||'').trim().toUpperCase();
-  const tf=document.getElementById('wf_tf_sel')?.value||'';
 
-  /* — Депозит лучшего конфига — */
+  /* — Депозит лучшего конфига — без лейбла */
   let depositBlock='';
   if(best.equity!==undefined){
     const eq=best.equity;
     const eqCol=night?'inherit':(eq>=100?'rgba(163,210,100,.9)':'rgba(255,130,52,.9)');
     depositBlock=
-      `<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''} · депозит</div>`+
       `<div class="as-row">`+
         `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b><span>Equity</span></div>`+
-        `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>Winrate</span></div>`+
+        `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>WR</span></div>`+
         `<div><b>${best.trades||0}</b><span>Сделок</span></div>`+
       `</div>`;
-  } else {
-    depositBlock=`<div class="as-label">${sym||'WickFill'}${tf?' · '+tf:''}</div>`;
   }
 
-  /* — Баланс Gate — */
+  /* — Баланс Gate — без лейбла */
   let balBlock='';
   const gb=d.gate_balance;
   if(gb!=null){
     const gbCol=night?'inherit':'rgba(120,190,255,.9)';
     balBlock=
       `<div class="as-divider"></div>`+
-      `<div class="as-label">Gate.io · баланс</div>`+
-      `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b><span>USDT</span></div></div>`;
+      `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b><span>Gate USDT</span></div></div>`;
   }
 
-  /* — Активная сделка из SIGNALS — */
+  /* — Активная сделка из SIGNALS — без лейбла */
   let tradeBlock='', miniChart='';
   const sigs=(typeof SIGNALS!=='undefined'?SIGNALS:[])||[];
   const openSig=sigs.find(s=>s.open_end===true);
@@ -8685,7 +8683,6 @@ function _amoledPanels(night){
     const sl=openSig.sl!=null?' SL $'+openSig.sl.toPrecision(6):'';
     tradeBlock=
       `<div class="as-divider"></div>`+
-      `<div class="as-label">Активная сделка</div>`+
       `<div class="as-trade">`+
         `<div class="as-trade-dir" style="color:${dirCol}">${dirLabel}</div>`+
         `<div class="as-trade-info">`+
@@ -8699,27 +8696,42 @@ function _amoledPanels(night){
     if(mc) miniChart=mc;
   }
 
-  /* — Статус сети — */
-  const netLabel=online?'Подключено':'Нет связи';
-  const netBlock=`<div class="as-net">${_amoledNetIcon(online)}<span>${netLabel}</span></div>`;
-
-  /* — Батарея — */
-  let batBlock='';
-  if('getBattery' in navigator){
-    try{
-      const pill=document.getElementById('batteryPill');
-      const txt=document.getElementById('batteryText');
-      if(pill && pill.style.display!=='none' && txt && txt.textContent!=='—'){
-        const pct=parseInt(txt.textContent)||0;
-        const charging=pill.title.startsWith('⚡');
-        const batCol=night?'inherit':pct>30?'rgba(140,210,100,.9)':pct>15?'rgba(255,195,50,.9)':'rgba(255,80,65,.9)';
-        const batIcon=charging?'⚡':'🔋';
-        batBlock=`<div class="as-net"><span style="color:${batCol};font-size:1rem">${batIcon}</span><span style="color:${batCol}">${pct}%${charging?' зарядка':''}</span></div>`;
-      }
-    }catch(e){}
+  /* — Статусная строка: батарея (SVG как в шапке) + иконка сети — */
+  // Батарея — SVG с заливкой, идентично шапке
+  let batSvg='';
+  const btxt=document.getElementById('batteryText');
+  const bpill=document.getElementById('batteryPill');
+  if(btxt && bpill && bpill.style.display!=='none' && btxt.textContent!=='—'){
+    const pct=parseInt(btxt.textContent)||0;
+    const charging=bpill.title.startsWith('⚡');
+    const fw=(9.6*pct/100).toFixed(1);
+    const col=pct>30?'rgba(140,210,100,.95)':pct>15?'rgba(255,195,50,.95)':'rgba(255,80,65,.95)';
+    batSvg=
+      `<svg width="22" height="18" viewBox="0 0 14 11" fill="none" style="vertical-align:middle">`+
+        `<rect x="0.7" y="1.2" width="11.6" height="8.6" rx="2" stroke="${col}" stroke-width="1.3" fill="none"/>`+
+        `<rect x="12.3" y="3.8" width="1.3" height="3.4" rx="0.65" fill="${col}" opacity=".7"/>`+
+        `<rect x="1.7" y="2.2" width="${fw}" height="6.6" rx="1.3" fill="${col}"/>`+
+      `</svg>`+
+      `<span style="color:${col};font-size:.85rem;margin-left:3px;vertical-align:middle">${charging?'⚡':''}${pct}%</span>`;
   }
+  // Сеть — только иконка WiFi, без текста
+  const netSvg=online
+    ? `<svg width="22" height="22" viewBox="0 0 22 22" fill="none">`+
+        `<rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="currentColor"/>`+
+        `<path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/>`+
+        `<path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".6"/>`+
+        `<path d="M1 7a13 13 0 0 1 20 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" opacity=".35"/>`+
+      `</svg>`
+    : `<svg width="22" height="22" viewBox="0 0 22 22" fill="none">`+
+        `<rect x="9.5" y="15.5" width="3" height="3" rx="1.5" fill="rgba(255,75,55,.9)"/>`+
+        `<path d="M7.2 13.2a5.3 5.3 0 0 1 7.6 0" stroke="rgba(255,75,55,.4)" stroke-width="1.7" stroke-linecap="round" fill="none"/>`+
+        `<path d="M4.1 10.1a9.3 9.3 0 0 1 13.8 0" stroke="rgba(255,75,55,.25)" stroke-width="1.7" stroke-linecap="round" fill="none"/>`+
+        `<line x1="6" y1="4" x2="16" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>`+
+        `<line x1="16" y1="4" x2="6" y2="10" stroke="rgba(255,75,55,.9)" stroke-width="2.2" stroke-linecap="round"/>`+
+      `</svg>`;
+  const statusRow=`<div class="as-net" style="gap:10px;align-items:center">${batSvg}${batSvg?'<span style="display:inline-block;width:4px"></span>':''}${netSvg}</div>`;
 
-  return [head+depositBlock+balBlock+tradeBlock+miniChart+batBlock+netBlock];
+  return [head+depositBlock+balBlock+tradeBlock+miniChart+statusRow];
 }
 
 function _amoledShift(){
