@@ -1,5 +1,4 @@
-[2026-06-17 16:29:44] alert_cfg обновлён: auto=True key=да
-[2026-06-17 16:29:47] alert_cfg обновлён: auto=True key=да
-[2026-06-17 16:38:44] alert_cfg обновлён: auto=True key=да
-[2026-06-17 16:39:25] alert_cfg обновлён: auto=True key=да
-[2026-06-17 16:55:25]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-18 16:39:56] alert_cfg обновлён: auto=True key=да
+[2026-06-18 16:49:19] alert_cfg обновлён: auto=True key=да
+[2026-06-18 16:52:51] alert_cfg обновлён: auto=True key=да
+[2026-06-18 17:00:16]   cleanup: отменено 1 зависших TP/SL ордеров (позиция закрыта)
