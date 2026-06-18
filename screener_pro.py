@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.372: заряд батареи в шапке и на AMOLED-экране. Плашка #batteryPill в шапке
+  (десктоп) и #batteryPillMob (мобайл, вне .topbar-meta — всегда видна) через
+  Battery Status API; SVG-иконка с заливкой пропорционально уровню, цвет: зелёный
+  >30%, жёлтый 15–30%, красный <15%; title показывает режим зарядки ⚡.
+  На AMOLED-сейвере блок батареи вставляется перед сетью (batBlock).
 - v3.371: динамический ATR-стоп (use_atr_sl + atr_sl_mult). При use_atr_sl=True стоп
   каждой сделки вычисляется как ATR[i] / ep * 100 * atr_sl_mult вместо фиксированного
   sl_pct; sl_pct остаётся нижней границей (floor). Оба параметра оптимизируются;
@@ -578,7 +583,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.371"
+APP_VERSION = "3.372"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6787,6 +6792,7 @@ details summary::-webkit-details-marker{display:none}
   .topbar-meta{display:none !important}
   /* AMOLED — отдельная кнопка в шапке, видна только на мобиле */
   #amoledBtnMob{display:flex !important}
+  #batteryPillMob{display:flex !important}
 
   /* Весь интерфейс — flex-колонка, СКРОЛЛИТСЯ */
   html,body{overflow:auto !important;height:auto !important;min-height:100dvh !important;touch-action:pan-y !important;overscroll-behavior:auto !important}
@@ -6966,6 +6972,14 @@ details summary::-webkit-details-marker{display:none}
     <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="7" r="6"/></svg>
     AMOLED
   </button>
+  <span class="tb" id="batteryPillMob" style="display:none;align-items:center;gap:4px;font-size:.72rem" title="Заряд батареи">
+    <svg width="13" height="11" viewBox="0 0 14 11" fill="none">
+      <rect x="0.7" y="1.2" width="11.6" height="8.6" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+      <rect x="12.3" y="3.8" width="1.3" height="3.4" rx="0.65" fill="currentColor" opacity=".7"/>
+      <rect id="batteryFillMob" x="1.7" y="2.2" width="0" height="6.6" rx="1.3" fill="currentColor"/>
+    </svg>
+    <span id="batteryTextMob">—</span>
+  </span>
   <div class="topbar-meta">
     <span class="tb" id="speedPill" style="display:none">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><polygon points="6,1 7.5,5 12,5 8.5,7.5 9.8,12 6,9 2.2,12 3.5,7.5 0,5 4.5,5" opacity=".75"/></svg>
@@ -6980,6 +6994,14 @@ details summary::-webkit-details-marker{display:none}
     <span class="tb" id="cpuTempPill" style="display:none" title="Температура CPU">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M5 1.5h2v5.6a2.2 2.2 0 11-2 0V1.5z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="9" r="1" fill="currentColor"/></svg>
       <span id="cpuTempText">—</span>
+    </span>
+    <span class="tb" id="batteryPill" style="display:none" title="Заряд батареи">
+      <svg width="12" height="10" viewBox="0 0 14 11" fill="none">
+        <rect x="0.7" y="1.2" width="11.6" height="8.6" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+        <rect x="12.3" y="3.8" width="1.3" height="3.4" rx="0.65" fill="currentColor" opacity=".7"/>
+        <rect id="batteryFill" x="1.7" y="2.2" width="0" height="6.6" rx="1.3" fill="currentColor"/>
+      </svg>
+      <span id="batteryText">—</span>
     </span>
     <span class="tb btn" id="latencyPill" onclick="checkApi()" title="Задержка API Gate.io">
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M6 3v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -7342,6 +7364,47 @@ function checkCpuTemp(){
   }).catch(()=>{});
 }
 checkCpuTemp();setInterval(checkCpuTemp,15000);
+
+/* ── Battery ── */
+(function initBattery(){
+  function _applyBattery(b){
+    const pct=Math.round(b.level*100);
+    const fw=Math.round(9.6*b.level*10)/10;
+    const col=pct>30?'rgba(140,210,100,.95)':pct>15?'rgba(255,195,50,.95)':'rgba(255,80,65,.95)';
+    const title=(b.charging?'⚡ Заряжается · ':'Батарея · ')+pct+'%';
+    // Десктоп
+    const pill=document.getElementById('batteryPill');
+    const txt=document.getElementById('batteryText');
+    const fill=document.getElementById('batteryFill');
+    if(pill&&txt&&fill){
+      pill.style.display='';
+      txt.textContent=pct+'%';
+      txt.style.color=pct<=15?'rgba(255,80,65,.95)':'';
+      fill.setAttribute('width',fw.toFixed(1));
+      fill.setAttribute('fill',col);
+      pill.title=title;
+    }
+    // Мобайл
+    const pillM=document.getElementById('batteryPillMob');
+    const txtM=document.getElementById('batteryTextMob');
+    const fillM=document.getElementById('batteryFillMob');
+    if(pillM&&txtM&&fillM){
+      pillM.style.display='';
+      txtM.textContent=pct+'%';
+      txtM.style.color=pct<=15?'rgba(255,80,65,.95)':'';
+      fillM.setAttribute('width',fw.toFixed(1));
+      fillM.setAttribute('fill',col);
+      pillM.title=title;
+    }
+  }
+  if('getBattery' in navigator){
+    navigator.getBattery().then(b=>{
+      _applyBattery(b);
+      b.addEventListener('levelchange',()=>_applyBattery(b));
+      b.addEventListener('chargingchange',()=>_applyBattery(b));
+    }).catch(()=>{});
+  }
+})();
 // Каждую секунду обновляем текст "нет соединения Xs"
 setInterval(()=>{ if(_connLost) _setConnStatus(false); },1000);
 // Стандартные browser events как доп. триггер
@@ -8640,7 +8703,23 @@ function _amoledPanels(night){
   const netLabel=online?'Подключено':'Нет связи';
   const netBlock=`<div class="as-net">${_amoledNetIcon(online)}<span>${netLabel}</span></div>`;
 
-  return [head+depositBlock+balBlock+tradeBlock+miniChart+netBlock];
+  /* — Батарея — */
+  let batBlock='';
+  if('getBattery' in navigator){
+    try{
+      const pill=document.getElementById('batteryPill');
+      const txt=document.getElementById('batteryText');
+      if(pill && pill.style.display!=='none' && txt && txt.textContent!=='—'){
+        const pct=parseInt(txt.textContent)||0;
+        const charging=pill.title.startsWith('⚡');
+        const batCol=night?'inherit':pct>30?'rgba(140,210,100,.9)':pct>15?'rgba(255,195,50,.9)':'rgba(255,80,65,.9)';
+        const batIcon=charging?'⚡':'🔋';
+        batBlock=`<div class="as-net"><span style="color:${batCol};font-size:1rem">${batIcon}</span><span style="color:${batCol}">${pct}%${charging?' зарядка':''}</span></div>`;
+      }
+    }catch(e){}
+  }
+
+  return [head+depositBlock+balBlock+tradeBlock+miniChart+batBlock+netBlock];
 }
 
 function _amoledShift(){
