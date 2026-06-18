@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.377: pre-close check — за ~3с до границы TF берём live-свечу и прогоняем _simulate;
+  если сигнал найден — логируем обнаружение; после официального закрытия свечи проверяем
+  подтверждение на REST-данных и логируем итог (✅ подтверждён / ❌ не подтверждён).
+  Сделка по-прежнему открывается только на закрытой свече, но теперь задержка реакции
+  сокращается: SW не ждёт grace+retry — сигнал уже известен заранее.
 - v3.376: fix задержки автосделки после закрытия свечи (~30с). Причина: в
   _sliding_window_thread grace-period перед первой попыткой запроса свечи был
   жёстко = 5с, а retry-цикл на случай если биржа ещё не отдала финализированную
@@ -604,7 +609,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.376"
+APP_VERSION = "3.377"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3812,10 +3817,42 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
         wake_human = __import__('datetime').datetime.utcfromtimestamp(wake_at).strftime('%H:%M:%S')
         print(f"[sw:{symbol}] Следующая свеча: граница {__import__('datetime').datetime.utcfromtimestamp(next_close).strftime('%H:%M:%S')} UTC, ждём до {wake_human} UTC (+{_grace}с)")
 
+        _preclose_signal_found = False  # флаг: pre-close прогон нашёл сигнал
+        _preclose_checked = False       # выполнили ли уже pre-close проверку
         while True:
             if not _get_running(): break
             remaining = wake_at - time.time()
             if remaining <= 0: break
+            # Pre-close check: за ~3с до закрытия свечи берём live-свечу и проверяем сигнал.
+            # Это позволяет узнать заранее — есть ли сигнал, и дождаться REST-подтверждения
+            # официально закрытой свечи прежде чем открывать сделку (устраняет задержку 25-30с).
+            if not _preclose_checked and 2.0 <= remaining <= 4.0:
+                _preclose_checked = True
+                try:
+                    _pc_candles, _pc_best_p = _get_candles_params()
+                    if _pc_candles and _pc_best_p:
+                        _pc_live = _fetch_current_candle(symbol, tf)
+                        if _pc_live and _pc_live["t"] > _pc_candles[-1]["t"]:
+                            # Строим гипотетический список свечей с live-свечой вместо последней
+                            _pc_test = _pc_candles[1:] + [_pc_live]
+                            with htf_lock:
+                                _pc_htf_dir = htf_state["direction"]
+                            _pc_sim = _simulate(_pc_test, _pc_best_p, 0, _collect=True,
+                                                risk_pct=risk_pct, htf_direction=_pc_htf_dir,
+                                                htf_index=htf_index)
+                            if _pc_sim and _pc_sim["_signals"]:
+                                _pc_last_t = _pc_live["t"]
+                                _pc_sigs = [s for s in _pc_sim["_signals"] if s.get("t") == _pc_last_t]
+                                if _pc_sigs:
+                                    _preclose_signal_found = True
+                                    _pc_dir = _pc_sigs[0]["dir"]
+                                    print(f"[sw:{symbol}] ⏰ Pre-close: сигнал {'ЛОНГ' if _pc_dir==1 else 'ШОРТ'} обнаружен за {remaining:.1f}с до закрытия — ждём REST-подтверждения")
+                                else:
+                                    print(f"[sw:{symbol}] ⏰ Pre-close: сигнал на закрытии не ожидается")
+                        else:
+                            print(f"[sw:{symbol}] ⏰ Pre-close: live-свеча не получена")
+                except Exception as _pce:
+                    print(f"[sw:{symbol}] ⚠ Pre-close check error: {_pce}")
             time.sleep(min(1.0, remaining))
 
         if not _get_running(): break
@@ -3954,6 +3991,12 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                     # Используем SW-сигналы (только что посчитаны на new_candles) — их t совпадает с new_candles[-1]["t"]
                     # opt_state["chart_signals"] содержит сигналы оптимизатора на другом окне свечей,
                     # их t не совпадёт с last_candle_t → сигнал никогда не найдётся
+                    _last_t = new_candles[-1]["t"] if new_candles else 0
+                    _confirmed_sigs = [s for s in chart_signals_data if s.get("t") == _last_t]
+                    if _preclose_signal_found and _confirmed_sigs:
+                        print(f"[sw:{symbol}] ✅ Pre-close сигнал ПОДТВЕРЖДЁН REST-свечой — открываем сделку")
+                    elif _preclose_signal_found and not _confirmed_sigs:
+                        print(f"[sw:{symbol}] ❌ Pre-close сигнал НЕ подтверждён на закрытой свече — сделка НЕ открывается")
                     _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
             else:
                 _set_candles(new_candles)
