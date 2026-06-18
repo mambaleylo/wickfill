@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.375: AMOLED — базовый цвет текста .38→.92 (часы/дата/числа читаемы на чёрном);
+  иконка батареи тоньше (stroke 1.3→0.9, размер 22×18→16×13px); таймер до
+  включения сейвера 60с→15с.
 - v3.374: AMOLED — убраны подписи EQUITY/WR/СДЕЛОК и GATE USDT под числами (числа
   читаются без подписей); opacity даты .65→.82, статусной строки .62→1 (батарея+wifi
   теперь полностью яркие), подписи EP/TP/SL сделки .60→.82.
@@ -590,7 +593,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.374"
+APP_VERSION = "3.375"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6927,14 +6930,14 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   text-align:center;font-family:'DM Mono',monospace;
-  color:rgba(255,255,255,.38);
+  color:rgba(255,255,255,.92);
   transition:opacity 1.1s ease,color 1.1s ease,top 1.1s ease,left 1.1s ease;
   user-select:none;pointer-events:none;white-space:nowrap;
   min-width:280px;
 }
 #amoledContent .as-time{font-size:4.6rem;font-weight:500;letter-spacing:.04em;line-height:1}
-#amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.82;text-transform:capitalize}
-#amoledContent .as-divider{width:40px;height:1px;background:currentColor;opacity:.22;margin:18px auto}
+#amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.7;text-transform:capitalize}
+#amoledContent .as-divider{width:40px;height:1px;background:currentColor;opacity:.35;margin:18px auto}
 #amoledContent .as-label{font-size:.82rem;letter-spacing:.16em;text-transform:uppercase;opacity:.55;margin-bottom:10px}
 #amoledContent .as-row{display:flex;gap:26px;justify-content:center;flex-wrap:wrap}
 #amoledContent .as-row b{font-size:2rem;font-weight:600;display:block;color:inherit;line-height:1.1}
@@ -8583,7 +8586,7 @@ document.addEventListener('DOMContentLoaded',function(){
 /* ── AMOLED режим ── */
 let _amoledOn = localStorage.getItem('wf_amoled')==='1';
 let _amoledTimer = null;
-const AMOLED_DELAY = 60000; // 1 минута
+const AMOLED_DELAY = 15000; // 15 секунд
 
 /* ── AMOLED screensaver — ротация панелей + сдвиг позиции каждые 30с ── */
 const AMOLED_SHIFT_INTERVAL = 30000; // 30с
@@ -8710,12 +8713,12 @@ function _amoledPanels(night){
     const fw=(9.6*pct/100).toFixed(1);
     const col=pct>30?'rgba(140,210,100,.95)':pct>15?'rgba(255,195,50,.95)':'rgba(255,80,65,.95)';
     batSvg=
-      `<svg width="22" height="18" viewBox="0 0 14 11" fill="none" style="vertical-align:middle">`+
-        `<rect x="0.7" y="1.2" width="11.6" height="8.6" rx="2" stroke="${col}" stroke-width="1.3" fill="none"/>`+
-        `<rect x="12.3" y="3.8" width="1.3" height="3.4" rx="0.65" fill="${col}" opacity=".7"/>`+
-        `<rect x="1.7" y="2.2" width="${fw}" height="6.6" rx="1.3" fill="${col}"/>`+
+      `<svg width="16" height="13" viewBox="0 0 14 11" fill="none" style="vertical-align:middle">`+
+        `<rect x="0.7" y="1.2" width="11.6" height="8.6" rx="2" stroke="${col}" stroke-width="0.9" fill="none"/>`+
+        `<rect x="12.3" y="3.8" width="1.1" height="3.4" rx="0.55" fill="${col}" opacity=".7"/>`+
+        `<rect x="1.7" y="2.2" width="${fw}" height="6.6" rx="1" fill="${col}"/>`+
       `</svg>`+
-      `<span style="color:${col};font-size:.85rem;margin-left:3px;vertical-align:middle">${charging?'⚡':''}${pct}%</span>`;
+      `<span style="color:${col};font-size:.82rem;margin-left:2px;vertical-align:middle">${charging?'⚡':''}${pct}%</span>`;
   }
   // Сеть — только иконка WiFi, без текста
   const netSvg=online
