@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.374: AMOLED — убраны подписи EQUITY/WR/СДЕЛОК и GATE USDT под числами (числа
+  читаются без подписей); opacity даты .65→.82, статусной строки .62→1 (батарея+wifi
+  теперь полностью яркие), подписи EP/TP/SL сделки .60→.82.
 - v3.373: AMOLED сейвер — убраны лейблы (WLD·5M·ДЕПОЗИТ, GATE.IO·БАЛАНС, Активная
   сделка); текст "Подключено/Нет связи" убран, осталась только WiFi-иконка (✓=есть
   polling, ✗=нет связи); батарея теперь SVG с заливкой как в шапке (не эмодзи),
@@ -587,7 +590,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.373"
+APP_VERSION = "3.374"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6930,7 +6933,7 @@ details summary::-webkit-details-marker{display:none}
   min-width:280px;
 }
 #amoledContent .as-time{font-size:4.6rem;font-weight:500;letter-spacing:.04em;line-height:1}
-#amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.65;text-transform:capitalize}
+#amoledContent .as-date{font-size:1.05rem;margin-top:8px;opacity:.82;text-transform:capitalize}
 #amoledContent .as-divider{width:40px;height:1px;background:currentColor;opacity:.22;margin:18px auto}
 #amoledContent .as-label{font-size:.82rem;letter-spacing:.16em;text-transform:uppercase;opacity:.55;margin-bottom:10px}
 #amoledContent .as-row{display:flex;gap:26px;justify-content:center;flex-wrap:wrap}
@@ -6941,11 +6944,11 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent .as-trade-dir{font-size:1.5rem;font-weight:700;letter-spacing:.06em}
 #amoledContent .as-trade-info{text-align:left}
 #amoledContent .as-trade-info .as-ti-main{font-size:1.35rem;font-weight:600;line-height:1.1}
-#amoledContent .as-trade-info .as-ti-sub{font-size:.75rem;opacity:.6;margin-top:4px;letter-spacing:.07em}
+#amoledContent .as-trade-info .as-ti-sub{font-size:.75rem;opacity:.82;margin-top:4px;letter-spacing:.07em}
 /* мини-свечи */
 #amoledContent .as-mini-chart{margin:12px auto 0;display:block;opacity:.75}
 /* статус сети */
-#amoledContent .as-net{display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:.85rem;opacity:.62}
+#amoledContent .as-net{display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:.85rem;opacity:1}
 #amoledContent .as-net svg{flex-shrink:0}
 #amoledContent.night{color:rgba(255,255,255,.10)}
 #amoledContent.night .as-time{font-weight:400}
@@ -8654,9 +8657,9 @@ function _amoledPanels(night){
     const eqCol=night?'inherit':(eq>=100?'rgba(163,210,100,.9)':'rgba(255,130,52,.9)');
     depositBlock=
       `<div class="as-row">`+
-        `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b><span>Equity</span></div>`+
-        `<div><b>${(best.winrate||0).toFixed(0)}%</b><span>WR</span></div>`+
-        `<div><b>${best.trades||0}</b><span>Сделок</span></div>`+
+        `<div><b style="color:${eqCol}">$${eq.toFixed(0)}</b></div>`+
+        `<div><b>${(best.winrate||0).toFixed(0)}%</b></div>`+
+        `<div><b>${best.trades||0}</b></div>`+
       `</div>`;
   }
 
@@ -8667,7 +8670,7 @@ function _amoledPanels(night){
     const gbCol=night?'inherit':'rgba(120,190,255,.9)';
     balBlock=
       `<div class="as-divider"></div>`+
-      `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b><span>Gate USDT</span></div></div>`;
+      `<div class="as-row"><div><b style="color:${gbCol}">$${gb.toFixed(2)}</b></div></div>`;
   }
 
   /* — Активная сделка из SIGNALS — без лейбла */
