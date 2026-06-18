@@ -34,3 +34,4 @@
 [2026-06-18 14:30:37] gate ✓ ЛОНГ lev=25 — итог
 [2026-06-18 14:47:28] alert_cfg обновлён: auto=False key=да
 [2026-06-18 14:47:28] alert_cfg обновлён: auto=False key=да
+[2026-06-18 15:55:48] alert_cfg обновлён: auto=False key=да
