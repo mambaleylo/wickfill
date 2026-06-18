@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.370
+- v3.376: fix задержки автосделки после закрытия свечи (~30с). Причина: в
+  _sliding_window_thread grace-period перед первой попыткой запроса свечи был
+  жёстко = 5с, а retry-цикл на случай если биржа ещё не отдала финализированную
+  свечу — 5 попыток с шагом 5с (потолок ожидания 5+5×5=30с). Раз сделки стабильно
+  открывались спустя ~30с — Gate.io почти всегда не успевал опубликовать только
+  закрытую свечу в первые 5-10с, и бот доходил до последних retry-попыток. Шаг
+  опроса был слишком грубым: даже если биржа отдавала свечу на 6-7-й секунде,
+  бот ловил её только на следующей 5-секундной отметке. Теперь grace=2с,
+  retry=14×2с (потолок ожидания тот же ~30с — защита от реальной задержки биржи
+  не ослаблена), но свеча подхватывается почти сразу как становится доступна,
+  а не с опозданием до 5с на каждый шаг.
 - v3.375: AMOLED — базовый цвет текста .38→.92 (часы/дата/числа читаемы на чёрном);
   иконка батареи тоньше (stroke 1.3→0.9, размер 22×18→16×13px); таймер до
   включения сейвера 60с→15с.
@@ -593,7 +604,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.375"
+APP_VERSION = "3.376"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3795,7 +3806,8 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
 
         now = int(time.time())
         next_close = ((now // interval_sec) + 1) * interval_sec
-        _grace = 5  # секунд grace-period после границы TF
+        _grace = 2  # секунд grace-period после границы TF (v3.376: было 5 — снижено,
+                    # т.к. первая попытка чаще всего промахивается из-за грубого шага опроса)
         wake_at = next_close + _grace
         wake_human = __import__('datetime').datetime.utcfromtimestamp(wake_at).strftime('%H:%M:%S')
         print(f"[sw:{symbol}] Следующая свеча: граница {__import__('datetime').datetime.utcfromtimestamp(next_close).strftime('%H:%M:%S')} UTC, ждём до {wake_human} UTC (+{_grace}с)")
@@ -3808,16 +3820,21 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
 
         if not _get_running(): break
 
-        # Retry: биржа может задержать свечу — пробуем до 5 раз с интервалом 5с
+        # Retry: биржа может задержать свечу. v3.376: шаг опроса сужен 5с → 2с
+        # (было 5 попыток×5с = до 25с поверх grace=5 → потолок 30с с грубой реакцией;
+        # теперь 14 попыток×2с = до 28с поверх grace=2 → тот же потолок ~30с,
+        # но свеча подхватывается практически сразу как биржа её опубликует,
+        # а не только на следующей 5-секундной отметке)
+        _RETRY_N = 14
         new_c = None
-        for _retry in range(5):
+        for _retry in range(_RETRY_N):
             _cand = _fetch_latest_candle(symbol, tf)
             _cur_candles, _ = _get_candles_params()
             if _cand and _cur_candles and _cand["t"] > _cur_candles[-1]["t"]:
                 new_c = _cand
                 break
-            print(f"[sw:{symbol}] Свеча ещё не финализирована, retry {_retry+1}/5...")
-            time.sleep(5)
+            print(f"[sw:{symbol}] Свеча ещё не финализирована, retry {_retry+1}/{_RETRY_N}...")
+            time.sleep(2)
         if new_c is None:
             new_c = _fetch_latest_candle(symbol, tf)
 
