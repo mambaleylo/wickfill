@@ -1,2 +1,9 @@
-[2026-06-18 15:57:26] alert_cfg обновлён: auto=False key=да
-[2026-06-18 16:01:04] alert_cfg обновлён: auto=False key=да
+[2026-06-18 14:02:13] alert_cfg обновлён: auto=True key=да
+[2026-06-18 14:02:51] alert_cfg обновлён: auto=False key=да
+[2026-06-18 14:02:51] alert_cfg обновлён: auto=False key=да
+[2026-06-18 14:30:07] СИГНАЛ ЛОНГ ep=0.0846 tp=0.0853191 sl=0.0842616 tg=ok
+[2026-06-18 14:30:07] gate_check key=да secret=да pct=95.0 auto_on=False raw=False
+[2026-06-18 16:00:05] alert_cfg обновлён: auto=False key=да
+[2026-06-18 16:25:23] СИГНАЛ ЛОНГ ep=0.253 tp=0.25591 sl=0.24989 tg=ok
+[2026-06-18 16:25:23] gate_check key=да secret=да pct=95.0 auto_on=False raw=False
+[2026-06-18 16:39:06] alert_cfg обновлён: auto=False key=да
