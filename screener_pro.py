@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.394
+WickFill Optimizer v3.395
+- v3.395: автоперезапуск ProcessPool при BrokenProcessPool (OOM killer на Android убивает воркер) — пул пересоздаётся на лету, цикл повторяется без остановки оптимизатора
 - v3.394: UI — убран заголовок "Лучшая комбинация", убран блок HTF-фильтра (статистика за период), убрана кнопка SL/TP sweep; строка таблицы лучшей комбинации объединена с подписями (label + value в одной ячейке)
 - v3.393: fix зацикливание автообновления — версия "находится новой", но реально
   не обновляется, рестарт повторяется бесконечно. Причина: _auto_update_worker
@@ -683,7 +684,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.394"
+APP_VERSION = "3.395"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5616,12 +5617,30 @@ def run_optimizer(params):
             except Exception as _pie:
                 print(f"[opt] Ошибка переинит воркеров: {_pie}", flush=True)
 
-        final_result, final_params, top20 = _run_one_cycle(
-            current_candles, days, risk_pct, olog, t0, tf,
-            prev_best_params=prev_best_params if infinite else None,
-            prev_top20=prev_top20 if infinite else None,
-            pool=_shared_pool, n_workers=_n_workers,
-            shake=_shake_now, htf_index=_htf_index)
+        try:
+            final_result, final_params, top20 = _run_one_cycle(
+                current_candles, days, risk_pct, olog, t0, tf,
+                prev_best_params=prev_best_params if infinite else None,
+                prev_top20=prev_top20 if infinite else None,
+                pool=_shared_pool, n_workers=_n_workers,
+                shake=_shake_now, htf_index=_htf_index)
+        except Exception as _pool_err:
+            from concurrent.futures.process import BrokenProcessPool
+            if isinstance(_pool_err, BrokenProcessPool) or "child process terminated" in str(_pool_err).lower():
+                olog(f"⚠ ProcessPool упал (OOM?), пересоздаём пул...", "warn")
+                _plog("pool_restart", reason=str(_pool_err))
+                try: _shared_pool.shutdown(wait=False)
+                except Exception: pass
+                import time as _t2; _t2.sleep(2)
+                _shared_pool = PoolExecutor(
+                    max_workers=_n_workers,
+                    initializer=_worker_init,
+                    initargs=(current_candles, 0, risk_pct, _htf_index)
+                )
+                _shared_pool_holder[0] = _shared_pool
+                olog(f"✓ Пул пересоздан ({_n_workers} воркеров), цикл #{cycle} повторяем", "ok")
+                continue
+            raise
         _plog("cycle_end", cycle=cycle, sec=round(time.time()-cycle_t0,1),
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
