@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.393
+WickFill Optimizer v3.394
+- v3.394: UI — убран заголовок "Лучшая комбинация", убран блок HTF-фильтра (статистика за период), убрана кнопка SL/TP sweep; строка таблицы лучшей комбинации объединена с подписями (label + value в одной ячейке)
 - v3.393: fix зацикливание автообновления — версия "находится новой", но реально
   не обновляется, рестарт повторяется бесконечно. Причина: _auto_update_worker
   тянул файл с raw.githubusercontent.com (CDN Fastly) внутри bash-скрипта через
@@ -682,7 +683,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.393"
+APP_VERSION = "3.394"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7419,9 +7420,6 @@ details summary::-webkit-details-marker{display:none}
       <span style="flex:1"></span>
     </div>
 
-    <div style="display:flex;gap:8px;margin:4px 2px 0">
-      <button class="btn-ghost" id="sweepBtn" onclick="runSlTpSweep()" title="Прогнать весь диапазон SL и TP с текущими лучшими остальными параметрами — проверить форму ландшафта фитнеса">📊 SL/TP sweep</button>
-    </div>
 
 
     <!-- Best result (desktop) -->
@@ -7566,41 +7564,12 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Best combination table (below top-strip) -->
     <div class="table-panel in-strip" id="top20Wrap" style="display:none">
-      <div class="table-hdr">Лучшая комбинация</div>
       <table>
-        <thead>
-          <tr>
-            <th>Депозит</th><th>WR%</th>
-            <th>Сделок</th><th>DD%</th><th>PF</th><th>SL%</th><th>TP%</th><th title="Вход на следующей свече">Вход</th><th title="Риск / Стоп-лосс">Плечо×</th>
-          </tr>
-        </thead>
         <tbody id="top20Body"></tbody>
       </table>
     </div>
 
     <!-- HTF filter effectiveness card -->
-    <div class="table-panel in-strip" id="htfStatsWrap" style="display:none">
-      <div class="table-hdr" id="htfStatsToggle" onclick="(function(){var b=document.getElementById('htfStatsBody');var a=document.getElementById('htfStatsArrow');var open=b.style.display!=='none';b.style.display=open?'none':'';a.style.transform=open?'rotate(-90deg)':'rotate(0deg)';})()" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px">
-        <span id="htfStatsArrow" style="display:inline-block;transition:transform .2s;transform:rotate(-90deg);font-size:.8rem">▼</span>
-        HTF-фильтр (<span id="htfStatsTf">—</span>) — за период перебора
-      </div>
-      <div id="htfStatsBody" style="display:none">
-        <table>
-          <thead>
-            <tr>
-              <th></th><th>Депозит</th><th>WR%</th><th>Сделок</th><th>DD%</th><th>PF</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>С фильтром</td><td id="htfWithEq">—</td><td id="htfWithWr">—</td><td id="htfWithTr">—</td><td id="htfWithDd">—</td><td id="htfWithPf">—</td></tr>
-            <tr><td>Без фильтра</td><td id="htfWoEq">—</td><td id="htfWoWr">—</td><td id="htfWoTr">—</td><td id="htfWoDd">—</td><td id="htfWoPf">—</td></tr>
-          </tbody>
-        </table>
-        <div style="padding:6px 12px;font-size:.72rem;color:var(--text3)">Отфильтровано сделок: <span id="htfBlocked">—</span></div>
-      </div>
-    </div>
-
-
     <!-- Chart — fills remaining space -->
     <div class="chart-area">
       <div id="symSwitcher" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:20;display:none;gap:4px;flex-wrap:wrap;justify-content:center;pointer-events:auto;background:var(--cream2);border:1px solid var(--border2);border-radius:20px;padding:4px 8px;max-width:90%"></div>
@@ -8739,12 +8708,17 @@ function renderTop20(list){
       ? Math.round(risk/parseFloat(sl)) : null;
     const lev=levRaw!==null ? levRaw+'×' : '—';
     const levColor=levRaw>50?'var(--red)':levRaw>25?'var(--yellow)':'inherit';
-    return `<tr><td style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</td><td>${wr}</td><td>${r.trades??0}</td>
-      <td style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</td>
-      <td style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</td>
-      <td>${sl}</td><td>${tp}</td>
-      <td style="font-size:.8rem;color:${nb.startsWith('✔')?'var(--green)':'var(--text3)'}">${nb}</td>
-      <td style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</td></tr>`;
+    return `<tr>
+      <td><span style="font-size:.6rem;color:var(--text3)">Депозит</span><br><span style="font-size:1.05rem;font-weight:700;color:${eqColor}">$${eq}</span></td>
+      <td><span style="font-size:.6rem;color:var(--text3)">WR%</span><br><b>${wr}</b></td>
+      <td><span style="font-size:.6rem;color:var(--text3)">Сделок</span><br>${r.trades??0}</td>
+      <td><span style="font-size:.6rem;color:var(--text3)">DD%</span><br><span style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</span></td>
+      <td><span style="font-size:.6rem;color:var(--text3)">PF</span><br><span style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</span></td>
+      <td><span style="font-size:.6rem;color:var(--text3)">SL%</span><br>${sl}</td>
+      <td><span style="font-size:.6rem;color:var(--text3)">TP%</span><br>${tp}</td>
+      <td><span style="font-size:.6rem;color:var(--text3)">Вход</span><br><span style="font-size:.8rem;color:${nb.startsWith('✔')?'var(--green)':'var(--text3)'}">${nb}</span></td>
+      <td><span style="font-size:.6rem;color:var(--text3)">Плечо×</span><br><span style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</span></td>
+    </tr>`;
   }).join('');
 }
 
