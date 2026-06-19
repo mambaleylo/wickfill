@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.396
+- v3.396: лог param_best — при каждом улучшении в координатном спуске пишет key/val/fitness/equity для последующего анализа диапазонов
+
 WickFill Optimizer v3.395
 - v3.395: автоперезапуск ProcessPool при BrokenProcessPool (OOM killer на Android убивает воркер) — пул пересоздаётся на лету, цикл повторяется без остановки оптимизатора
 - v3.394: UI — убран заголовок "Лучшая комбинация", убран блок HTF-фильтра (статистика за период), убрана кнопка SL/TP sweep; строка таблицы лучшей комбинации объединена с подписями (label + value в одной ячейке)
@@ -684,7 +687,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.395"
+APP_VERSION = "3.396"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2307,6 +2310,7 @@ def _coordinate_descent_from(start_ind, pmap_fn, olog, t0,
                 best_result=param_best; improved_in_pass=True
                 val_str=("да" if best_val else "нет") if isinstance(best_val,bool) else (f"{best_val:.2f}" if isinstance(best_val,float) else str(best_val))
                 olog(f"    ✅ {label}: {val_str} → ${param_best['equity']:.2f} (+{delta:.2f}$) | WR {param_best['winrate']:.1f}% | Сд {param_best['trades']} | DD {param_best['max_dd']:.1f}%","found")
+                _plog("param_best", key=key, val=best_val, fitness=round(param_best["fitness"],4), equity=round(param_best["equity"],2), pass_n=pass_num, start=start_label)
 
             _plog("param", key=key, n_cands=len(candidates), sec=_param_dt, pass_n=pass_num, start=start_label)
 
