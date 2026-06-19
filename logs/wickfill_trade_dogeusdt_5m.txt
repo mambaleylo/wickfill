@@ -5,3 +5,4 @@
 [2026-06-19 00:30:15]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
 [2026-06-19 01:40:09]   cleanup: отменено 1 зависших TP/SL ордеров (позиция закрыта)
 [2026-06-19 01:45:17]   cleanup error: HTTPSConnectionPool(host='api.gateio.ws', port=443): Read timed out. (read timeout=10)
+[2026-06-19 04:55:09]   cleanup: отменено 1 зависших TP/SL ордеров (позиция закрыта)
