@@ -640,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.383"
+APP_VERSION = "3.384"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1772,13 +1772,13 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         else:
             _expected = 25.0
         _density_norm = min(1.0, trades / _expected)
-        _profit_weight = 4.0 * (1.0 - _high_eq_mode * 0.7)  # 4.0 → 1.2
+        _profit_weight = 4.0 - _high_eq_mode * 1.5  # 4.0 → 2.5
         profit_bonus=_math.log(max(equity,1.0))*_profit_weight*_density_norm
 
         # --- Сделки: поощряем 15-60 (база), при >8000 — до 100 сделок ---
         # Базовый вес 2.2; при высоком депозите растёт до 6.0 — стратегия должна
         # давать больше сигналов, верхняя граница поощрения расширяется 60→100.
-        _trade_weight = 2.2 + _high_eq_mode * 3.8   # 2.2 → 6.0
+        _trade_weight = 2.2 + _high_eq_mode * 2.3   # 2.2 → 4.5
         _trade_cap    = int(60 + _high_eq_mode * 40)  # 60 → 100
         if trades<=_trade_cap:
             trade_bonus=_math.log(max(trades/15.0,1.0)+1)*_trade_weight
