@@ -4652,6 +4652,7 @@ threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
 # ── Auto-update: каждые 5 минут проверяем SHA на GitHub ──────────────────────
 def _auto_update_worker():
     import subprocess as _sp2, sys as _sys2, hashlib as _hl, json as _j2
+    import urllib.request
     time.sleep(60)
     while True:
         try:
