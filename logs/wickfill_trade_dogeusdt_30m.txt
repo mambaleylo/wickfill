@@ -1,3 +1,5 @@
 [2026-06-19 15:46:46] alert_cfg обновлён: auto=False key=НЕТ
 [2026-06-19 16:30:17] СИГНАЛ ШОРТ ep=0.08263 tp=0.081845 sl=0.0829605 tg=fail
 [2026-06-19 16:30:17] gate_check key=НЕТ secret=НЕТ pct=0.0 auto_on=False raw=False
+[2026-06-19 17:30:10] СИГНАЛ ЛОНГ ep=0.08326 tp=0.084051 sl=0.082927 tg=fail
+[2026-06-19 17:30:10] gate_check key=НЕТ secret=НЕТ pct=0.0 auto_on=False raw=False
