@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.392
+WickFill Optimizer v3.393
+- v3.393: fix зацикливание автообновления — версия "находится новой", но реально
+  не обновляется, рестарт повторяется бесконечно. Причина: _auto_update_worker
+  тянул файл с raw.githubusercontent.com (CDN Fastly) внутри bash-скрипта через
+  curl, без проверки скачанных байт. CDN (особенно через VPN/прокси) мог отдавать
+  устаревшую закешированную копию с HTTP 200 — curl -f это не ловит как ошибку.
+  pkill уже убивал старый процесс, новый стартовал с тем же устаревшим файлом →
+  SHA снова не совпадал с GitHub → следующая проверка (через 5 мин) опять "видела"
+  новую версию → рестарт по кругу без реального обновления. Переписан на скачивание
+  через Contents API (api.github.com, не за CDN) прямо в Python; перед перезапи­сью
+  рабочего файла — явная проверка sha1("blob LEN\0content") скачанных байт против
+  ожидаемого GitHub SHA и ast.parse на синтаксис. При несовпадении/битом контенте —
+  лог ошибки, рабочий файл НЕ трогаем, пробуем через 5 мин — рестарт-цикл больше
+  невозможен в принципе (нет шагов, которые могут перезаписать живой скрипт чем-то
+  непроверенным). Bash-скрипт теперь не лезет в сеть — просто mv готового
+  провалидированного файла + relaunch.
+- (попутно) восстановлена потерянная строка "if parsed.path == '/update_script':" —
+  обработчик кнопки "⬇ Download" был сиротой после return в /set_gh_token и никогда
+  не вызывался (любой запрос падал в 404/неизвестный путь).
 - v3.392: fix задвоение AMOLED-кнопки и плашки батареи в шапке на ширинах
   >700px (планшет/широкий экран). Причина: .tb{display:inline-flex!important}
   (класс) сильнее инлайнового style="display:none" на #amoledBtnMob/
@@ -664,7 +682,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.392"
+APP_VERSION = "3.393"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4675,7 +4693,7 @@ threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
 
 # ── Auto-update: каждые 5 минут проверяем SHA на GitHub ──────────────────────
 def _auto_update_worker():
-    import subprocess as _sp2, sys as _sys2, hashlib as _hl, json as _j2
+    import subprocess as _sp2, sys as _sys2, hashlib as _hl, json as _j2, base64 as _b64, ast as _ast2
     import urllib.request
     time.sleep(60)
     while True:
@@ -4686,29 +4704,58 @@ def _auto_update_worker():
                     headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"}
                 )
                 with urllib.request.urlopen(_req, timeout=15) as _r:
-                    _gh_sha = _j2.load(_r).get("sha", "")
+                    _meta = _j2.load(_r)
+                _gh_sha = _meta.get("sha", "")
                 # blob SHA = sha1("blob SIZE\0CONTENT")
                 _script = os.path.abspath(__file__)
                 with open(_script, "rb") as _f2:
                     _raw = _f2.read()
                 _local_sha = _hl.sha1(f"blob {len(_raw)}\0".encode() + _raw).hexdigest()
                 if _gh_sha and _gh_sha != _local_sha:
-                    print(f"{_ts()} [auto-update] Новая версия {_gh_sha[:7]}, обновляю...", flush=True)
-                    _name = os.path.basename(_script)
-                    _raw_url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_name}"
-                    _sh = os.path.expanduser("~/wickfill_update.sh")
-                    with open(_sh, "w") as _f3:
-                        _f3.write("#!/data/data/com.termux/files/usr/bin/bash\n")
-                        _f3.write("termux-wake-lock\n")
-                        _f3.write(f"pkill -9 -f {_name}\n")
-                        _f3.write("pkill -9 -f 'multiprocessing.spawn'\n")
-                        _f3.write("sleep 2\n")
-                        _f3.write(f'curl -fsSL -H "Authorization: token {_GH_TOKEN}" "{_raw_url}?ts=$(date +%s)" -o \'{_script}\' || {{ echo "curl failed"; exit 1; }}\n')
-                        _f3.write(f"{_sys2.executable} \'{_script}\'\n")
-                    os.chmod(_sh, 0o755)
-                    _sp2.Popen(["bash", _sh], stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL, start_new_session=True)
-                    time.sleep(1)
-                    os._exit(0)
+                    print(f"{_ts()} [auto-update] Новая версия {_gh_sha[:7]}, скачиваю через Contents API "
+                          f"(не raw.githubusercontent.com — тот за CDN, через VPN/кеш мог отдавать "
+                          f"устаревшую копию и зацикливать рестарт без реального обновления)...", flush=True)
+                    _content_b64 = _meta.get("content", "")
+                    if not _content_b64:
+                        # Contents API не инлайнит content для файлов >1MB — fallback на git blob API
+                        _blob_req = urllib.request.Request(
+                            f"https://api.github.com/repos/{_GH_REPO}/git/blobs/{_gh_sha}",
+                            headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+                        )
+                        with urllib.request.urlopen(_blob_req, timeout=15) as _br:
+                            _content_b64 = _j2.load(_br).get("content", "")
+                    _new_bytes = _b64.b64decode(_content_b64)
+                    _check_sha = _hl.sha1(f"blob {len(_new_bytes)}\0".encode() + _new_bytes).hexdigest()
+                    if _check_sha != _gh_sha:
+                        print(f"{_ts()} [auto-update] ❌ SHA скачанного контента не совпал "
+                              f"({_check_sha[:7]} != {_gh_sha[:7]}) — пропускаю, рабочий скрипт не трогаю, "
+                              f"попробую снова через 5 мин", flush=True)
+                    else:
+                        try:
+                            _ast2.parse(_new_bytes.decode("utf-8"))
+                        except Exception as _se:
+                            print(f"{_ts()} [auto-update] ❌ Новый файл не парсится ({_se}) — пропускаю, "
+                                  f"рабочий скрипт не трогаю", flush=True)
+                        else:
+                            _tmp_path = _script + ".new"
+                            with open(_tmp_path, "wb") as _ftmp:
+                                _ftmp.write(_new_bytes)
+                            _name = os.path.basename(_script)
+                            _sh = os.path.expanduser("~/wickfill_update.sh")
+                            with open(_sh, "w") as _f3:
+                                _f3.write("#!/data/data/com.termux/files/usr/bin/bash\n")
+                                _f3.write("termux-wake-lock\n")
+                                _f3.write(f"pkill -9 -f {_name}\n")
+                                _f3.write("pkill -9 -f 'multiprocessing.spawn'\n")
+                                _f3.write("sleep 2\n")
+                                # Файл уже скачан и проверен (SHA+синтаксис) в Python выше —
+                                # bash здесь не лезет в сеть, просто подменяет файл и перезапускает.
+                                _f3.write(f"mv -f '{_tmp_path}' '{_script}'\n")
+                                _f3.write(f"{_sys2.executable} '{_script}'\n")
+                            os.chmod(_sh, 0o755)
+                            _sp2.Popen(["bash", _sh], stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL, start_new_session=True)
+                            time.sleep(1)
+                            os._exit(0)
         except Exception as _ue:
             print(f"{_ts()} [auto-update] ошибка: {_ue}", flush=True)
         time.sleep(300)
@@ -9900,6 +9947,8 @@ class Handler(BaseHTTPRequestHandler):
             print(f"{_ts()} [gh] ✅ _GH_TOKEN обновлён через UI", flush=True)
             self._json({"ok": True})
             return
+
+        if parsed.path == "/update_script":
             try:
                 import urllib.request as _ur
                 _raw_url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/screener_pro.py"
