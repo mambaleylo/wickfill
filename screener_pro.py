@@ -8134,9 +8134,20 @@ function _setConnStatus(online) {
 }
 
 function _onReconnect() {
+  const outageMs = Date.now() - _connLostAt;
   _connLost = false;
   _connRetryCount = 0;
   _setConnStatus(true);
+  // Если разрыв был дольше пары секунд — это не сетевая дрожь, а скорее
+  // перезапуск бэкенда (например, auto-update перечитал процесс и потерял
+  // всё in-memory состояние). Частичный реролл графика тут не спасёт —
+  // перегружаем страницу целиком, чтобы фронтенд синхронизировался с
+  // фактическим текущим состоянием нового процесса.
+  if (outageMs > 2500) {
+    addLogLine('✅ Соединение восстановлено, перезагружаю страницу...', 'ok');
+    location.reload();
+    return;
+  }
   addLogLine('✅ Соединение восстановлено', 'ok');
   // Перезагрузить график если был офлайн или отложен
   const frame = document.getElementById('chartFrame');
