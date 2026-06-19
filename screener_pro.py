@@ -640,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.385"
+APP_VERSION = "3.386"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7658,6 +7658,26 @@ window.addEventListener('DOMContentLoaded', function(){
   });
   const tfEl=document.getElementById('wf_tf_sel');
   if(tfEl) tfEl.addEventListener('change', () => localStorage.setItem('wf_last_wf_tf_sel', tfEl.value));
+
+  // Авто-старт после рестарта (авто-апдейт)
+  if(localStorage.getItem('wf_autostart')==='1'){
+    console.log('[autostart] Обнаружен флаг — запускаю оптимизацию через 2с...');
+    setTimeout(()=>{
+      // Проверяем что сервер живой и поля заполнены
+      fetch('/opt_status').then(r=>r.json()).then(d=>{
+        if(!d.running){
+          console.log('[autostart] Сервер готов, запускаю startOpt()');
+          startOpt();
+        } else {
+          // Уже работает (редкий случай) — просто сбрасываем флаг
+          localStorage.removeItem('wf_autostart');
+        }
+      }).catch(()=>{
+        // Сервер ещё не готов — попробуем ещё раз через 2с
+        setTimeout(()=>{ startOpt(); }, 2000);
+      });
+    }, 2000);
+  }
 });
 
 function getAlertCfg(){
@@ -7940,6 +7960,7 @@ function stopOpt(){
   if(polling){clearTimeout(polling);polling=null;}
   document.getElementById('wfBtn').style.display='';
   document.getElementById('wfStopBtn').style.display='none';
+  localStorage.removeItem('wf_autostart');
 
   document.getElementById('progWrap').style.display='none';
   // На мобиле восстанавливаем карточку настроек
