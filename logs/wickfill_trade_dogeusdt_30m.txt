@@ -6,3 +6,6 @@
 [2026-06-19 18:00:06] СИГНАЛ ШОРТ ep=0.08308 tp=0.0822907 sl=0.0834123 tg=fail
 [2026-06-19 18:00:06] gate_check key=НЕТ secret=НЕТ pct=0.0 auto_on=False raw=False
 [2026-06-19 18:30:05] СИГНАЛ ЛОНГ ep=0.08302 tp=0.0838087 sl=0.0826879 tg=fail
+[2026-06-19 18:30:05] gate_check key=НЕТ secret=НЕТ pct=0.0 auto_on=False raw=False
+[2026-06-19 20:30:08] СИГНАЛ ЛОНГ ep=0.08291 tp=0.0836976 sl=0.0825784 tg=fail
+[2026-06-19 20:30:08] gate_check key=НЕТ secret=НЕТ pct=0.0 auto_on=False raw=False
