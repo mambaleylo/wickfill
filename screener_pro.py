@@ -640,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.387"
+APP_VERSION = "3.388"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4645,6 +4645,48 @@ def _gh_sync_worker():
 threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
 # ── /GitHub Sync ─────────────────────────────────────────────────────────────
 
+# ── Auto-update: каждые 5 минут проверяем SHA на GitHub ──────────────────────
+def _auto_update_worker():
+    import subprocess as _sp2, sys as _sys2, hashlib as _hl, json as _j2
+    time.sleep(60)
+    while True:
+        try:
+            if _GH_TOKEN:
+                _req = urllib.request.Request(
+                    f"https://api.github.com/repos/{_GH_REPO}/contents/screener_pro.py",
+                    headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+                )
+                with urllib.request.urlopen(_req, timeout=15) as _r:
+                    _gh_sha = _j2.load(_r).get("sha", "")
+                # blob SHA = sha1("blob SIZE\0CONTENT")
+                _script = os.path.abspath(__file__)
+                with open(_script, "rb") as _f2:
+                    _raw = _f2.read()
+                _local_sha = _hl.sha1(f"blob {len(_raw)}\0".encode() + _raw).hexdigest()
+                if _gh_sha and _gh_sha != _local_sha:
+                    print(f"{_ts()} [auto-update] Новая версия {_gh_sha[:7]}, обновляю...", flush=True)
+                    _name = os.path.basename(_script)
+                    _raw_url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_name}"
+                    _sh = os.path.expanduser("~/wickfill_update.sh")
+                    with open(_sh, "w") as _f3:
+                        _f3.write("#!/data/data/com.termux/files/usr/bin/bash\n")
+                        _f3.write("termux-wake-lock\n")
+                        _f3.write(f"pkill -9 -f {_name}\n")
+                        _f3.write("pkill -9 -f 'multiprocessing.spawn'\n")
+                        _f3.write("sleep 2\n")
+                        _f3.write(f'curl -fsSL -H "Authorization: token {_GH_TOKEN}" "{_raw_url}?ts=$(date +%s)" -o \'{_script}\' || {{ echo "curl failed"; exit 1; }}\n')
+                        _f3.write(f"{_sys2.executable} \'{_script}\'\n")
+                    os.chmod(_sh, 0o755)
+                    _sp2.Popen(["bash", _sh], stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL, start_new_session=True)
+                    time.sleep(1)
+                    os._exit(0)
+        except Exception as _ue:
+            print(f"{_ts()} [auto-update] ошибка: {_ue}", flush=True)
+        time.sleep(300)
+
+threading.Thread(target=_auto_update_worker, daemon=True, name="auto-update").start()
+# ── /Auto-update ──────────────────────────────────────────────────────────────
+
 
 def _clamp_tp_result(r, tf):
     """Обрезает tp_pct > 1.5 для TF < 1h в result-объекте (модульный уровень)."""
@@ -7899,6 +7941,7 @@ function startOpt(){
   localStorage.setItem('wf_last_wf_sl_max', sl_max);
   localStorage.setItem('wf_last_wf_tp_min', tp_min);
   localStorage.setItem('wf_last_wf_tp_max', tp_max);
+  localStorage.setItem('wf_autostart', '1');
   const alertCfg=getAlertCfg();
   // Используем seed только если он совпадает с текущим tf (защита от устаревшего seed)
   const _rawSeed=window._loadedSeed||null;
