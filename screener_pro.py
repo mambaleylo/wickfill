@@ -640,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.388"
+APP_VERSION = "3.389"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2956,13 +2956,17 @@ function render(){{
     if(eiR<0||vi>=vis.length) continue;
     const viC=Math.max(0,vi);
     let ei=Math.min(Math.max(viC,eiR),vis.length-1);
-    // Не даём заливке ЗАКРЫТОЙ сделки наезжать на бар входа следующего сигнала
-    // (открытую сделку — exit_bar===null — не трогаем, её заливка всегда до края вьюпорта)
-    if(s.exit_bar!==null){{
+    // Не даём заливке наезжать на бар входа следующего сигнала
+    {{
       const _next=SIGNALS[_si+1];
-      if(_next && _next.bar_i>s.bar_i && _next.bar_i<=s.exit_bar){{
-        const _nextVi=_next.bar_i-viewStart-1;
-        if(_nextVi<ei) ei=Math.max(viC,_nextVi);
+      if(_next && _next.bar_i>s.bar_i){{
+        // Для закрытой сделки — только если следующий входит до exit_bar
+        // Для незакрытой (exit_bar===null) — всегда обрезаем по bar_i следующей
+        const _shouldClip = s.exit_bar===null || _next.bar_i<=s.exit_bar;
+        if(_shouldClip){{
+          const _nextVi=_next.bar_i-viewStart-1;
+          if(_nextVi<ei) ei=Math.max(viC,_nextVi);
+        }}
       }}
     }}
     const x1=PAD_L+viC*cw,x2=PAD_L+(ei+1)*cw,isLong=s.dir===1;
