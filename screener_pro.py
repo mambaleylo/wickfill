@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.379
+WickFill Optimizer v3.380
+- v3.380: fix скролл "Недавние конфиги" на планшетах всё ещё не работал после
+  v3.316 (тот фикс добавил touch-action/overscroll-behavior на #recentBody, но
+  на десктоп/планшетной ширине (>700px) появляется второй уровень вложенности:
+  .sidebar (свой overflow-y:auto + touch-action:pan-y) снаружи #recentBody —
+  жест перехватывался родителем на некоторых тач-браузерах). Добавлен ручной
+  JS touchstart/touchmove на #recentBody: пока внутри есть куда скроллить в
+  направлении свайпа — preventDefault+stopPropagation и scrollTop двигается
+  вручную, жест не доходит до .sidebar; на границах — отдаётся родителю как
+  обычно. Также добавлен overscroll-behavior:contain на .sidebar (симметрично
+  recentBody).
 - v3.379: перезагрузка свечей на границе TF теперь не тащит весь days-диапазон
   каждый раз (_fetch_candles), а лёгким запросом (_fetch_recent_candles, limit~10-30,
   без пагинации) подтягивает хвост и сливает его с текущим _sw_candles по timestamp
@@ -618,7 +628,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.379"
+APP_VERSION = "3.380"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6559,6 +6569,7 @@ body>*{position:relative;z-index:1}
   overflow-y:auto;padding:18px 16px;
   display:flex;flex-direction:column;gap:14px;
   touch-action:pan-y;
+  overscroll-behavior:contain;
 }
 
 /* Card */
@@ -8710,6 +8721,40 @@ function _loadRecentConfigs(){
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
+
+// ── Ручной тач-скролл для #recentBody ──
+// CSS touch-action:pan-y/overscroll-behavior:contain (v3.316) не всегда
+// гарантируют корректный nested-скролл во вложенных overflow-контейнерах
+// (.sidebar снаружи + #recentBody внутри) на некоторых тач-браузерах —
+// жест может перехватываться родителем. Здесь явно драйвим scrollTop сами:
+// пока внутри #recentBody есть куда скроллить в направлении свайпа —
+// preventDefault+stopPropagation, не даём жесту дойти до .sidebar/html.
+// На границах (верх/низ исчерпаны) — отдаём управление родителю как обычно.
+(function(){
+  const rb=document.getElementById('recentBody');
+  if(!rb) return;
+  let _ry0=0, _rScroll0=0, _rDragging=false;
+  rb.addEventListener('touchstart', function(e){
+    if(e.touches.length!==1) return;
+    _rDragging=true;
+    _ry0=e.touches[0].clientY;
+    _rScroll0=rb.scrollTop;
+  }, {passive:true});
+  rb.addEventListener('touchmove', function(e){
+    if(!_rDragging || e.touches.length!==1) return;
+    const dy=_ry0-e.touches[0].clientY;
+    const atTop=rb.scrollTop<=0;
+    const atBottom=rb.scrollTop+rb.clientHeight>=rb.scrollHeight-1;
+    if((dy>0 && !atBottom) || (dy<0 && !atTop)){
+      e.preventDefault();
+      e.stopPropagation();
+      rb.scrollTop=_rScroll0+dy;
+    }
+  }, {passive:false});
+  rb.addEventListener('touchend', function(){_rDragging=false;}, {passive:true});
+  rb.addEventListener('touchcancel', function(){_rDragging=false;}, {passive:true});
+})();
+
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
   const t=document.documentElement.getAttribute('data-theme')||'light';
