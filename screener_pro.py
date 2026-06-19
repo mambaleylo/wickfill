@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.391
+WickFill Optimizer v3.392
+- v3.392: fix задвоение AMOLED-кнопки и плашки батареи в шапке на ширинах
+  >700px (планшет/широкий экран). Причина: .tb{display:inline-flex!important}
+  (класс) сильнее инлайнового style="display:none" на #amoledBtnMob/
+  #batteryPillMob (моб-версии вне .topbar-meta) — на любой ширине шире
+  мобильного брейкпоинта они показывались ОДНОВРЕМЕННО с десктопными
+  amoledBtn/batteryPill из .topbar-meta. На самом мобильном брейкпоинте
+  (≤700px) бага не было видно — .topbar-meta целиком скрыта display:none,
+  десктопных дублей не существовало визуально. Добавлен #amoledBtnMob,
+  #batteryPillMob{display:none!important} (ID-специфичность бьёт .tb) —
+  моб-версии снова скрыты по умолчанию, @media(max-width:700px) ниже
+  по-прежнему включает их обратно на телефоне.
 - v3.391: fix пропадание live-сигнала на графике без ошибок в UI (виден только
   после ручного refresh, и уже "в прошлом"). Причина: в poll() _lastChartTs[sym]
   продвигался синхронно ДО результата fetch('/chart_data') — если запрос
@@ -653,7 +664,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.391"
+APP_VERSION = "3.392"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6597,6 +6608,15 @@ body>*{position:relative;z-index:1}
   margin:0!important;
 }
 .tb.btn{cursor:pointer}
+/* #id-селектор сильнее .tb (класс), поэтому только эта пара перебивает
+   .tb{display:inline-flex!important} выше — иначе amoledBtnMob/batteryPillMob
+   (моб-версии, скрыты по умолчанию инлайн style="display:none") показывались
+   ВСЕГДА на любой ширине >700px одновременно с десктопными amoledBtn/batteryPill
+   из .topbar-meta — задвоение AMOLED/батареи на планшете/широком экране.
+   @media(max-width:700px) ниже переопределяет обратно на display:flex!important
+   (та же специфичность, но позже в коде — побеждает только при срабатывании
+   медиа-условия) (v3.392). */
+#amoledBtnMob,#batteryPillMob{display:none!important}
 .tb svg{flex-shrink:0;opacity:.7;display:block}
 .tb.green{background:var(--green-light)!important;border-color:rgba(74,124,89,.2)!important;color:var(--green)!important}
 .tb.btn:hover{background:var(--cream2)!important;border-color:var(--sand)!important;color:var(--bark)!important}
