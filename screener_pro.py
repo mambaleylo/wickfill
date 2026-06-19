@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.378
+WickFill Optimizer v3.379
+- v3.379: перезагрузка свечей на границе TF теперь не тащит весь days-диапазон
+  каждый раз (_fetch_candles), а лёгким запросом (_fetch_recent_candles, limit~10-30,
+  без пагинации) подтягивает хвост и сливает его с текущим _sw_candles по timestamp
+  (_merge_candle_window). При обнаружении гэпа (хвост не перекрыл дыру) — fallback
+  на старый полный _fetch_candles(days). Снижает нагрузку на Gate.io API на каждой
+  свече без потери защиты от пропущенных свечей.
 - v3.378: добавлен 1m в список ТФ walk-forward (wf_tf_sel). 3m не добавлен —
   Gate.io futures API не поддерживает interval=3m (только 10s/1m/5m/15m/30m/1h/4h/8h/1d/7d),
   для 3m нужен был бы ресемплинг 1m-свечей, которого в коде нет.
@@ -612,7 +618,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.378"
+APP_VERSION = "3.379"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -923,10 +929,32 @@ def _live_candle_updater():
                     olog_msg = f"{_ts()} [reload] Перезагрузка свечей (граница {tf})..."
                     print(olog_msg, flush=True)
                     try:
-                        fresh_reload = _fetch_candles(symbol, tf, _rs.get("days", 3))
+                        # Лёгкий путь: подтягиваем только хвост (limit, без days-пагинации)
+                        # и сливаем с текущим _sw_candles по timestamp — вместо полного
+                        # рефетча всего days-диапазона на каждой свече. Полный _fetch_candles
+                        # используется только как fallback, если окна ещё нет или
+                        # обнаружен гэп (хвост не перекрыл дыру целиком).
                         _ncw = _rs.get("n_candles", 0)
-                        if _ncw > 0 and _ncw < len(fresh_reload):
-                            fresh_reload = fresh_reload[-_ncw:]
+                        with opt_lock:
+                            _existing_sw = list(_sw_candles)
+                        _interval_sec = TF_SECONDS.get(tf, 3600)
+                        _batch_limit = max(10, min(30, (_ncw // 20) if _ncw else 10))
+                        fresh_reload = None
+                        if len(_existing_sw) >= 30:
+                            fresh_batch = _fetch_recent_candles(symbol, tf, limit=_batch_limit)
+                            if fresh_batch:
+                                _merged, _gap = _merge_candle_window(
+                                    _existing_sw, fresh_batch, _interval_sec, max_len=_ncw)
+                                if not _gap:
+                                    fresh_reload = _merged
+                                    print(f"{_ts()} [reload] Лёгкий merge: +{len(fresh_batch)} св. "
+                                          f"(итог {len(fresh_reload)})", flush=True)
+                                else:
+                                    print(f"{_ts()} [reload] Гэп после merge — fallback на полный reload", flush=True)
+                        if fresh_reload is None:
+                            fresh_reload = _fetch_candles(symbol, tf, _rs.get("days", 3))
+                            if _ncw > 0 and _ncw < len(fresh_reload):
+                                fresh_reload = fresh_reload[-_ncw:]
                         if len(fresh_reload) >= 30:
                             with opt_lock:
                                 _sw_candles = list(fresh_reload)
@@ -1978,6 +2006,57 @@ def _fetch_latest_candle(symbol, tf):
         return None  # все свечи ещё незакрыты (не должно случаться)
     except:
         return None
+
+def _fetch_recent_candles(symbol, tf, limit=10):
+    """Лёгкая загрузка последних `limit` ЗАКРЫТЫХ свечей одним HTTP-запросом
+    (без `from`, без пагинации по days) — для дозагрузки/merge окна на границе TF.
+    В отличие от _fetch_candles не тащит весь days-диапазон, поэтому быстрее
+    и почти не нагружает Gate.io. Используется вместо полного reload, когда
+    окно (_sw_candles) уже есть и нужно просто подтянуть хвост."""
+    try:
+        interval_sec = TF_SECONDS.get(tf, 3600)
+        r = requests.get(f"{GATE_API}/futures/usdt/candlesticks",
+            params={"contract": symbol, "interval": tf, "limit": max(3, limit)}, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data:
+            return None
+        now = int(time.time())
+        out = []
+        for c in data:
+            t = int(c.get("t", 0))
+            if now >= t + interval_sec:  # только закрытые (календарная граница)
+                out.append({"t": t, "open": float(c["o"]), "high": float(c["h"]),
+                            "low": float(c["l"]), "close": float(c["c"])})
+        out.sort(key=lambda x: x["t"])
+        return out
+    except Exception as e:
+        print(f"{_ts()} [fetch_recent] Ошибка: {e}", flush=True)
+        return None
+
+
+def _merge_candle_window(existing, fresh, interval_sec, max_len=0):
+    """Сливает текущее окно `existing` со свежим хвостом `fresh` по timestamp:
+    перекрывающиеся свечи перезаписываются (на случай ревизии данных биржей),
+    новые добавляются, итог обрезается до max_len (0 = без обрезки).
+    Возвращает (merged, has_gap) — has_gap=True если между соседними свечами
+    после слияния разрыв больше interval_sec*1.5 (т.е. fresh не перекрыл дыру
+    целиком и нужен полный _fetch_candles как fallback)."""
+    by_t = {c["t"]: c for c in existing}
+    for c in fresh:
+        by_t[c["t"]] = c
+    merged = sorted(by_t.values(), key=lambda x: x["t"])
+    if max_len > 0 and len(merged) > max_len:
+        merged = merged[-max_len:]
+    has_gap = False
+    _tol = interval_sec * 1.5
+    for i in range(1, len(merged)):
+        if merged[i]["t"] - merged[i - 1]["t"] > _tol:
+            has_gap = True
+            break
+    return merged, has_gap
+
 
 def _fetch_current_candle(symbol, tf):
     """Возвращает текущую незакрытую свечу (live) для отображения на графике.
