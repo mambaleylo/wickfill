@@ -7208,11 +7208,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Recent configs quick-select -->
     <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
-      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'900px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'240px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:900px;overflow-y:visible;transition:max-height .3s ease;padding:0 6px 6px;">
+      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -7977,7 +7977,7 @@ function stopOpt(){
     const _rp2=document.getElementById('recentPanel');
     if(_rp2 && _rp2.dataset.hasConfigs==='1'){
       _rp2.style.display='block';
-      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='900px';
+      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='240px';
       const _ra3=document.getElementById('recentArrow');if(_ra3)_ra3.style.transform='rotate(180deg)';
     }
   }
@@ -8732,7 +8732,7 @@ function _loadRecentConfigs(){
     // Всегда раскрываем при загрузке
     const rb=document.getElementById('recentBody');
     const ra=document.getElementById('recentArrow');
-    if(rb) rb.style.maxHeight='900px';
+    if(rb) rb.style.maxHeight='240px';
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
