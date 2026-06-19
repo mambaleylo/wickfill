@@ -640,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.386"
+APP_VERSION = "3.387"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2890,6 +2890,12 @@ function render(){{
   let mn=Infinity,mx=-Infinity;
   for(const c of vis){{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);}}
   for(const s of SIGNALS){{if(s.bar_i>=viewStart&&s.bar_i<end){{mn=Math.min(mn,s.sl);mx=Math.max(mx,s.tp);}}}}
+  // Активная открытая или последняя закрытая сделка — всегда включаем sl/tp в диапазон
+  // чтобы линии тейка и стопа последней сделки влазили в видимое окно
+  {{
+    const _as=SIGNALS.find(s=>s.open_end===true)||SIGNALS[SIGNALS.length-1];
+    if(_as){{mn=Math.min(mn,_as.sl);mx=Math.max(mx,_as.tp);}}
+  }}
   const pad=(mx-mn)*0.08;mn-=pad;mx+=pad;if(mx<=mn)mx=mn+1;
   const PAD_L=6,PAD_R=72,PAD_T=28,PAD_B=54,drawW=W-PAD_L-PAD_R,drawH=H-PAD_T-PAD_B;
   const cw=drawW/vis.length,gap=Math.max(0.5,Math.min(cw*0.12, 2.5));
