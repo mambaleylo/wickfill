@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.381
+WickFill Optimizer v3.391
+- v3.391: fix пропадание live-сигнала на графике без ошибок в UI (виден только
+  после ручного refresh, и уже "в прошлом"). Причина: в poll() _lastChartTs[sym]
+  продвигался синхронно ДО результата fetch('/chart_data') — если запрос
+  отваливался по сети/таймауту (мобильный браузер в фоне, Termux) или
+  возвращал пустые данные, .catch(()=>{}) молча проглатывал ошибку, а отметка
+  времени уже была сдвинута. Следующий poll() видел chart_updated_at===knownTs
+  и больше не пытался перезагрузить chart_data — обновление (новая свеча или
+  сигнал) терялось до следующего изменения chart_updated_at или ручного
+  reload. На ручном reload подхватывалось уже актуальное состояние спустя
+  N свечей — сигнал визуально оказывался "в прошлом", а не на live-кромке.
+  _loadChartFrame теперь принимает onDone(success)-колбэк; _lastChartTs
+  продвигается только при подтверждённом успехе (postMessage реально
+  отправлен) — при сбое следующий poll (1.5-15с) повторит попытку сам.
 - v3.381: fix (попытка №2) скролл "Недавние конфиги" на планшетах. v3.380 добавил
   ручной touchstart/touchmove на #recentBody — не помогло (юзер подтвердил баг
   остался на v3.380). Видимо дело не в перехвате жеста родителем (.sidebar), а
@@ -640,7 +653,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.390"
+APP_VERSION = "3.391"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -8036,14 +8049,15 @@ function stopOpt(){
   setTimeout(_loadRecentConfigs, 2500);
   addLogLine('⏹ Остановлен','warn');
 }
-function _loadChartFrame(sym){
+function _loadChartFrame(sym, onDone){
   const frame=document.getElementById('chartFrame');
   const ph=document.getElementById('chartPlaceholder');
-  if(!frame) return;
+  if(!frame){ if(onDone) onDone(false); return; }
   // Если офлайн — помечаем что нужна перезагрузка, но не трогаем iframe
   if(_connLost){
     frame._pendingReload=true;
     frame._pendingSym=sym||_activeChart||'';
+    if(onDone) onDone(false);
     return;
   }
   frame._pendingReload=false;
@@ -8056,17 +8070,25 @@ function _loadChartFrame(sym){
     frame.src='/chart?t='+Date.now()+'&theme='+theme+symParam;
     frame.style.display='block';
     if(ph) ph.style.display='none';
+    if(onDone) onDone(true);
   } else {
-    // Последующие — шлём только данные через postMessage, не трогаем src
+    // Последующие — шлём только данные через postMessage, не трогаем src.
+    // onDone(false) при сетевой ошибке/пустом ответе — caller НЕ должен
+    // продвигать _lastChartTs, иначе следующий poll() решит что график уже
+    // в курсе и не повторит попытку — сигнал/свеча "потеряется" до ручного
+    // refresh (см. v3.391 fix).
     const url='/chart_data'+(sym?'?symbol='+encodeURIComponent(sym):'');
     fetch(url)
       .then(r=>r.json())
       .then(d=>{
         if(d.candles&&d.signals&&frame.contentWindow){
           frame.contentWindow.postMessage({type:'chart_update',candles:d.candles,signals:d.signals,pending_bar:d.pending_bar??null},'*');
+          if(onDone) onDone(true);
+        } else {
+          if(onDone) onDone(false);
         }
       })
-      .catch(()=>{});
+      .catch(()=>{ if(onDone) onDone(false); });
   }
 }
 
@@ -8186,10 +8208,10 @@ function poll(){
       const activeSt=_symStates[_activeChart]||{};
       const knownTs=_lastChartTs[_activeChart]||0;
       if(activeSt.chart_updated_at>0&&activeSt.chart_updated_at!==knownTs){
-        _lastChartTs[_activeChart]=activeSt.chart_updated_at;
         // Если в iframe сейчас другой символ — сбрасываем флаг чтобы загрузить полный HTML
         if(_lastLoadedChartSym!==_activeChart) _chartFrameLoaded=false;
-        _loadChartFrame(_activeChart);
+        const _tsToMark=activeSt.chart_updated_at, _symToMark=_activeChart;
+        _loadChartFrame(_activeChart, (ok)=>{ if(ok) _lastChartTs[_symToMark]=_tsToMark; });
       }
     }
     const elapsed=Math.round((Date.now()-startTs)/1000);
@@ -8313,8 +8335,8 @@ function poll(){
     if(!useMulti&&d.chart_updated_at>0){
       const _singleSym=_symList[0]||'__single__';
       if(d.chart_updated_at!==(_lastChartTs[_singleSym]||0)){
-        _lastChartTs[_singleSym]=d.chart_updated_at;
-        _loadChartFrame();
+        const _tsToMark=d.chart_updated_at;
+        _loadChartFrame(undefined, (ok)=>{ if(ok) _lastChartTs[_singleSym]=_tsToMark; });
       }
     }
     if(d.done&&!d.running&&!d.infinite){
