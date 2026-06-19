@@ -422,6 +422,9 @@ WickFill Optimizer v3.381
 - Скользящее окно: каждые N минут (по таймфрейму) добавляет свечу, убирает первую
 - Live-алерт: если на новой закрытой свече сигнал по лучшим параметрам — шлёт email
 - Динамический график: /chart обновляется автоматически каждые 30с
+- v3.382: fix скролл Недавних конфигов на десктоп/планшет-layout — убран overflow-y:auto
+  с #recentBody (вложенный скролл конфликтовал с touch-жестом .sidebar); теперь конфиги
+  растягивают .sidebar, скроллится сама sidebar.
 - v3.319: fix скролл Недавних конфигов на мобиле — overflow:hidden перенесён из
   inline-style в CSS (inline перебивал медиа-правило overflow:visible на мобиле).
 - v3.318: fix скролл списка Недавних конфигов на мобиле — убран overflow:hidden с панели,
@@ -637,7 +640,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.381"
+APP_VERSION = "3.382"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7209,7 +7212,7 @@ details summary::-webkit-details-marker{display:none}
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:900px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overscroll-behavior-y:contain">
+      <div id="recentBody" style="max-height:900px;overflow-y:visible;transition:max-height .3s ease;padding:0 6px 6px;">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
