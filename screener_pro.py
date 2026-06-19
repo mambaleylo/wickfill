@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.380
+WickFill Optimizer v3.381
+- v3.381: fix (попытка №2) скролл "Недавние конфиги" на планшетах. v3.380 добавил
+  ручной touchstart/touchmove на #recentBody — не помогло (юзер подтвердил баг
+  остался на v3.380). Видимо дело не в перехвате жеста родителем (.sidebar), а
+  в самом вложенном scroll-контейнере как таком на этом тач-браузере. Вместо
+  попыток починить вложенный скролл — убран сам source проблемы: #recentBody
+  расширен с max-height:320px (требовал свой overflow-y:auto/скролл) до 900px
+  (с запасом покрывает реалистичное число сохранённых конфигов целиком, без
+  внутреннего скролла) — дальше скроллит .sidebar/страница (одноуровневый
+  скролл, который и так работает). Удалён мёртвый код touch-handler из v3.380.
 - v3.380: fix скролл "Недавние конфиги" на планшетах всё ещё не работал после
   v3.316 (тот фикс добавил touch-action/overscroll-behavior на #recentBody, но
   на десктоп/планшетной ширине (>700px) появляется второй уровень вложенности:
@@ -628,7 +637,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.380"
+APP_VERSION = "3.381"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7009,7 +7018,10 @@ details summary::-webkit-details-marker{display:none}
   #recentArrow{transform:rotate(0deg)}
   /* overflow:hidden на recentPanel режет скролл на тач — убираем */
   #recentPanel{overflow:visible}
-  /* При раскрытии JS ставит max-height:320px — достаточно для ~5 конфигов */
+  /* При раскрытии JS ставит max-height:900px — выше списка нет смысла,
+     сайдбар/страница скроллятся сами; раньше было 320px с overflow-y:auto
+     внутри #recentBody — вложенный скролл не работал на части тач-браузеров
+     (планшеты), теперь убран как источник проблемы (v3.381) */
   /* ── ПРАВАЯ ПАНЕЛЬ — порядок элементов на мобиле ── */
   .right{flex:1;min-height:0;overflow:visible;display:flex;flex-direction:column}
   /* Таблица конфига — первая */
@@ -7193,11 +7205,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Recent configs quick-select -->
     <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
-      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'320px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'900px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:320px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overscroll-behavior-y:contain">
+      <div id="recentBody" style="max-height:900px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overscroll-behavior-y:contain">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -7962,7 +7974,7 @@ function stopOpt(){
     const _rp2=document.getElementById('recentPanel');
     if(_rp2 && _rp2.dataset.hasConfigs==='1'){
       _rp2.style.display='block';
-      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='320px';
+      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='900px';
       const _ra3=document.getElementById('recentArrow');if(_ra3)_ra3.style.transform='rotate(180deg)';
     }
   }
@@ -8717,43 +8729,10 @@ function _loadRecentConfigs(){
     // Всегда раскрываем при загрузке
     const rb=document.getElementById('recentBody');
     const ra=document.getElementById('recentArrow');
-    if(rb) rb.style.maxHeight='320px';
+    if(rb) rb.style.maxHeight='900px';
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
-
-// ── Ручной тач-скролл для #recentBody ──
-// CSS touch-action:pan-y/overscroll-behavior:contain (v3.316) не всегда
-// гарантируют корректный nested-скролл во вложенных overflow-контейнерах
-// (.sidebar снаружи + #recentBody внутри) на некоторых тач-браузерах —
-// жест может перехватываться родителем. Здесь явно драйвим scrollTop сами:
-// пока внутри #recentBody есть куда скроллить в направлении свайпа —
-// preventDefault+stopPropagation, не даём жесту дойти до .sidebar/html.
-// На границах (верх/низ исчерпаны) — отдаём управление родителю как обычно.
-(function(){
-  const rb=document.getElementById('recentBody');
-  if(!rb) return;
-  let _ry0=0, _rScroll0=0, _rDragging=false;
-  rb.addEventListener('touchstart', function(e){
-    if(e.touches.length!==1) return;
-    _rDragging=true;
-    _ry0=e.touches[0].clientY;
-    _rScroll0=rb.scrollTop;
-  }, {passive:true});
-  rb.addEventListener('touchmove', function(e){
-    if(!_rDragging || e.touches.length!==1) return;
-    const dy=_ry0-e.touches[0].clientY;
-    const atTop=rb.scrollTop<=0;
-    const atBottom=rb.scrollTop+rb.clientHeight>=rb.scrollHeight-1;
-    if((dy>0 && !atBottom) || (dy<0 && !atTop)){
-      e.preventDefault();
-      e.stopPropagation();
-      rb.scrollTop=_rScroll0+dy;
-    }
-  }, {passive:false});
-  rb.addEventListener('touchend', function(){_rDragging=false;}, {passive:true});
-  rb.addEventListener('touchcancel', function(){_rDragging=false;}, {passive:true});
-})();
 
 document.addEventListener('DOMContentLoaded',function(){
   const btn=document.getElementById('themeBtn');
