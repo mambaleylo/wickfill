@@ -15,8 +15,8 @@ WickFill Optimizer v3.409
   по которым искали — если на GitHub лежит файл с другим _r{risk}, видно сразу
   почему он не подхватился, а не молча используется локальный.
 ====
-WickFill Optimizer v3.408
-- v3.408: Telegram-уведомления сделаны минималистичными — убрана лишняя информация
+WickFill Optimizer v3.410
+- v3.410: Telegram-уведомления сделаны минималистичными — убрана лишняя информация
   и визуальный шум (заголовки "WickFill Сигнал/—", пустые строки-разделители,
   повторное эхо TP/SL, время свечи, сырой fitness, имя файла конфига).
   (1) Сигнал входа: было 4 секции/7 строк с заголовком и временем → стало 2 строки
@@ -28,6 +28,17 @@ WickFill Optimizer v3.408
   автоторговля.
   (3) Новый лучший конфиг: было 6 строк (включая fit, days/risk%, имя файла на
   GitHub) → стало 3: заголовок, депо/WR/сделки/DD/PF, SL/TP/стабильность.
+====
+WickFill Optimizer v3.410
+- v3.410: AMOLED-сейвер — добавлен плавающий PnL% активной сделки и линия
+  текущей цены на мини-графике. Раньше блок активной сделки показывал только
+  направление/EP/TP/SL без результата по ходу сделки. Теперь рядом с
+  EP/TP/SL выводится %PnL (от цены входа до цены последней свечи, знак по
+  направлению LONG/SHORT, цвет зелёный/красный), а на мини-графике свечей
+  (_amoledMiniChart) поверх пунктира уровня входа рисуется сплошная линия
+  текущей цены того же цвета — видно и куда цена ушла, и насколько. PnL
+  считается без плеча (реальное применённое плечо позиции недоступно на
+  клиенте) — это движение цены в %, ориентир, а не точный P&L по марже.
 ====
 WickFill Optimizer v3.407
 - v3.407: fix AMOLED после reload страницы (auto-update / восстановление связи) —
@@ -840,7 +851,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.409"
+APP_VERSION = "3.410"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7841,6 +7852,7 @@ details summary::-webkit-details-marker{display:none}
 #amoledContent .as-trade-info{text-align:left}
 #amoledContent .as-trade-info .as-ti-main{font-size:1.35rem;font-weight:600;line-height:1.1}
 #amoledContent .as-trade-info .as-ti-sub{font-size:.75rem;opacity:.82;margin-top:4px;letter-spacing:.07em}
+#amoledContent .as-trade-pnl{font-size:1.25rem;font-weight:700;margin-left:8px;line-height:1.1}
 /* мини-свечи */
 #amoledContent .as-mini-chart{margin:12px auto 0;display:block;opacity:.75}
 /* статус сети */
@@ -7854,6 +7866,7 @@ details summary::-webkit-details-marker{display:none}
   #amoledContent .as-row b{font-size:1.6rem}
   #amoledContent .as-trade-dir{font-size:1.2rem}
   #amoledContent .as-trade-info .as-ti-main{font-size:1.1rem}
+  #amoledContent .as-trade-pnl{font-size:1rem}
 }
 </style></head><body>
 
@@ -9536,13 +9549,17 @@ function _amoledNetIcon(online){
   }
 }
 
-/* Мини SVG-свечи от первой свечи сделки (CANDLES: {t,o,h,l,c}) */
-function _amoledMiniChart(candles, entryIdx){
+/* Мини SVG-свечи от первой свечи сделки (CANDLES: {t,o,h,l,c}).
+   v3.410: добавлена линия текущей цены (сплошная, цвет по знаку PnL) поверх
+   пунктира уровня входа — теперь на скриншоте сделки видно не только вход,
+   но и куда цена ушла относительно него (для PnL см. _amoledTradePnl). */
+function _amoledMiniChart(candles, entryIdx, curPrice, isLong){
   if(!candles||candles.length<2) return '';
   const C=candles.slice(Math.max(0,entryIdx));
   if(C.length<2) return '';
   const W=180, H=54, cw=Math.max(Math.floor(W/C.length),3), gap=1;
-  const lo=Math.min(...C.map(c=>c.l)), hi=Math.max(...C.map(c=>c.h));
+  let lo=Math.min(...C.map(c=>c.l)), hi=Math.max(...C.map(c=>c.h));
+  if(curPrice!=null){ lo=Math.min(lo,curPrice); hi=Math.max(hi,curPrice); }
   const rng=hi-lo||1;
   const py=v=>H-2-Math.round((v-lo)/rng*(H-4));
   let bars='';
@@ -9558,9 +9575,26 @@ function _amoledMiniChart(candles, entryIdx){
     bars+=`<line x1="${mx}" y1="${y2+bh}" x2="${mx}" y2="${py(c.l)}" stroke="${col}" stroke-width="1"/>`;
   });
   /* пунктир уровня входа — первая open цена */
-  const ep=py(C[0].o);
-  bars+=`<line x1="0" y1="${ep}" x2="${W}" y2="${ep}" stroke="rgba(255,255,255,.28)" stroke-width="1" stroke-dasharray="3,3"/>`;
+  const epY=py(C[0].o);
+  bars+=`<line x1="0" y1="${epY}" x2="${W}" y2="${epY}" stroke="rgba(255,255,255,.28)" stroke-width="1" stroke-dasharray="3,3"/>`;
+  /* сплошная линия текущей цены — цвет по знаку плавающего PnL */
+  if(curPrice!=null){
+    const inProfit=isLong?(curPrice>=C[0].o):(curPrice<=C[0].o);
+    const cpCol=inProfit?'rgba(140,210,100,.95)':'rgba(255,90,75,.95)';
+    const cpY=py(curPrice);
+    bars+=`<line x1="0" y1="${cpY}" x2="${W}" y2="${cpY}" stroke="${cpCol}" stroke-width="1.2"/>`;
+    bars+=`<circle cx="${W-3}" cy="${cpY}" r="2.4" fill="${cpCol}"/>`;
+  }
   return `<svg class="as-mini-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bars}</svg>`;
+}
+
+/* Плавающий PnL% активной сделки от цены входа до текущей цены последней свечи.
+   v3.410: считается без плеча (price move %), т.к. реальное применённое плечо
+   позиции недоступно на клиенте; даёт ориентир движения цены относительно входа. */
+function _amoledTradePnl(ep, curPrice, isLong){
+  if(ep==null||curPrice==null||!ep) return null;
+  const pct=isLong?(curPrice-ep)/ep*100:(ep-curPrice)/ep*100;
+  return pct;
 }
 
 function _amoledPanels(night){
@@ -9605,6 +9639,15 @@ function _amoledPanels(night){
     const ep=openSig.ep!=null?' EP $'+openSig.ep.toPrecision(6):'';
     const tp=openSig.tp!=null?' TP $'+openSig.tp.toPrecision(6):'';
     const sl=openSig.sl!=null?' SL $'+openSig.sl.toPrecision(6):'';
+    const candles=(typeof CANDLES!=='undefined'?CANDLES:[])||[];
+    const curPrice=candles.length?candles[candles.length-1].c:null;
+    const pnlPct=_amoledTradePnl(openSig.ep,curPrice,isLong);
+    let pnlHtml='';
+    if(pnlPct!=null){
+      const pnlCol=night?'inherit':(pnlPct>=0?'rgba(140,210,100,.95)':'rgba(255,90,75,.95)');
+      const pnlSign=pnlPct>=0?'+':'';
+      pnlHtml=`<div class="as-trade-pnl" style="color:${pnlCol}">${pnlSign}${pnlPct.toFixed(2)}%</div>`;
+    }
     tradeBlock=
       `<div class="as-divider"></div>`+
       `<div class="as-trade">`+
@@ -9613,10 +9656,10 @@ function _amoledPanels(night){
           `<div class="as-ti-main">${ep.trim()}</div>`+
           `<div class="as-ti-sub">${(tp+' '+sl).trim()}</div>`+
         `</div>`+
+        pnlHtml+
       `</div>`;
-    const candles=(typeof CANDLES!=='undefined'?CANDLES:[])||[];
     const entryIdx=openSig.bar_i>=0?openSig.bar_i:Math.max(0,candles.length-14);
-    const mc=_amoledMiniChart(candles,entryIdx);
+    const mc=_amoledMiniChart(candles,entryIdx,curPrice,isLong);
     if(mc) miniChart=mc;
   }
 
