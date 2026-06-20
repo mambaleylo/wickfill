@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.416
+- v3.416: надёжная синхронизация конфигов при восстановлении сети.
+  (1) _gh_sync_pending: перед PUT сравнивает validated_fitness — заливает
+  только если локальный конфиг лучше GitHub; equity-guard тоже применяется.
+  (2) При старте: фоновый тред gh-startup-sync сканирует все локальные
+  конфиги в _AUTO_DIRS и заливает на GitHub те, что лучше текущих там
+  (через 15с после старта, с паузой 2с между файлами чтобы не спамить API).
+  Итог: конфиг попадает на GitHub даже если сеть пропала и вернулась после
+  перезапуска — и только если он действительно лучше.
+====
 WickFill Optimizer v3.415
 - v3.415: панель "Недавние конфиги" — высота после разворачивания уменьшена
   вдвое (120px вместо 240px). Убрана кнопка 🕯 (candleDebugBtn) вместе с
@@ -899,7 +909,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.415"
+APP_VERSION = "3.416"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4913,16 +4923,41 @@ def _gh_list_folder(gh_path):
     return []
 
 def _gh_sync_pending():
-    """Фоновая попытка загрузить файлы из очереди на GitHub."""
+    """Фоновая попытка загрузить файлы из очереди на GitHub.
+    Перед PUT сравниваем validated_fitness — заливаем только если локальный лучше."""
     with _GH_SYNC_LOCK:
         if not _GH_SYNC_PENDING:
             return
         queue = list(_GH_SYNC_PENDING)
     ok_indices = []
     for i, (local_path, gh_path, content_str, message) in enumerate(queue):
+        # Только конфиги сравниваем по fitness; логи и прочее — льём напрямую
+        if gh_path.startswith("configs/"):
+            try:
+                _local_data = json.loads(content_str)
+                _lb = _local_data.get("best", {})
+                _local_fit = _lb.get("validated_fitness") if _lb.get("validated_fitness") is not None else _lb.get("fitness", -9999)
+                _local_eq  = _lb.get("equity", 0)
+                # Проверяем что на GitHub
+                _gh_raw = _gh_get_file(gh_path)
+                if _gh_raw:
+                    _gh_data = json.loads(_gh_raw)
+                    _gb = _gh_data.get("best", {})
+                    _gh_fit = _gb.get("validated_fitness") if _gb.get("validated_fitness") is not None else _gb.get("fitness", -9999)
+                    _gh_eq  = _gb.get("equity", 0)
+                    if _gh_fit >= _local_fit:
+                        print(f"{_ts()} [gh] ⏭ Очередь: GitHub уже лучше (gh={_gh_fit:.2f} ≥ local={_local_fit:.2f}), пропуск {gh_path}", flush=True)
+                        ok_indices.append(i)  # удаляем из очереди — бессмысленно хранить
+                        continue
+                    if _gh_eq > 0 and _local_eq < _gh_eq * 0.7:
+                        print(f"{_ts()} [gh] ⛔ Очередь: equity-guard (local=${_local_eq:.0f} < 70% gh=${_gh_eq:.0f}), пропуск {gh_path}", flush=True)
+                        ok_indices.append(i)
+                        continue
+            except Exception as _ce:
+                print(f"{_ts()} [gh] ⚠ Очередь: ошибка сравнения {gh_path}: {_ce}", flush=True)
         if _gh_put_file(gh_path, content_str, message):
             ok_indices.append(i)
-            print(f"{_ts()} [gh] ✅ Синхронизировано: {gh_path}", flush=True)
+            print(f"{_ts()} {_C_GRN}[gh] ✅ Синхронизировано из очереди: {gh_path}{_C_RST}", flush=True)
     with _GH_SYNC_LOCK:
         for i in sorted(ok_indices, reverse=True):
             if i < len(_GH_SYNC_PENDING):
@@ -4948,6 +4983,52 @@ def _gh_sync_worker():
             pass
 
 threading.Thread(target=_gh_sync_worker, daemon=True, name="gh-sync").start()
+
+def _gh_upload_local_configs():
+    """При старте: сканирует локальные конфиги и заливает на GitHub те, что лучше текущих там."""
+    import glob as _glob2, re as _re2
+    time.sleep(15)  # дать серверу полностью стартовать
+    if not _GH_TOKEN:
+        return
+    for _d in _AUTO_DIRS:
+        if not os.path.isdir(_d):
+            continue
+        for _lpath in _glob2.glob(os.path.join(_d, "wickfill_*.json")):
+            try:
+                with open(_lpath, "r", encoding="utf-8") as _f:
+                    _ldata = json.load(_f)
+                _lb = _ldata.get("best", {})
+                if not _lb:
+                    continue
+                _local_fit = _lb.get("validated_fitness") if _lb.get("validated_fitness") is not None else _lb.get("fitness", -9999)
+                _local_eq  = _lb.get("equity", 0)
+                _fname = os.path.basename(_lpath)
+                _gh_path = f"configs/{_fname}"
+                # Сравниваем с GitHub
+                _gh_raw = _gh_get_file(_gh_path)
+                if _gh_raw:
+                    try:
+                        _gdata = json.loads(_gh_raw)
+                        _gb = _gdata.get("best", {})
+                        _gh_fit = _gb.get("validated_fitness") if _gb.get("validated_fitness") is not None else _gb.get("fitness", -9999)
+                        _gh_eq  = _gb.get("equity", 0)
+                        if _gh_fit >= _local_fit:
+                            continue  # GitHub уже лучше или равен
+                        if _gh_eq > 0 and _local_eq < _gh_eq * 0.7:
+                            continue  # equity-guard
+                    except Exception:
+                        pass
+                # Локальный лучше (или файла на GitHub нет) — заливаем
+                _content = open(_lpath, "r", encoding="utf-8").read()
+                if _gh_put_file(_gh_path, _content, f"startup-sync: {_fname}"):
+                    print(f"{_ts()} {_C_GRN}[gh] ✅ Старт-синхронизация: {_fname}{_C_RST}", flush=True)
+                else:
+                    print(f"{_ts()} {_C_YEL}[gh] ⚠ Старт-синхронизация не удалась: {_fname}{_C_RST}", flush=True)
+                time.sleep(2)  # не спамим API
+            except Exception as _e:
+                print(f"{_ts()} {_C_YEL}[gh] ⚠ Старт-синхронизация ошибка {_lpath}: {_e}{_C_RST}", flush=True)
+
+threading.Thread(target=_gh_upload_local_configs, daemon=True, name="gh-startup-sync").start()
 # ── /GitHub Sync ─────────────────────────────────────────────────────────────
 
 # ── Auto-update: каждые 5 минут проверяем SHA на GitHub ──────────────────────
