@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.398
+- v3.398: fix кнопки "↺ Restart" (/termux_update) — та же CDN-кеш проблема, что чинили
+  в v3.393 для фонового автообновления, но кнопка дублировала старую логику отдельным
+  куском кода: bash сам качал файл с raw.githubusercontent.com (Fastly CDN) без проверки
+  SHA/синтаксиса, из-за чего после рестарта в шапке иногда оставалась старая версия.
+  Теперь /termux_update качает и проверяет (git blob SHA + ast.parse) файл в Python ДО
+  рестарта через Contents API, как и автообновление; bash только подменяет уже
+  проверенный файл и перезапускает процесс. Побочный эффект: токен больше не пишется
+  открытым текстом в ~/wickfill_update.sh (раньше попадал туда как часть curl-команды).
+
 WickFill Optimizer v3.397
 - v3.397: бэкап перед пушем + крупный пакет правок надёжности и анти-overfitting диагностики:
   (1) watchdog в одиночном режиме (_live_candle_updater) теперь реально перезапускает
@@ -702,7 +712,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.397"
+APP_VERSION = "3.398"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -10136,29 +10146,69 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "msg": "Файл screener_pro (*).py не найден в Downloads"})
         elif parsed.path == "/termux_update":
-            import subprocess, sys
-            script_name=os.path.basename(os.path.abspath(__file__))
-            script_path=os.path.abspath(__file__)
-            raw_url=f"https://raw.githubusercontent.com/{_GH_REPO}/main/{script_name}"
+            import subprocess, sys, hashlib as _hl, ast as _ast3
+            script_path = os.path.abspath(__file__)
+            script_name = os.path.basename(script_path)
             try:
-                sh=os.path.expanduser("~/wickfill_update.sh")
-                with open(sh,"w") as f:
-                    f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
-                    f.write("termux-wake-lock\n")
-                    f.write(f"pkill -9 -f {script_name}\n")
-                    f.write("pkill -9 -f 'multiprocessing.spawn'\n")
-                    f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
-                    f.write("sleep 2\n")
-                    # Скачать свежий скрипт прямо с GitHub (токен для приватного репо)
-                    f.write('curl -fsSL -H "Authorization: token ' + _GH_TOKEN + '" "' + raw_url + '?ts=$(date +%s)" -o \'' + script_path + '\' || { echo "curl failed, using existing"; }\n')
-                    f.write(f"{sys.executable} '{script_path}'\n")
-                os.chmod(sh, 0o755)
-                subprocess.Popen(["bash", sh],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True)
-                self._json({"ok":True,"msg":"⏳ Скачиваю с GitHub и перезапускаю..."})
-                def _die(): time.sleep(0.8); os._exit(0)
-                threading.Thread(target=_die,daemon=True).start()
+                # v3.397: раньше здесь bash сам качал файл с raw.githubusercontent.com —
+                # тот живёт за CDN (Fastly) и через VPN/прокси иногда отдаёт устаревшую
+                # закешированную копию с HTTP 200 (curl это не ловит как ошибку), поэтому
+                # после "Restart" версия в шапке иногда оставалась старой. Тот же баг был
+                # описан и исправлен в v3.393 — но только для фонового автообновления
+                # (_auto_update_worker), а ручная кнопка Restart дублировала старую,
+                # незачищенную логику отдельным куском кода. Теперь оба пути одинаковы:
+                # качаем и проверяем (SHA блоба + синтаксис) здесь, в Python, ДО рестарта;
+                # bash ничего не качает — только переименовывает уже проверенный файл.
+                if not _GH_TOKEN:
+                    self._json({"ok": False, "msg": "Нет GH_TOKEN — обновление с GitHub недоступно"})
+                else:
+                    _r = requests.get(
+                        f"https://api.github.com/repos/{_GH_REPO}/contents/{script_name}",
+                        headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                        timeout=15
+                    )
+                    _meta = _r.json()
+                    _gh_sha = _meta.get("sha", "")
+                    _content_b64 = _meta.get("content", "")
+                    if not _content_b64:
+                        _br = requests.get(
+                            f"https://api.github.com/repos/{_GH_REPO}/git/blobs/{_gh_sha}",
+                            headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                            timeout=15
+                        )
+                        _content_b64 = _br.json().get("content", "")
+                    _new_bytes = base64.b64decode(_content_b64)
+                    _check_sha = _hl.sha1(f"blob {len(_new_bytes)}\0".encode() + _new_bytes).hexdigest()
+                    if not _gh_sha or _check_sha != _gh_sha:
+                        self._json({"ok": False, "msg": f"❌ SHA скачанного файла не совпал ({_check_sha[:7]} != {_gh_sha[:7]}) — обновление отменено, рабочий файл не тронут"})
+                    else:
+                        try:
+                            _ast3.parse(_new_bytes.decode("utf-8"))
+                        except Exception as _se:
+                            self._json({"ok": False, "msg": f"❌ Скачанный файл не парсится ({_se}) — обновление отменено"})
+                        else:
+                            _tmp_path = script_path + ".new"
+                            with open(_tmp_path, "wb") as _ftmp:
+                                _ftmp.write(_new_bytes)
+                            sh = os.path.expanduser("~/wickfill_update.sh")
+                            with open(sh, "w") as f:
+                                f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
+                                f.write("termux-wake-lock\n")
+                                f.write(f"pkill -9 -f {script_name}\n")
+                                f.write("pkill -9 -f 'multiprocessing.spawn'\n")
+                                f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
+                                f.write("sleep 2\n")
+                                # Файл уже скачан и проверен выше (SHA + синтаксис) —
+                                # bash здесь не лезет в сеть, просто подменяет файл.
+                                f.write(f"mv -f '{_tmp_path}' '{script_path}'\n")
+                                f.write(f"{sys.executable} '{script_path}'\n")
+                            os.chmod(sh, 0o755)
+                            subprocess.Popen(["bash", sh],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True)
+                            self._json({"ok": True, "msg": f"⏳ Проверено (SHA {_gh_sha[:7]}), перезапускаю..."})
+                            def _die(): time.sleep(0.8); os._exit(0)
+                            threading.Thread(target=_die, daemon=True).start()
             except Exception as e: self._json({"ok":False,"msg":str(e)})
         elif parsed.path == "/load_result":
             qs=parse_qs(parsed.query)
