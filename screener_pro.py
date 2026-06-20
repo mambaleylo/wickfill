@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.401
+- v3.401: fix белый фон графика на мобиле в светлой теме — filter:brightness(1.35)
+  применялся ко всем темам через медиа-запрос мобиля, осветляя кремовый #FAE6D8
+  почти до белого. Теперь фильтр вынесен в [data-theme="dark"] и применяется
+  только в тёмной теме.
+====
 WickFill Optimizer v3.400
 - v3.400: переоткрытие сделки при смене конфига оптимизатора — новая функция
   _gate_reopen_on_new_config: если найден новый рекорд (is_new_rec) и gate_auto включён,
@@ -730,7 +736,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.400"
+APP_VERSION = "3.401"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7691,8 +7697,10 @@ details summary::-webkit-details-marker{display:none}
   /* Мобильные кнопки Топ / Логи */
   #mob-top-toggle{display:flex !important;flex-shrink:0}
 
-  /* На мобиле осветляем тёмный график */
-  #chartFrame{filter:brightness(1.35) contrast(0.92);}
+  /* На мобиле осветляем тёмный график — только в тёмной теме */
+}
+[data-theme="dark"] #chartFrame{
+  filter:brightness(1.35) contrast(0.92);
 }
 
 /* ── AMOLED screensaver ── */
