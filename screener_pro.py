@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.397
+- v3.397: бэкап перед пушем + крупный пакет правок надёжности и анти-overfitting диагностики:
+  (1) watchdog в одиночном режиме (_live_candle_updater) теперь реально перезапускает
+      мёртвый _sliding_window_thread (раньше только освежал chart_candles косметически);
+  (2) фикс мульти-символьного round-robin режима (_run_multi_safe) — is_alive() проверялся
+      только на первом цикле символа, дальше поток никогда не перезапускался при падении;
+  (3) фикс параллельного мульти-режима (_run_sym_worker) — sw_thread_started был
+      одноразовым флагом без повторной проверки is_alive();
+  (4) новый /permutation_test — Monte Carlo sign-scramble + trade-order permutation
+      тест значимости edge лучшего конфига;
+  (5) новый /top20_significance — Bonferroni-поправка на множественные сравнения по
+      всем конфигам top20, а не только по лучшему;
+  (6) новый /stability_sweep — проверка "плато vs пик" по соседним значениям активных
+      числовых параметров (фильтры с use_X=False пропускаются).
+
 WickFill Optimizer v3.396
 - v3.396: лог param_best — при каждом улучшении в координатном спуске пишет key/val/fitness/equity для последующего анализа диапазонов
 
@@ -687,7 +702,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.396"
+APP_VERSION = "3.397"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5302,6 +5317,170 @@ def _sl_tp_sweep(base_params, candles, days, risk_pct):
     tp_rows = [_row(v, "tp_pct") for v in _GRIDS["tp_pct"]]
     return sl_rows, tp_rows
 
+def _sign_scramble_pvalue(pnls, n_iter=2000):
+    """Нулевая гипотеза: знак каждой сделки — монетка 50/50 (нет направленного edge).
+    Возвращает (p_value, actual_total_return, null_mean, null_std)."""
+    actual_total = sum(pnls)
+    abs_pnls = [abs(x) for x in pnls]
+    null_totals = []
+    ge_count = 0
+    for _ in range(n_iter):
+        tot = 0.0
+        for a in abs_pnls:
+            tot += a if random.random() < 0.5 else -a
+        null_totals.append(tot)
+        if tot >= actual_total:
+            ge_count += 1
+    p_value = ge_count / n_iter
+    null_mean = sum(null_totals) / n_iter
+    null_std = (sum((x - null_mean) ** 2 for x in null_totals) / n_iter) ** 0.5
+    return p_value, actual_total, null_mean, null_std
+
+
+_STABILITY_GATING = {
+    # numeric_param -> bool flag that must be True for this param to matter at all
+    "confirm_body_pct": "use_confirm_candle",
+    "rsi_len": "use_rsi_filter", "rsi_long_max": "use_rsi_filter", "rsi_short_min": "use_rsi_filter",
+    "level_lookback": "use_level_filter", "level_toler_pct": "use_level_filter",
+    "geo_lookback": "use_geo_filter", "geo_min_pct": "use_geo_filter",
+    "css_min_score": "use_css_filter", "css_wt_wick": "use_css_filter", "css_wt_close": "use_css_filter",
+    "css_wt_body": "use_css_filter", "css_wt_range": "use_css_filter", "css_wt_price": "use_css_filter",
+    "ret_lookback": "use_return_filter", "ret_n": "use_return_filter",
+    "ret_wick_sim": "use_return_filter", "min_return_pct": "use_return_filter",
+    "rep_lookback": "use_repeat_filter", "rep_zone_pct": "use_repeat_filter", "rep_min_win": "use_repeat_filter",
+    "cluster_lookback": "use_cluster_filter", "cluster_pct": "use_cluster_filter", "cluster_min": "use_cluster_filter",
+    "close_long_min_pct": "use_close_filter", "close_short_max_pct": "use_close_filter",
+    "quiet_atr_len": "use_quiet_filter", "quiet_max_ratio": "use_quiet_filter", "quiet_min_ratio": "use_quiet_filter",
+    "sweep_len": "use_sweep_filter", "sweep_toler_pct": "use_sweep_filter",
+    "ms_lookback": "use_ms_filter",
+    "ema_period": "use_ema_filter",
+    "atr_sl_mult": "use_atr_sl",
+}
+
+
+def _stability_sweep(base_params, candles, days, risk_pct, radius=2):
+    """Плато vs пик: для каждого активного числового параметра прогоняет несколько
+    соседних значений по сетке (±radius шагов вокруг найденного оптимума) и сравнивает
+    fitness. Если сосед резко проваливается — это острый пик в ландшафте, типичный
+    артефакт переподгонки (малейший сдвиг рынка/данных — и параметр перестаёт работать).
+    Если соседи держат fitness близко к пику — это плато, признак устойчивой
+    закономерности. Параметры неактивных фильтров (use_X=False) пропускаются —
+    их значение всё равно ни на что не влияет.
+    sl_pct/tp_pct сюда не входят — для них уже есть отдельный /sl_tp_sweep."""
+    base_fit_full = _simulate(candles, base_params, days, risk_pct=risk_pct)
+    if not base_fit_full:
+        return {"ok": False, "error": "не удалось прогнать базовый конфиг"}
+
+    results = {}
+    spike_keys = []
+    for key, spec in PARAM_SPACE.items():
+        if key in ("sl_pct", "tp_pct") or spec.get("type") not in ("float", "int"):
+            continue
+        gate = _STABILITY_GATING.get(key)
+        if gate and not base_params.get(gate):
+            continue  # фильтр выключен — параметр не влияет, не тратим время
+        grid = _GRIDS.get(key)
+        base_val = base_params.get(key)
+        if not grid or len(grid) < 3 or base_val is None:
+            continue
+        idx = min(range(len(grid)), key=lambda i: abs(grid[i] - base_val))
+        lo, hi = max(0, idx - radius), min(len(grid), idx + radius + 1)
+        local_vals = grid[lo:hi]
+
+        rows = []
+        for v in local_vals:
+            p = dict(base_params); p[key] = v
+            r = _simulate(candles, p, days, risk_pct=risk_pct)
+            rows.append({"val": v, "fitness": r["fitness"] if r else -9999.0,
+                         "trades": r["trades"] if r else 0})
+        fits = [row["fitness"] for row in rows]
+        base_row = next((row for row in rows if row["val"] == grid[idx]), None)
+        base_fit = base_row["fitness"] if base_row else max(fits)
+        worst_fit = min(fits)
+        # "пик": хотя бы один ближайший сосед теряет >40% fitness относительно базы
+        # (или базовая fitness отрицательна/нулевая — тогда сравниваем абсолютный провал)
+        if base_fit > 0:
+            is_spike = worst_fit < base_fit * 0.6
+        else:
+            is_spike = (base_fit - worst_fit) > 3.0
+
+        results[key] = {
+            "label": spec.get("label", key), "base_val": grid[idx],
+            "sweep": rows, "base_fitness": round(base_fit, 2),
+            "worst_neighbor_fitness": round(worst_fit, 2), "is_spike": is_spike,
+        }
+        if is_spike:
+            spike_keys.append(key)
+
+    n_tested = len(results)
+    n_spikes = len(spike_keys)
+    if n_tested == 0:
+        verdict = "нет активных числовых параметров для проверки"
+    elif n_spikes == 0:
+        verdict = "✅ все проверенные параметры на плато — fitness устойчив к небольшим сдвигам"
+    elif n_spikes <= max(1, n_tested // 4):
+        verdict = f"⚠ {n_spikes} из {n_tested} параметров — острые пики: {', '.join(spike_keys)}"
+    else:
+        verdict = (f"🛑 {n_spikes} из {n_tested} параметров на острых пиках — конфиг выглядит "
+                   f"сильно переподогнанным: {', '.join(spike_keys)}")
+
+    return {"ok": True, "n_tested": n_tested, "n_spikes": n_spikes,
+            "spike_keys": spike_keys, "results": results, "verdict": verdict}
+
+
+def _top20_significance(top20, candles, days, risk_pct, n_iter=500):
+    """Поправка на множественные сравнения (Bonferroni): когда оптимизатор проверяет
+    сотни/тысячи комбинаций параметров, при пороге p<0.05 примерно 5% случайных
+    (бесполезных) конфигов пройдут тест на значимость просто по случайности.
+    Прогоняет sign-scramble тест по ВСЕМ конфигам из top20 (а не только по лучшему)
+    и ужесточает порог значимости делением на число проверенных конфигов —
+    показывает, насколько результат устойчив, а не просто "повезло №1"."""
+    results = []
+    for i, entry in enumerate(top20 or []):
+        p = entry.get("params")
+        if not p:
+            continue
+        r = _simulate(candles, p, days, risk_pct=risk_pct)
+        if not r or r.get("trades", 0) < 15:
+            results.append({"rank": i + 1, "trades": r.get("trades", 0) if r else 0,
+                             "skipped": "слишком мало сделок (<15)"})
+            continue
+        pval, total, null_mean, null_std = _sign_scramble_pvalue(r["pnls"], n_iter)
+        results.append({
+            "rank": i + 1, "fitness": r["fitness"], "trades": r["trades"],
+            "winrate": r["winrate"], "max_dd": r["max_dd"],
+            "total_return": round(total, 2), "p_value": round(pval, 4),
+        })
+
+    n_tested = sum(1 for x in results if "p_value" in x)
+    bonferroni_alpha = 0.05 / max(n_tested, 1)
+    n_passed = 0
+    for x in results:
+        if "p_value" in x:
+            x["bonferroni_pass"] = x["p_value"] < bonferroni_alpha
+            if x["bonferroni_pass"]:
+                n_passed += 1
+
+    if n_tested == 0:
+        verdict = "недостаточно данных для теста"
+    elif n_passed == 0:
+        verdict = (f"⚠ Ни один из {n_tested} конфигов не прошёл скорректированный порог "
+                   f"(α={bonferroni_alpha:.4f}) — похоже на переобучение всего top20 под шум")
+    elif n_passed == 1 and results[0].get("bonferroni_pass"):
+        verdict = ("⚠ Только лучший конфиг (№1) проходит — типичная картина случайного выброса "
+                   "среди множества проверенных вариантов, без подтверждения от соседей по рейтингу")
+    elif n_passed >= max(3, n_tested // 3):
+        verdict = (f"✅ {n_passed} из {n_tested} конфигов независимо проходят скорректированный "
+                   f"порог — признак устойчивого структурного edge, а не везения одного конфига")
+    else:
+        verdict = f"{n_passed} из {n_tested} конфигов проходят скорректированный порог — неоднозначно"
+
+    return {
+        "ok": True, "n_tested": n_tested, "bonferroni_alpha": round(bonferroni_alpha, 5),
+        "n_passed": n_passed, "results": results, "verdict": verdict,
+    }
+
+
 def _permutation_test(base_params, candles, days, risk_pct, n_iter=2000):
     """Monte Carlo permutation test: отвечает на вопрос "это реальный edge или
     случайный шум, на который переобучился оптимизатор?".
@@ -6292,6 +6471,24 @@ def _run_multi_safe(sym_list, base_params):
                         with _sw_state_lock:
                             if sym in _sw_state:
                                 _sw_state[sym]["params"] = sw_params
+                        # Баг: раньше здесь НЕ проверялось is_alive() — если SW-тред для
+                        # этого символа умер между циклами (необработанное исключение
+                        # внутри тика), он не перезапускался до бесконечности, символ
+                        # молча переставал торговать. Теперь чиним так же, как при
+                        # первом цикле (sym_cycles[sym] == 1 ветка выше).
+                        already = _sw_threads.get(sym)
+                        if not already or not already.is_alive():
+                            print(f"[multi] ⚠ SW-тред для {sym} мёртв (cycle={sym_cycles[sym]}) — перезапуск...", flush=True)
+                            n_sw = days * int(86400 / TF_SECONDS.get(tf, 3600))
+                            t = threading.Thread(
+                                target=_sliding_window_thread,
+                                args=(sym, tf, n_sw, alert_cfg, risk_pct),
+                                kwargs={"htf_index": _htf_index_sym},
+                                daemon=True
+                            )
+                            _sw_threads[sym] = t
+                            t.start()
+                            print(f"[multi] ✅ SW-тред перезапущен для {sym}", flush=True)
                 except Exception as e:
                     print(f"[multi] ИСКЛЮЧЕНИЕ SW-тред {sym}: {e}\n{traceback.format_exc()}", flush=True)
     except Exception as e:
@@ -6365,6 +6562,7 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
     last_autosave_vfit = 0.0
     local_candles = list(candles)
     sw_thread_started = False
+    _sw_t = None
     sw_candles_ref = [list(candles)]  # mutable ref для SW-треда
 
     # Загружаем seed из автосохранения
@@ -6497,8 +6695,10 @@ def _run_sym_worker(sym, base_params, n_workers, stop_event):
                 except Exception:
                     pass
 
-                # Запускаем скользящее окно (один раз)
-                if not sw_thread_started:
+                # Запускаем скользящее окно (один раз), либо перезапускаем если умерло
+                if not sw_thread_started or (_sw_t is not None and not _sw_t.is_alive()):
+                    if sw_thread_started:
+                        _slog(f"⚠ SW-тред умер — перезапуск...", "warn")
                     sw_thread_started = True
                     n_sw = len(local_candles)
                     _sw_t = threading.Thread(
@@ -9388,6 +9588,32 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "error": "нет кэша свечей (_sw_candles пуст) — подожди пока тред SW наберёт данные"})
                 else:
                     self._json(_permutation_test(base_params, candles, days, risk_pct))
+        elif parsed.path == "/top20_significance":
+            with opt_lock:
+                top20 = opt_state.get("top20") or []
+                days = opt_state.get("days", 30)
+            candles = list(_sw_candles)
+            risk_pct = _sw_risk
+            if not top20:
+                self._json({"ok": False, "error": "top20 пуст — запусти прогон"})
+            elif not candles or len(candles) < 50:
+                self._json({"ok": False, "error": "нет кэша свечей (_sw_candles пуст) — подожди пока тред SW наберёт данные"})
+            else:
+                self._json(_top20_significance(top20, candles, days, risk_pct))
+        elif parsed.path == "/stability_sweep":
+            with opt_lock:
+                tb = opt_state.get("trade_best") or opt_state.get("all_time_best")
+                days = opt_state.get("days", 30)
+            if not tb or not tb.get("params"):
+                self._json({"ok": False, "error": "нет результата оптимизации — запусти прогон"})
+            else:
+                base_params = dict(tb["params"])
+                candles = list(_sw_candles)
+                risk_pct = _sw_risk
+                if not candles or len(candles) < 50:
+                    self._json({"ok": False, "error": "нет кэша свечей (_sw_candles пуст) — подожди пока тред SW наберёт данные"})
+                else:
+                    self._json(_stability_sweep(base_params, candles, days, risk_pct))
         elif parsed.path == "/opt_status":
             with opt_lock:
                 cr = opt_state.get("chart_path","")
