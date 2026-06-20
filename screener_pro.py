@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.415
+- v3.415: панель "Недавние конфиги" — высота после разворачивания уменьшена
+  вдвое (120px вместо 240px). Убрана кнопка 🕯 (candleDebugBtn) вместе с
+  панелью candleDebugPanel, JS-функциями toggleCandleDebug/loadCandleDebug
+  и авто-обновляющим setInterval.
+====
 WickFill Optimizer v3.414
 - v3.414: чистка логов — убраны спамящие повторяющиеся сообщения:
   [chart] signals/trades/candles (каждый цикл), [DBG] cycle/stop-flag,
@@ -741,12 +747,12 @@ WickFill Optimizer v3.395
   скана recentBody.style.maxHeight принудительно ставился в '0px' и панель скрывалась
   (display:none); _loadRecentConfigs() при пустом/неудачном ответе GitHub не
   восстанавливал эти стили. Теперь stopOpt() сразу (до фетча) восстанавливает
-  display:block / maxHeight:240px / стрелку, если конфиги были загружены ранее
+  display:block / maxHeight:120px / стрелку, если конфиги были загружены ранее
   (recentPanel.dataset.hasConfigs==='1').
 - v3.261: fix список "Недавние конфиги" в десктопной версии — #recentBody имел
   max-height:600px (почти никогда не переполняется на типичной высоте сайдбара),
   из-за чего внутренний overflow-y:auto не активировался и список не скроллился
-  отдельно от сайдбара; уменьшено до 240px (открытое состояние тоггла тоже).
+  отдельно от сайдбара; уменьшено до 120px (открытое состояние тоггла тоже).
   Также после "Стоп" панель "Недавние конфиги" иногда не появлялась — единственный
   fetch /recent_configs мог не успеть/упасть сразу после остановки (GitHub-таймаут);
   добавлен повторный _loadRecentConfigs() через 2.5с.
@@ -893,7 +899,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.414"
+APP_VERSION = "3.415"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3130,12 +3136,8 @@ canvas{{display:block;width:100%;height:100%}}
       <span style="font-weight:600;color:#d4c8bc">{symbol} · {tf}</span>
       <span>{len(candles)} св. · {trades} сд.</span>
       <span style="color:#7a6e68">{(__import__('datetime').datetime.utcfromtimestamp(candles[0]['t'])+__import__('datetime').timedelta(hours=3)).strftime('%d.%m %H:%M')} — {(__import__('datetime').datetime.utcfromtimestamp(candles[-1]['t'])+__import__('datetime').timedelta(hours=3)).strftime('%d.%m %H:%M')}</span>
-      <span id="candleDebugBtn" onclick="toggleCandleDebug()" style="cursor:pointer;padding:1px 6px;border-radius:4px;background:rgba(120,110,100,.18);color:#b0a090;user-select:none" title="Сравнить свечи с биржей">🕯</span>
     </div>
-    <div id="candleDebugPanel" style="display:none;position:absolute;top:36px;left:10px;z-index:99;background:var(--bg2,#f5f0ea);border:1px solid var(--border,#ccc);border-radius:8px;padding:10px 14px;font-size:.68rem;color:var(--fg,#3a3028);max-width:520px;max-height:70vh;overflow:auto;box-shadow:0 4px 18px rgba(0,0,0,.18)">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>🕯 Сравнение свечей с биржей</b><span onclick="toggleCandleDebug()" style="cursor:pointer;font-size:.9rem">✕</span></div>
-      <div id="candleDebugContent" style="white-space:pre-wrap;font-family:monospace;font-size:.64rem">Загрузка…</div>
-    </div>
+
   </div>
 </div>
 <script>
@@ -3572,63 +3574,6 @@ let _liveFailCount = 0;
 let _liveTimer = null;
 
 // ── Candle Debug Panel ────────────────────────────────────────────────────────
-let _debugOpen = false;
-function toggleCandleDebug() {{
-  _debugOpen = !_debugOpen;
-  const panel = document.getElementById('candleDebugPanel');
-  if (!panel) return;
-  panel.style.display = _debugOpen ? 'block' : 'none';
-  if (_debugOpen) loadCandleDebug();
-}}
-function loadCandleDebug() {{
-  const el = document.getElementById('candleDebugContent');
-  if (!el) return;
-  el.textContent = 'Загрузка...';
-  fetch('/candle_debug?symbol=' + encodeURIComponent(LIVE_SYMBOL) + '&tf=' + encodeURIComponent(LIVE_TF) + '&_=' + Date.now())
-    .then(r => r.json())
-    .then(d => {{
-      if (!d.ok) {{ el.textContent = 'Ошибка: ' + JSON.stringify(d); return; }}
-      const fmt = (c, label) => {{
-        const flag = c.is_live ? ' LIVE' : (c.is_gap ? ' gap' : ' closed');
-        return '  [' + label + '] t=' + c.t_human + '  close_at=' + c.close_at_human + flag + '\\n' +
-               '         O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
-      }};
-      const fmtEx = (c) => {{
-        const flag = c.is_closed ? 'closed' : ('LIVE закр через ' + c.secs_until_close + 'с');
-        return '  t=' + c.t_human + '  close_at=' + c.close_at_human + '  ' + flag + '\\n' +
-               '  O=' + c.o + ' H=' + c.h + ' L=' + c.l + ' C=' + c.c;
-      }};
-      let txt = 'Сервер: ' + d.server_now_human + '  TF=' + d.tf + '  interval=' + d.interval_sec + 'с\\n';
-      txt += '\\n-- БИРЖА (последние 3) --\\n';
-      if (d.exchange_err) {{ txt += '  Ошибка: ' + d.exchange_err + '\\n'; }}
-      else {{ d.exchange_last3.forEach(function(c, i) {{ txt += fmtEx(c) + '\\n'; if(i<d.exchange_last3.length-1) txt+='\\n'; }}); }}
-      txt += '\\n-- НАШ ГРАФИК (последние 3 из ' + d.chart_total_candles + ') --\\n';
-      if (!d.chart_last3.length) {{ txt += '  нет данных\\n'; }}
-      else {{ d.chart_last3.forEach(function(c, i) {{ txt += fmt(c, i) + '\\n'; if(i<d.chart_last3.length-1) txt+='\\n'; }}); }}
-      if (d.live_cache) {{
-        const lc = d.live_cache;
-        txt += '\\n-- LIVE CACHE --\\n';
-        txt += '  t=' + lc.t_human + '  close_at=' + lc.close_at_human + '\\n';
-        txt += '  C=' + lc.c + '  возраст=' + lc.age_sec + 'с\\n';
-      }}
-      if (d.discrepancies && d.discrepancies.length) {{
-        txt += '\\nРАСХОЖДЕНИЯ (' + d.discrepancies.length + '):\\n';
-        d.discrepancies.forEach(function(x) {{
-          txt += '  ' + x.t_human + ': ' + x.issue + '\\n';
-          if (x.diffs) Object.entries(x.diffs).forEach(function(e2) {{
-            txt += '    ' + e2[0] + ': график=' + e2[1].chart + '  биржа=' + e2[1].exchange + '\\n';
-          }});
-        }});
-      }} else if (!d.exchange_err) {{
-        txt += '\\nРасхождений не обнаружено\\n';
-      }}
-      txt += '\\n[обновлено: ' + new Date().toLocaleTimeString() + ']';
-      el.textContent = txt;
-    }})
-    .catch(function(e) {{ if(el) el.textContent = 'fetch error: ' + e; }});
-}}
-// Авто-обновление дебаг-панели раз в 3 сек пока открыта
-setInterval(() => {{ if (_debugOpen) loadCandleDebug(); }}, 3000);
 
 function fetchLiveCandle() {{
   // Отменяем предыдущий таймер и ставим новый — защита от накопления
@@ -7969,11 +7914,11 @@ details summary::-webkit-details-marker{display:none}
 
     <!-- Recent configs quick-select -->
     <div id="recentPanel" style="display:none;margin-bottom:8px;border-radius:10px;background:var(--glass2);border:1px solid var(--border2)">
-      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'240px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
+      <div onclick="var b=document.getElementById('recentBody');var a=document.getElementById('recentArrow');var open=b.style.maxHeight!=='0px';b.style.maxHeight=open?'0px':'120px';a.style.transform=open?'rotate(0deg)':'rotate(180deg)'" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;user-select:none">
         <span style="font-size:.68rem;font-weight:600;letter-spacing:.06em;color:var(--text3);text-transform:uppercase;flex:1">Недавние конфиги</span>
         <span id="recentArrow" style="font-size:.65rem;color:var(--text3);transition:transform .2s;transform:rotate(180deg)">▼</span>
       </div>
-      <div id="recentBody" style="max-height:240px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;border-radius:0 0 10px 10px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;">
+      <div id="recentBody" style="max-height:120px;overflow-y:auto;transition:max-height .3s ease;padding:0 6px 6px;border-radius:0 0 10px 10px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;">
         <div id="recentList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
@@ -8736,7 +8681,7 @@ function stopOpt(){
     const _rp2=document.getElementById('recentPanel');
     if(_rp2 && _rp2.dataset.hasConfigs==='1'){
       _rp2.style.display='block';
-      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='240px';
+      const _rb3=document.getElementById('recentBody');if(_rb3)_rb3.style.maxHeight='120px';
       const _ra3=document.getElementById('recentArrow');if(_ra3)_ra3.style.transform='rotate(180deg)';
     }
   }
@@ -9516,7 +9461,7 @@ function _loadRecentConfigs(){
     // Всегда раскрываем при загрузке
     const rb=document.getElementById('recentBody');
     const ra=document.getElementById('recentArrow');
-    if(rb) rb.style.maxHeight='240px';
+    if(rb) rb.style.maxHeight='120px';
     if(ra) ra.style.transform='rotate(180deg)';
   }).catch(()=>{});
 }
