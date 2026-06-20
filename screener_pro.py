@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.402
+- v3.402: fix лейбл +0.00% на сделках графика — при переиндексации bar_i/exit_bar
+  по timestamp (при сдвиге SW-окна) exit_p не пересчитывался, оставаясь серверным.
+  (1) В _reindexSignals() (бывший IIFE) при нахождении exit_bar теперь пересчитывается
+  exit_p = TP или SL в зависимости от того что было выбито (с логикой одновременного
+  попадания по open). (2) _reindexSignals вынесен в именованную функцию и теперь
+  вызывается также после postMessage-замены SIGNALS — ранее переиндексация
+  вообще не запускалась при live-обновлениях через postMessage.
+====
 WickFill Optimizer v3.401
 - v3.401: fix белый фон графика на мобиле в светлой теме — filter:brightness(1.35)
   применялся ко всем темам через медиа-запрос мобиля, осветляя кремовый #FAE6D8
@@ -736,7 +745,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.401"
+APP_VERSION = "3.402"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3014,7 +3023,7 @@ const CANDLES={candles_json};
 const SIGNALS={signals_json};
 // Переиндексируем bar_i/exit_bar/signal_bar по timestamp — на случай если свечи
 // сдвинулись (SW добавил новые) с момента последнего _simulate на сервере
-(function(){{
+function _reindexSignals(){{
   const tMap={{}};
   CANDLES.forEach((c,i)=>{{tMap[c.t]=i;}});
   SIGNALS.forEach(s=>{{
@@ -3023,18 +3032,26 @@ const SIGNALS={signals_json};
       // exit_bar — ищем по exit_p и dir после bar_i
       // нет отдельного timestamp для exit — пересчитываем по TP/SL
       const bi=s.bar_i; const dir=s.dir; const tp=s.tp; const sl=s.sl;
-      let eb=null;
+      let eb=null; let newExitP=null;
       for(let i=bi+1;i<CANDLES.length;i++){{
         const c=CANDLES[i];
         const hitTp=(dir===1&&c.h>=tp)||(dir===-1&&c.l<=tp);
         const hitSl=(dir===1&&c.l<=sl)||(dir===-1&&c.h>=sl);
-        if(hitTp||hitSl){{eb=i;break;}}
+        if(hitTp||hitSl){{
+          eb=i;
+          // При одновременном TP и SL — берём ближайший к open
+          if(hitTp&&hitSl){{ newExitP=Math.abs(c.o-tp)<=Math.abs(c.o-sl)?tp:sl; }}
+          else {{ newExitP=hitTp?tp:sl; }}
+          break;
+        }}
       }}
       s.exit_bar=eb;
+      if(newExitP!=null) s.exit_p=newExitP;
     }}
     if(s.signal_bar!=null && s.bar_i!=null) s.signal_bar=Math.max(0,s.bar_i-1);
   }});
-}})();
+}}
+_reindexSignals();
 const TF_SEC={tf_sec};
 let PENDING_BAR=null;  // bar_i сигнала ожидающего входа (use_next_bar, ещё не открыт)
 const canvas=document.getElementById('c');
@@ -3544,6 +3561,7 @@ window.addEventListener('message', e => {{
   CANDLES.length = 0; e.data.candles.forEach(c => CANDLES.push(c));
   SIGNALS.length = 0; e.data.signals.forEach(s => SIGNALS.push(s));
   PENDING_BAR = e.data.pending_bar ?? null;
+  _reindexSignals();
   // Если последняя свеча в новых данных — закрытая, а у нас была live НОВЕЕ — добавляем обратно.
   // prevLive.t === lastT означает что SW закрыл эту свечу — live уже не нужна, не добавляем.
   if (prevLive && CANDLES.length > 0 && !CANDLES[CANDLES.length-1].live) {{
