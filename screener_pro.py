@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.405
+- v3.405: КРИТИЧЕСКИЙ fix — график показывал винрейт сильно хуже конфига и сделки,
+  закрытые противоположным сигналом (sig_close) в плюсе, отрисовывались как минус
+  совсем в другой точке. Причина: фронтенд-функция _reindexSignals() (переиндексирует
+  bar_i/exit_bar по timestamp на случай сдвига SW-окна) для exit_bar ВСЕГДА
+  пересчитывала исход через сканирование вперёд до первого попадания в TP или SL —
+  это верно только для сделок, реально закрытых по TP/SL. Для сделок, закрытых
+  противоположным сигналом (exit_p = close сделки, не равен ни tp ни sl), такой
+  пересчёт игнорировал реальный exit_p/win с сервера и "доезжал" до случайного
+  более позднего TP/SL — реально выигрышная (или закрытая в небольшой плюс/минус)
+  сделка могла отрисоваться как убыточная намного позже и по другой цене. Это и
+  объясняло видимый на графике WR хуже фактического и "лейблы не на своих местах".
+  Фикс: _simulate теперь сохраняет exit_t (timestamp бара выхода) при ЛЮБОМ закрытии
+  сделки — и по TP/SL, и по sig_close; _reindexSignals при наличии exit_t просто
+  маппит exit_bar по времени (как и bar_i), exit_p/win больше не трогает — они уже
+  верны с сервера. TP/SL-пересчёт оставлен как фолбэк только для старых данных без
+  exit_t. _carry_forward_open_signal тоже теперь пишет exit_t.
+====
 WickFill Optimizer v3.404
 - v3.404: fix "⏳ График ещё не готов" появлялся посреди работающего перебора,
   хотя цикл уже был завершён (best $X на карточке) — пересборка графика на
@@ -768,7 +786,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.404"
+APP_VERSION = "3.405"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1578,7 +1596,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                 dd=(max_eq-equity)/max_eq*100 if max_eq>0 else 0
                 if dd>max_dd: max_dd=dd
                 if _collect and _csigs:
-                    _csigs[-1]["exit_bar"]=i; _csigs[-1]["win"]=tp_win; _csigs[-1]["exit_p"]=exit_p
+                    _csigs[-1]["exit_bar"]=i; _csigs[-1]["win"]=tp_win; _csigs[-1]["exit_p"]=exit_p; _csigs[-1]["exit_t"]=c["t"]
                 in_trade=False
 
         up_w_pct=up_w/rng*100 if rng>0 else 0
@@ -1800,7 +1818,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     if dd>max_dd: max_dd=dd
                     if _collect and _csigs:
                         _csigs[-1]["exit_bar"]=i;_csigs[-1]["win"]=is_win
-                        _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True
+                        _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True;_csigs[-1]["exit_t"]=c["t"]
                     in_trade=False
                     pending_sig=-1 if short_sig_base else 1;sig_bar=i
 
@@ -1822,7 +1840,7 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
                     if dd>max_dd: max_dd=dd
                     if _collect and _csigs:
                         _csigs[-1]["exit_bar"]=i;_csigs[-1]["win"]=is_win
-                        _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True
+                        _csigs[-1]["exit_p"]=exit_p;_csigs[-1]["sig_close"]=True;_csigs[-1]["exit_t"]=c["t"]
                     in_trade=False
                     if short_sig_base and _confirm():
                         ep=cl;pos=min(equity,max_pos)
@@ -3053,24 +3071,36 @@ function _reindexSignals(){{
   SIGNALS.forEach(s=>{{
     if(s.t!=null && tMap[s.t]!=null) s.bar_i=tMap[s.t];
     if(s.exit_bar!=null){{
-      // exit_bar — ищем по exit_p и dir после bar_i
-      // нет отдельного timestamp для exit — пересчитываем по TP/SL
-      const bi=s.bar_i; const dir=s.dir; const tp=s.tp; const sl=s.sl;
-      let eb=null; let newExitP=null;
-      for(let i=bi+1;i<CANDLES.length;i++){{
-        const c=CANDLES[i];
-        const hitTp=(dir===1&&c.h>=tp)||(dir===-1&&c.l<=tp);
-        const hitSl=(dir===1&&c.l<=sl)||(dir===-1&&c.h>=sl);
-        if(hitTp||hitSl){{
-          eb=i;
-          // При одновременном TP и SL — берём ближайший к open
-          if(hitTp&&hitSl){{ newExitP=Math.abs(c.o-tp)<=Math.abs(c.o-sl)?tp:sl; }}
-          else {{ newExitP=hitTp?tp:sl; }}
-          break;
+      if(s.exit_t!=null && tMap[s.exit_t]!=null){{
+        // Есть точный таймстемп выхода (TP/SL ИЛИ закрытие противоположным сигналом,
+        // sig_close) — просто маппим по времени, exit_p/win уже верны с сервера,
+        // пересчитывать их по TP/SL не нужно (и нельзя — см. фолбэк ниже).
+        s.exit_bar=tMap[s.exit_t];
+      }} else {{
+        // Фолбэк для старых данных без exit_t (сохранённых до этого фикса):
+        // пересчитываем по TP/SL. ВНИМАНИЕ — это некорректно для сделок, закрытых
+        // противоположным сигналом (sig_close), у которых exit_p мог не совпадать
+        // ни с tp, ни с sl: такая сделка здесь "доезжает" до первого попадания в TP/SL
+        // СИЛЬНО позже реального выхода, из-за чего реально выигрышная (или
+        // нейтральная) сделка могла отрисоваться как закрытая в минус намного позже
+        // и по совсем другой цене — график показывал винрейт хуже фактического.
+        const bi=s.bar_i; const dir=s.dir; const tp=s.tp; const sl=s.sl;
+        let eb=null; let newExitP=null;
+        for(let i=bi+1;i<CANDLES.length;i++){{
+          const c=CANDLES[i];
+          const hitTp=(dir===1&&c.h>=tp)||(dir===-1&&c.l<=tp);
+          const hitSl=(dir===1&&c.l<=sl)||(dir===-1&&c.h>=sl);
+          if(hitTp||hitSl){{
+            eb=i;
+            // При одновременном TP и SL — берём ближайший к open
+            if(hitTp&&hitSl){{ newExitP=Math.abs(c.o-tp)<=Math.abs(c.o-sl)?tp:sl; }}
+            else {{ newExitP=hitTp?tp:sl; }}
+            break;
+          }}
         }}
+        s.exit_bar=eb;
+        if(newExitP!=null) s.exit_p=newExitP;
       }}
-      s.exit_bar=eb;
-      if(newExitP!=null) s.exit_p=newExitP;
     }}
     if(s.signal_bar!=null && s.bar_i!=null) s.signal_bar=Math.max(0,s.bar_i-1);
   }});
@@ -3716,6 +3746,7 @@ def _carry_forward_open_signal(prev_signals, new_signals, new_candles, prev_best
     sig["win"] = win
     if exit_p is not None:
         sig["exit_p"] = exit_p
+        sig["exit_t"] = new_candles[exit_bar]["t"]
 
     return new_signals + [sig]
 
