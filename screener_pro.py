@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.407
+- v3.407: fix AMOLED после reload страницы (auto-update / восстановление связи) —
+  статус AMOLED восстанавливался из localStorage (кнопка зелёная, чёрная тема,
+  wake lock, скринсейвер работают), но фуллскрин не возвращался. Причина:
+  requestFullscreen() нельзя вызвать программно при загрузке страницы без
+  настоящего user gesture — браузер тихо его игнорирует, а код инициализации
+  (_amoledBtnRefresh + wake lock) этот вызов и не делал. Теперь самый первый
+  реальный click/touchstart/keydown после reload (если AMOLED включён, а
+  document.fullscreenElement пуст) сам вызывает _requestFS() — это валидный
+  user gesture для Fullscreen API, так что обычное взаимодействие со страницей
+  автоматически возвращает фуллскрин без отдельного тапа по кнопке AMOLED.
+====
 WickFill Optimizer v3.406
 - v3.406: fix кнопка сброса положения графика (⟲, добавлена в v3.403) не реагировала
   на тап на тач-устройствах (Android/Termux). Причина: wrap.addEventListener('touchstart'/
@@ -799,7 +811,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.406"
+APP_VERSION = "3.407"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -9782,6 +9794,15 @@ function toggleAmoled(){
 
 ['click','touchstart','mousemove','keydown','scroll'].forEach(ev=>{
   document.addEventListener(ev, ()=>{
+    // AMOLED был включён (восстановлен из localStorage после reload — например
+    // после auto-update или восстановления связи), но страница больше не в
+    // фуллскрине: requestFullscreen() нельзя вызвать автоматически при загрузке
+    // страницы без жеста пользователя (браузер тихо игнорирует вызов). Ловим
+    // самый первый реальный клик/тач/нажатие клавиши после reload и пробуем
+    // войти в фуллскрин внутри него — это валидный user gesture для API.
+    if(_amoledOn && !document.fullscreenElement && (ev==='click'||ev==='touchstart'||ev==='keydown')){
+      _requestFS();
+    }
     const ov=document.getElementById('amoledOverlay');
     if(ov && ov.style.display==='block'){
       // первое касание — только гасим оверлей, не даём провалиться в клик под ним
