@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.404
+- v3.404: fix "⏳ График ещё не готов" появлялся посреди работающего перебора,
+  хотя цикл уже был завершён (best $X на карточке) — пересборка графика на
+  завершении ЦИКЛА (_run_one_cycle, в отличие от тика SW-треда) при любой
+  transient-ошибке (например сетевой сбой _fetch_current_candle/_save_chart —
+  совпадает по времени с "Потеряно соединение / Восстановлено" в логах)
+  затирала opt_state["chart_candles"/"chart_signals"/"chart_path"] ПУСТЫМИ
+  значениями из except-ветки и при этом всё равно бампала chart_updated_at.
+  Фронтенд видел "новый" updated_at → дёргал iframe /chart → получал пустые
+  данные → показывал заглушку "не готов", хотя предыдущий рабочий график
+  никуда не пропадал на сервере (просто следующий цикл его не переборол).
+  Теперь добавлен флаг _chart_build_ok: если ребилд графика упал — opt_state
+  НЕ трогается (остаются прошлые рабочие chart_candles/signals/path/updated_at),
+  в логи пишется предупреждение, следующий тик/цикл пересобирает график заново.
+====
 WickFill Optimizer v3.403
 - v3.403: убран авто-возврат viewport графика к правому краю через 5 сек после
   зума/драга/тача (_schedAutoReturn) — выглядел как нежелательный самопроизвольный
@@ -753,7 +768,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.403"
+APP_VERSION = "3.404"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6203,6 +6218,7 @@ def run_optimizer(params):
                 _prev_params_cf  = opt_state.get("chart_signals_params")
                 _prev_pending_cf = opt_state.get("chart_pending_info")
             _htf_stats = None
+            _chart_build_ok = False
             try:
                 with htf_lock:
                     _htf_d = htf_state["direction"]
@@ -6261,6 +6277,7 @@ def run_optimizer(params):
                 if _cur and _chart_src and _cur["t"] > _chart_src[-1]["t"]:
                     _cfmt = _cfmt + [{"t":_cur["t"],"o":_cur["open"],"h":_cur["high"],"l":_cur["low"],"c":_cur["close"],"live":True}]
                 _cpath = _save_chart(_cfmt, _csig, _tb, symbol, tf, risk_pct)
+                _chart_build_ok = True
             except Exception as _ce:
                 import traceback
                 print(f"{_ts()} [chart] Ошибка: {_ce}\n{traceback.format_exc()}", flush=True)
@@ -6269,14 +6286,26 @@ def run_optimizer(params):
             with opt_lock:
                 _sw_params = _tp
                 opt_state["trade_best"] = _tb
-                opt_state["chart_candles"]     = _cfmt
-                opt_state["chart_signals"]     = _csig
-                opt_state["chart_signals_params"] = dict(_tp) if _tp else None
-                opt_state["chart_pending_bar"] = _cpend
-                opt_state["chart_pending_info"] = _cpending_info
-                opt_state["chart_path"]        = _cpath or ""
-                opt_state["chart_updated_at"]  = int(time.time())
-                opt_state["htf_stats"]         = _htf_stats
+                if _chart_build_ok:
+                    opt_state["chart_candles"]     = _cfmt
+                    opt_state["chart_signals"]     = _csig
+                    opt_state["chart_signals_params"] = dict(_tp) if _tp else None
+                    opt_state["chart_pending_bar"] = _cpend
+                    opt_state["chart_pending_info"] = _cpending_info
+                    opt_state["chart_path"]        = _cpath or ""
+                    opt_state["chart_updated_at"]  = int(time.time())
+                    opt_state["htf_stats"]         = _htf_stats
+                else:
+                    # Пересборка графика на завершении цикла не удалась (например, сетевой
+                    # сбой в _fetch_current_candle/_save_chart) — раньше этот путь всё равно
+                    # затирал opt_state пустыми _cfmt/_csig/_cpath и бампал chart_updated_at,
+                    # из-за чего фронтенд видел "новую" версию графика и перезагружал iframe,
+                    # получая пустые данные → "⏳ График ещё не готов" несмотря на то что
+                    # перебор и предыдущий рабочий график были в полном порядке. Теперь просто
+                    # оставляем прошлые рабочие chart_candles/chart_signals/chart_path и НЕ
+                    # трогаем chart_updated_at — фронтенд не дёргает iframe, следующий тик
+                    # SW-треда или цикл попробует пересобрать график снова.
+                    olog("⚠ Граф цикла не пересобран (ошибка) — оставляю предыдущий рабочий график", "warn")
 
             # --- Переоткрытие сделки при смене конфига ---
             with opt_lock:
