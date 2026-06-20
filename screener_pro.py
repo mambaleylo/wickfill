@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.403
+- v3.403: убран авто-возврат viewport графика к правому краю через 5 сек после
+  зума/драга/тача (_schedAutoReturn) — выглядел как нежелательный самопроизвольный
+  прыжок графика во время просмотра истории. Вместо таймера добавлена кнопка
+  ручного сброса (⟲) в пустом углу между осями (справа от шкалы времени, под
+  шкалой цены) — вызывает _resetView(), который ставит viewLen/viewStart как
+  раньше делал таймер, но только по явному действию пользователя.
+====
 WickFill Optimizer v3.402
 - v3.402: fix лейбл +0.00% на сделках графика — при переиндексации bar_i/exit_bar
   по timestamp (при сдвиге SW-окна) exit_p не пересчитывался, оставаясь серверным.
@@ -745,7 +753,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.402"
+APP_VERSION = "3.403"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2985,6 +2993,7 @@ canvas{{display:block;width:100%;height:100%}}
 <div class="body">
   <div id="canvas-wrap">
     <canvas id="c"></canvas>
+    <div id="resetViewBtn" onclick="_resetView()" title="Сбросить положение графика" style="position:absolute;right:5px;bottom:5px;width:62px;height:40px;display:flex;align-items:center;justify-content:center;background:rgba(120,110,100,.18);border:1px solid rgba(255,255,255,.12);border-radius:6px;color:#b0a090;cursor:pointer;font-size:15px;z-index:15;user-select:none">⟲</div>
     <div id="tooltip"></div>
 
     <div style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:8px;font-size:.7rem;color:#9a8e83">
@@ -3065,16 +3074,12 @@ let isDragging=false,dragX=0,dragVS=0,sidebarOpen=true;
 // Используется чтобы любое увеличение CANDLES (push live, postMessage) автоматически
 // сдвигало viewStart — независимо от того, кто добавил свечи.
 let _atRightEdge = true;
-// Авто-возврат к правому краю: через 5 сек бездействия — reset к live-свече с дефолтным масштабом
-let _autoReturnTimer = null;
-function _schedAutoReturn() {{
-  if (_autoReturnTimer) clearTimeout(_autoReturnTimer);
-  _autoReturnTimer = setTimeout(() => {{
-    viewLen = Math.min(_defaultViewLen, CANDLES.length);
-    viewStart = Math.max(0, CANDLES.length - viewLen);
-    _atRightEdge = true;
-    schedRender();
-  }}, 5000);
+// Ручной сброс положения графика к live-свече с дефолтным масштабом (кнопка между осями)
+function _resetView() {{
+  viewLen = Math.min(_defaultViewLen, CANDLES.length);
+  viewStart = Math.max(0, CANDLES.length - viewLen);
+  _atRightEdge = true;
+  schedRender();
 }}
 // rAF batching: несколько вызовов schedRender() за один кадр сводятся в один render()
 let _rafPending=false;
@@ -3353,9 +3358,9 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();}},{{passive:false}});
+wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}},{{passive:false}});
 wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
-window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();}});
+window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}});
 window.addEventListener('mouseup',()=>isDragging=false);
 // Touch support
 let _t1x=0,_t1VS=0,_tPinchD=0,_tPinchVL=0,_tPinchVS=0;
@@ -3371,12 +3376,12 @@ wrap.addEventListener('touchmove',e=>{{
   e.preventDefault();
   if(e.touches.length===1){{
     const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.touches[0].clientX-_t1x)/cw2);
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_t1VS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
   }} else if(e.touches.length===2){{
     const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;
     const d=Math.sqrt(dx*dx+dy*dy),scale=_tPinchD/d;
     viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(_tPinchVL*scale)));
-    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);_schedAutoReturn();schedRender();
+    viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
