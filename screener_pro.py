@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.399
+- v3.399: fix UnicodeEncodeError 'latin-1' codec can't encode... при автообновлении/работе
+  с GitHub API. Причина: GH_TOKEN из ~/.wf_token или из UI (/set_gh_token) мог содержать
+  невидимый не-ASCII символ (артефакт копирования через мобильную клавиатуру/мессенджер —
+  умная кавычка, zero-width space и т.п.). HTTP-заголовки обязаны быть latin-1/ASCII,
+  поэтому requests/urllib3 падали при сборке заголовка Authorization с криптичной ошибкой
+  далеко от настоящей причины. Добавлена _sanitize_gh_token() — вырезает не-ASCII символы
+  при загрузке токена (_load_gh_token) и при сохранении через UI (/set_gh_token), с логом
+  если очистка реально что-то поменяла.
+
 WickFill Optimizer v3.398
 - v3.398: fix кнопки "↺ Restart" (/termux_update) — та же CDN-кеш проблема, что чинили
   в v3.393 для фонового автообновления, но кнопка дублировала старую логику отдельным
@@ -712,7 +722,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.398"
+APP_VERSION = "3.399"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -4625,16 +4635,31 @@ _AUTO_DIRS = [
 # ── GitHub Sync ──────────────────────────────────────────────────────────────
 # Токен НЕ хранится в коде (GitHub secret scanning блокирует push).
 # Приоритет: env GH_TOKEN → ~/.wf_token → /sdcard/Download/WickFill/.wf_token
+def _sanitize_gh_token(raw):
+    """Токены GitHub (ghp_/github_pat_/...) — всегда чистый ASCII. Если при копировании
+    через мобильный мессенджер/клавиатуру в строку затесался невидимый юникод-символ
+    (умная кавычка, zero-width space и т.п.), requests/urllib3 падает при сборке
+    HTTP-заголовка Authorization с криптичной ошибкой 'latin-1' codec can't encode...
+    далеко от места реальной причины. Вырезаем всё не-ASCII сразу при загрузке/сохранении."""
+    if not raw:
+        return ""
+    cleaned = raw.encode("ascii", "ignore").decode("ascii").strip()
+    if cleaned != raw.strip():
+        print(f"{_ts()} [gh] ⚠ В токене были не-ASCII символы — очищено "
+              f"({len(raw.strip())} → {len(cleaned)} символов)", flush=True)
+    return cleaned
+
+
 def _load_gh_token():
     import os as _os
     t = _os.environ.get("GH_TOKEN", "").strip()
-    if t: return t
+    if t: return _sanitize_gh_token(t)
     for p in [_os.path.expanduser("~/.wf_token"),
               "/sdcard/Download/WickFill/.wf_token",
               _os.path.join(_script_dir(), ".wf_token")]:
         try:
             v = open(p).read().strip()
-            if v: return v
+            if v: return _sanitize_gh_token(v)
         except Exception: pass
     return ""
 _GH_TOKEN  = _load_gh_token()
@@ -10340,9 +10365,15 @@ class Handler(BaseHTTPRequestHandler):
             global _GH_TOKEN
             try: params = json.loads(body)
             except: self._json({"ok": False, "msg": "bad JSON"}); return
-            tok = (params.get("token") or "").strip()
-            if not tok:
+            tok_raw = (params.get("token") or "").strip()
+            if not tok_raw:
                 self._json({"ok": False, "msg": "пустой токен"}); return
+            tok = _sanitize_gh_token(tok_raw)
+            if not tok:
+                self._json({"ok": False, "msg": "токен пуст после очистки от не-ASCII символов"}); return
+            if tok != tok_raw:
+                print(f"{_ts()} [gh] ⚠ Токен из UI содержал не-ASCII символы (вероятно, артефакт "
+                      f"копирования через мобильную клавиатуру) — автоматически очищен", flush=True)
             # Сохраняем в ~/.wf_token
             try:
                 import os as _os
