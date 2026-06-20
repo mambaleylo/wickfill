@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.400
+- v3.400: переоткрытие сделки при смене конфига оптимизатора — новая функция
+  _gate_reopen_on_new_config: если найден новый рекорд (is_new_rec) и gate_auto включён,
+  проверяет текущую позицию: (1) позиция в противоположном направлении — закрыть
+  и переоткрыть; (2) позиции нет и цена в пределах reopen_ep_pct% от ep — открыть;
+  (3) позиция уже в нужном направлении — ничего. Порог reopen_ep_pct (дефолт 0.5%)
+  настраивается в UI Gate.io; 0 = выкл.
+====
 WickFill Optimizer v3.399
-- v3.400: механизм переоткрытия сделки при смене конфига — _gate_reopen_if_needed:
-  если оптимизатор нашёл новый trade_best с открытым сигналом на последней свече и
-  текущая позиция на Gate отсутствует или противоположна новому направлению, а цена
-  не ушла дальше max_entry_slip_pct от точки входа — позиция переоткрывается; если
-  позиция уже в нужном направлении — не трогается; вызывается в SW-треде после
-  обновления trade_best (отдельный поток чтобы не блокировать тик).
 - v3.399: fix UnicodeEncodeError 'latin-1' codec can't encode... при автообновлении/работе
   с GitHub API. Причина: GH_TOKEN из ~/.wf_token или из UI (/set_gh_token) мог содержать
   невидимый не-ASCII символ (артефакт копирования через мобильную клавиатуру/мессенджер —
@@ -2540,6 +2542,91 @@ def _gate_cancel_all_orders(cfg, contract):
                 _gate_request(cfg, "DELETE", f"/api/v4/futures/usdt/price_orders/{oid}")
 
 
+def _gate_reopen_on_new_config(cfg, symbol, tf, best_params, risk_pct, candles, log_fn=None):
+    """Переоткрывает сделку при смене конфига оптимизатора.
+    - Если позиция открыта в противоположном направлении — закрыть и переоткрыть.
+    - Если позиции нет, но цена близко к ep (≤ reopen_ep_pct%) — открыть.
+    - Если позиция уже в правильном направлении — ничего.
+    Возвращает строку-лог или None.
+    """
+    if not cfg or not best_params or not candles:
+        return None
+    gate_key    = cfg.get("gate_key", "")
+    gate_secret = cfg.get("gate_secret", "")
+    gate_pct    = float(cfg.get("gate_pct", 0))
+    gate_auto_raw = cfg.get("gate_auto_enabled", False)
+    gate_auto   = (gate_auto_raw is True) or (str(gate_auto_raw).lower() == "true")
+    if not (gate_key and gate_secret and gate_pct > 0 and gate_auto):
+        return None
+
+    # Порог близости цены входа: насколько % текущая цена может отклониться от ep
+    reopen_ep_pct = float(cfg.get("reopen_ep_pct", 0.5))
+
+    contract = symbol.replace("/", "_").upper()
+
+    # Получаем сигнал из последней симуляции
+    sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
+    if not sim or not sim.get("_signals"):
+        return None
+    sigs = sim["_signals"]
+    if not sigs:
+        return None
+    # Берём только сигнал на последней свече
+    last_t = candles[-1]["t"]
+    sig = next((s for s in reversed(sigs) if s.get("t") == last_t), None)
+    if sig is None:
+        return None
+
+    direction = sig["dir"]; ep = sig["ep"]; tp = sig["tp"]; sl = sig["sl"]
+
+    # Текущая позиция
+    pos_data, perr = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
+    if perr:
+        return f"[reopen] ошибка GET position: {perr}"
+    pos_size = int((pos_data or {}).get("size", 0))
+    pos_dir  = 1 if pos_size > 0 else (-1 if pos_size < 0 else 0)
+
+    _sl_pct = float(best_params.get("sl_pct") or 0)
+    leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 10
+
+    auto_tp_pct = float(cfg.get("gate_auto_tp_pct", 0))
+    auto_sl_pct = float(cfg.get("gate_auto_sl_pct", 0))
+    trade_tp = round(ep * (1 + auto_tp_pct/100) if direction==1 else ep * (1 - auto_tp_pct/100), 6) if auto_tp_pct > 0 else tp
+    trade_sl = round(ep * (1 - auto_sl_pct/100) if direction==1 else ep * (1 + auto_sl_pct/100), 6) if auto_sl_pct > 0 else sl
+
+    dir_str = "ЛОНГ" if direction == 1 else "ШОРТ"
+
+    if pos_dir != 0 and pos_dir != direction:
+        # Позиция открыта в противоположном направлении — закрыть и переоткрыть
+        msg = f"[reopen] конфиг сменился: позиция {'ЛОНГ' if pos_dir==1 else 'ШОРТ'} → новый сигнал {dir_str}. Переоткрываем."
+        if log_fn: log_fn(msg)
+        ok, tlog = _gate_execute_signal(cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct)
+        return f"{msg}\n{'✓' if ok else '✕'} {tlog}"
+
+    elif pos_dir == 0:
+        # Позиции нет — проверяем близость цены к ep
+        try:
+            price_data, _ = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/contracts/{contract}")
+            cur_price = float((price_data or {}).get("last_price") or 0)
+        except Exception:
+            cur_price = 0
+        if cur_price <= 0:
+            # Фолбек: берём close последней свечи
+            cur_price = candles[-1].get("close", 0)
+        if cur_price > 0 and ep > 0:
+            dist_pct = abs(cur_price - ep) / ep * 100
+            if dist_pct <= reopen_ep_pct:
+                msg = f"[reopen] позиции нет, цена близко к ep ({dist_pct:.2f}% ≤ {reopen_ep_pct}%). Открываем {dir_str}."
+                if log_fn: log_fn(msg)
+                ok, tlog = _gate_execute_signal(cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct)
+                return f"{msg}\n{'✓' if ok else '✕'} {tlog}"
+            else:
+                return f"[reopen] позиции нет, цена далеко от ep ({dist_pct:.2f}% > {reopen_ep_pct}%). Пропуск."
+    else:
+        return f"[reopen] позиция уже {dir_str} — направление совпадает, не трогаем."
+    return None
+
+
 def _gate_cleanup_orphan_orders(cfg, contract):
     """Если позиции по контракту нет, но висят TP/SL триггер-ордера от прошлой сделки — отменяет их.
     Возвращает (n_cancelled, err)."""
@@ -3723,100 +3810,6 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pc
             pnl_log = f"{price_sign}{price_move_pct:.2f}%"
             print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pnl_log} {res_str}", flush=True)
 
-
-# MAX допустимое проскальзывание от точки входа для переоткрытия (% от ep)
-_REOPEN_MAX_SLIP_PCT = 0.5  # можно подстроить в UI (пока хардкод)
-
-def _gate_reopen_if_needed(cfg, symbol, tf, best_params, risk_pct, candles, precomp_signals=None):
-    """Переоткрывает Gate-позицию если новый конфиг даёт другое направление (или позиция отсутствует),
-    а цена не ушла дальше _REOPEN_MAX_SLIP_PCT% от точки входа.
-    Логика:
-      1. Берём последний открытый сигнал из симуляции на текущих свечах.
-      2. Проверяем позицию на Gate.
-      3. Если позиция противоположна сигналу → переоткрываем.
-         Если позиции нет → открываем (если цена в допуске).
-         Если позиция совпадает по направлению → не трогаем.
-    """
-    try:
-        if not cfg or not best_params or not candles:
-            return
-        gate_key    = cfg.get("gate_key", "")
-        gate_secret = cfg.get("gate_secret", "")
-        gate_pct    = float(cfg.get("gate_pct", 0) or 0)
-        gate_auto   = cfg.get("gate_auto_enabled", False)
-        gate_auto   = (gate_auto is True) or (str(gate_auto).lower() == "true")
-        if not (gate_key and gate_secret and gate_pct > 0 and gate_auto):
-            return
-
-        # Ищем открытый сигнал на последней свече
-        if precomp_signals is not None:
-            sigs = precomp_signals
-        else:
-            sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
-            if not sim:
-                return
-            sigs = sim.get("_signals", [])
-
-        if not sigs:
-            return
-
-        last_t = candles[-1]["t"]
-        # Ищем незакрытый сигнал (открытая позиция в симуляции) — приоритет: t == last_t
-        open_sig = None
-        for s in reversed(sigs):
-            if s.get("exit_bar") is None or s.get("open_end"):
-                if s.get("t") == last_t or open_sig is None:
-                    open_sig = s
-                if s.get("t") == last_t:
-                    break
-        if open_sig is None:
-            return  # нет активного сигнала в новом конфиге — нечего открывать
-
-        new_dir = open_sig["dir"]   # 1=лонг, -1=шорт
-        ep_new  = open_sig["ep"]
-        tp_new  = open_sig["tp"]
-        sl_new  = open_sig["sl"]
-        cur_price = candles[-1]["close"]
-
-        # Проверяем: цена ещё в допуске от точки входа?
-        slip_pct = abs(cur_price - ep_new) / ep_new * 100 if ep_new else 999
-        if slip_pct > _REOPEN_MAX_SLIP_PCT:
-            print(f"[reopen:{symbol}] Цена ушла на {slip_pct:.2f}% от ep={ep_new:.6g} > лимит {_REOPEN_MAX_SLIP_PCT}% — пропускаем", flush=True)
-            _write_trade_log(symbol, tf or "?", f"reopen skip: slip={slip_pct:.2f}% > {_REOPEN_MAX_SLIP_PCT}% ep={ep_new:.6g}")
-            return
-
-        # Получаем текущую позицию на Gate
-        contract = symbol.replace("/", "_").upper()
-        pos_data, perr = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
-        if perr:
-            print(f"[reopen:{symbol}] Ошибка получения позиции: {perr}", flush=True)
-            return
-        pos_size = int((pos_data or {}).get("size", 0))
-        pos_dir  = 1 if pos_size > 0 else (-1 if pos_size < 0 else 0)
-
-        if pos_dir == new_dir:
-            print(f"[reopen:{symbol}] Позиция уже {'ЛОНГ' if new_dir==1 else 'ШОРТ'} — совпадает с конфигом, не трогаем", flush=True)
-            return
-
-        reason = "противоположная позиция" if pos_dir != 0 else "позиция отсутствует"
-        dir_str = "ЛОНГ" if new_dir == 1 else "ШОРТ"
-        print(f"[reopen:{symbol}] {reason} → переоткрываем {dir_str} ep~{cur_price:.6g} tp={tp_new:.6g} sl={sl_new:.6g} slip={slip_pct:.2f}%", flush=True)
-        _write_trade_log(symbol, tf or "?", f"REOPEN {dir_str} reason={reason} ep={ep_new:.6g} cur={cur_price:.6g} slip={slip_pct:.2f}%")
-
-        _sl_pct = float((best_params or {}).get("sl_pct") or 0)
-        leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 1
-
-        # Используем текущую цену как ep (маркет-вход)
-        ok, log = _gate_execute_signal(cfg, symbol, new_dir, cur_price, tp_new, sl_new, leverage, gate_pct)
-        status = "✓" if ok else "✕"
-        print(f"[reopen:{symbol}] {status} {dir_str}: {log}", flush=True)
-        _write_trade_log(symbol, tf or "?", f"  reopen gate {status} {dir_str} lev={leverage} — {log.splitlines()[-1] if log else ''}")
-
-    except Exception as _re:
-        import traceback
-        print(f"[reopen:{symbol}] ОШИБКА: {_re}\n{traceback.format_exc()}", flush=True)
-
-
 def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None, precomp_signals=None):
     """Проверяет последнюю свечу. Если сигнал — шлёт telegram + открывает сделку."""
     if not best_params or not alert_cfg: return
@@ -4016,7 +4009,6 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
     global _sw_candles, _sw_params, _sw_risk
     interval_sec = TF_SECONDS.get(tf, 3600)
     is_multi = symbol in _sw_state  # мультирежим если символ зарегистрирован в _sw_state
-    _sw_prev_trade_best_params = None  # для отслеживания смены конфига → переоткрытие позиции
 
     print(f"[sw:{symbol}] Запущен. ТФ={tf} окно={n_candles} интервал={interval_sec}с multi={is_multi}")
 
@@ -4293,20 +4285,6 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                     elif _preclose_signal_found and not _confirmed_sigs:
                         print(f"[sw:{symbol}] ❌ Pre-close сигнал НЕ подтверждён на закрытой свече — сделка НЕ открывается")
                     _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
-
-                    # v3.400: переоткрытие позиции при смене конфига (новый trade_best)
-                    _cur_tb_params = dict(best_p) if best_p else None
-                    if _cur_tb_params and _cur_tb_params != _sw_prev_trade_best_params:
-                        # Конфиг изменился — проверяем нужно ли переоткрыть позицию
-                        _reopen_cfg   = _live_alert_cfg
-                        _reopen_sigs  = list(chart_signals_data)
-                        _reopen_cndls = list(new_candles)
-                        _reopen_bp    = dict(_cur_tb_params)
-                        def _do_reopen(_c=_reopen_cfg, _s=symbol, _t=tf, _p=_reopen_bp,
-                                       _r=risk_pct, _cn=_reopen_cndls, _sg=_reopen_sigs):
-                            _gate_reopen_if_needed(_c, _s, _t, _p, _r, _cn, precomp_signals=_sg)
-                        threading.Thread(target=_do_reopen, daemon=True).start()
-                    _sw_prev_trade_best_params = _cur_tb_params
             else:
                 _set_candles(new_candles)
         except Exception as _sw_tick_err:
@@ -6271,11 +6249,30 @@ def run_optimizer(params):
                 opt_state["chart_updated_at"]  = int(time.time())
                 opt_state["htf_stats"]         = _htf_stats
 
+            # --- Переоткрытие сделки при смене конфига ---
+            with opt_lock:
+                _fresh_candles_for_reopen = list(_sw_candles) if _sw_candles else list(current_candles)
+            if is_new_rec and alert_cfg and _tp and _fresh_candles_for_reopen:
+                try:
+                    _reopen_log = _gate_reopen_on_new_config(
+                        alert_cfg, symbol, tf, _tp, risk_pct, _fresh_candles_for_reopen,
+                        log_fn=lambda m: _write_trade_log(symbol, tf, m)
+                    )
+                    if _reopen_log:
+                        for _rl in _reopen_log.splitlines():
+                            if _rl.strip():
+                                olog(_rl.strip(), "info")
+                except Exception as _re:
+                    import traceback
+                    olog(f"[reopen] ошибка: {_re}", "warn")
+                    print(f"[reopen] {_re}\n{traceback.format_exc()}", flush=True)
+
             # --- Walk-forward валидация (30% + скользящие окна + мин. период) ---
             now_ts = time.time()
             valid_days = days * 0.30
             with opt_lock:
                 _fresh_candles = list(_sw_candles) if _sw_candles else list(current_candles)
+
             train_wr = all_time_best["winrate"]
 
             def _wf_sim(d_from, d_to=None):
@@ -7990,6 +7987,13 @@ details summary::-webkit-details-marker{display:none}
               style="width:70px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
             <span style="font-size:.65rem;color:var(--text3);line-height:1.2">пусто =<br>из сигнала</span>
           </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <span style="font-size:.75rem;color:var(--text3)">Переоткрытие если цена ≤</span>
+            <input type="number" id="reopen_ep_pct" value="0.5" min="0" max="10" step="0.1"
+              style="width:60px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text1);font-size:.8rem">
+            <span style="font-size:.75rem;color:var(--text3)">% от ep</span>
+            <span style="font-size:.65rem;color:var(--text3)">(0 = выкл)</span>
+          </div>
         </div>
         <!-- Галочка автоторговли -->
         <div style="display:flex;align-items:center;gap:8px;margin-top:4px;padding:8px;background:var(--bg2);border-radius:8px;border:1px solid var(--border)">
@@ -8214,7 +8218,7 @@ window.addEventListener('DOMContentLoaded', function(){
   });
 
   // Восстанавливаем сохранённые ключи
-  const _textFields = ['gate_key','gate_secret','gate_pct','gate_auto_tp_pct','gate_auto_sl_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
+  const _textFields = ['gate_key','gate_secret','gate_pct','gate_auto_tp_pct','gate_auto_sl_pct','reopen_ep_pct','al_tg_token','al_tg_chat','al_ntfy_topic'];
   const _checkFields = ['gate_auto_enabled'];
   _textFields.forEach(id => {
     const saved = localStorage.getItem('wf_'+id);
@@ -8288,12 +8292,13 @@ function getAlertCfg(){
   const gauto=document.getElementById('gate_auto_enabled')?.checked||false;
   const gtp=parseFloat(document.getElementById('gate_auto_tp_pct')?.value)||0;
   const gsl=parseFloat(document.getElementById('gate_auto_sl_pct')?.value)||0;
+  const greo=parseFloat(document.getElementById('reopen_ep_pct')?.value)||0;
   // BUG FIX: Gate работает независимо от заполненности Telegram-полей
   // Раньше если base={} (telegram не заполнен), gate ключи не добавлялись и сделки не открывались
   // Всегда передаём gate ключи в cfg — исполнение контролируется флагом gate_auto_enabled
   // gate_auto_enabled всегда передаётся — чтобы флаг не терялся если ключи заполнены
   // Плечо больше не задаётся вручную — всегда берётся из конфига оптимизатора (risk_pct/sl_pct)
-  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl});
+  if(gk&&gs&&gp>0) Object.assign(base,{gate_key:gk,gate_secret:gs,gate_pct:gp,gate_auto_tp_pct:gtp,gate_auto_sl_pct:gsl,reopen_ep_pct:greo});
   // Флаг автоторговли передаём всегда независимо от заполненности ключей
   base.gate_auto_enabled = gauto;
   // Обновляем статус галочки
