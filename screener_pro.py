@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.417
+- v3.417: AMOLED — кнопка выхода переработана: SVG отпечатка пальца
+  заменён на классический fingerprint-паттерн (концентрические дуги);
+  кнопка крупнее (58px), мягкий press-эффект (scale+подсветка) через
+  pointer-события, тонкая рамка rgba(255,255,255,.13).
+====
 WickFill Optimizer v3.416
 - v3.416: надёжная синхронизация конфигов при восстановлении сети.
   (1) _gh_sync_pending: перед PUT сравнивает validated_fitness — заливает
@@ -909,7 +915,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.416"
+APP_VERSION = "3.417"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7923,6 +7929,24 @@ details summary::-webkit-details-marker{display:none}
 
 <div id="amoledOverlay" onclick="wakeFromAmoled(event)" ontouchstart="wakeFromAmoled(event)" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;">
   <div id="amoledContent"></div>
+  <button id="amoledExitBtn" onclick="event.stopPropagation();toggleAmoled();" ontouchstart="event.stopPropagation();" ontouchend="event.stopPropagation();toggleAmoled();" title="Выйти из AMOLED" style="position:fixed;bottom:36px;right:32px;z-index:100000;background:rgba(255,255,255,0.06);border:1.5px solid rgba(255,255,255,0.13);border-radius:50%;width:58px;height:58px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);touch-action:manipulation;transition:background .2s,transform .1s;-webkit-tap-highlight-color:transparent;" onpointerdown="this.style.transform='scale(.9)';this.style.background='rgba(255,255,255,0.14)'" onpointerup="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'" onpointerleave="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:.75;display:block">
+      <!-- дуга кончика пальца -->
+      <path d="M12 4a5 5 0 0 1 5 5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- средняя дуга -->
+      <path d="M7 9a5 5 0 0 1 10 0" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- внешняя дуга -->
+      <path d="M4.5 9a7.5 7.5 0 0 1 15 0c0 4-1 7.5-3 10" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- центральная линия вниз -->
+      <path d="M12 9c0 3.5-.8 6.5-2.5 9" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- правая внутренняя -->
+      <path d="M12 9a3 3 0 0 1 3 3c0 2.5-.6 5-1.8 7" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- левая внутренняя -->
+      <path d="M9 10.5a3 3 0 0 1 .5-1.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- нижний разрыв левой дуги -->
+      <path d="M6.5 12.5c0 3 .7 5.5 2 7.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </button>
 </div>
 
 <!-- ── Topbar ── -->
