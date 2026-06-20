@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.399
+- v3.400: механизм переоткрытия сделки при смене конфига — _gate_reopen_if_needed:
+  если оптимизатор нашёл новый trade_best с открытым сигналом на последней свече и
+  текущая позиция на Gate отсутствует или противоположна новому направлению, а цена
+  не ушла дальше max_entry_slip_pct от точки входа — позиция переоткрывается; если
+  позиция уже в нужном направлении — не трогается; вызывается в SW-треде после
+  обновления trade_best (отдельный поток чтобы не блокировать тик).
 - v3.399: fix UnicodeEncodeError 'latin-1' codec can't encode... при автообновлении/работе
   с GitHub API. Причина: GH_TOKEN из ~/.wf_token или из UI (/set_gh_token) мог содержать
   невидимый не-ASCII символ (артефакт копирования через мобильную клавиатуру/мессенджер —
@@ -722,7 +728,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.399"
+APP_VERSION = "3.400"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3717,6 +3723,100 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pc
             pnl_log = f"{price_sign}{price_move_pct:.2f}%"
             print(f"[trade_close] {status} {symbol} {tf} {'ЛОНГ' if is_long else 'ШОРТ'} {pnl_log} {res_str}", flush=True)
 
+
+# MAX допустимое проскальзывание от точки входа для переоткрытия (% от ep)
+_REOPEN_MAX_SLIP_PCT = 0.5  # можно подстроить в UI (пока хардкод)
+
+def _gate_reopen_if_needed(cfg, symbol, tf, best_params, risk_pct, candles, precomp_signals=None):
+    """Переоткрывает Gate-позицию если новый конфиг даёт другое направление (или позиция отсутствует),
+    а цена не ушла дальше _REOPEN_MAX_SLIP_PCT% от точки входа.
+    Логика:
+      1. Берём последний открытый сигнал из симуляции на текущих свечах.
+      2. Проверяем позицию на Gate.
+      3. Если позиция противоположна сигналу → переоткрываем.
+         Если позиции нет → открываем (если цена в допуске).
+         Если позиция совпадает по направлению → не трогаем.
+    """
+    try:
+        if not cfg or not best_params or not candles:
+            return
+        gate_key    = cfg.get("gate_key", "")
+        gate_secret = cfg.get("gate_secret", "")
+        gate_pct    = float(cfg.get("gate_pct", 0) or 0)
+        gate_auto   = cfg.get("gate_auto_enabled", False)
+        gate_auto   = (gate_auto is True) or (str(gate_auto).lower() == "true")
+        if not (gate_key and gate_secret and gate_pct > 0 and gate_auto):
+            return
+
+        # Ищем открытый сигнал на последней свече
+        if precomp_signals is not None:
+            sigs = precomp_signals
+        else:
+            sim = _simulate(candles, best_params, 0, _collect=True, risk_pct=risk_pct)
+            if not sim:
+                return
+            sigs = sim.get("_signals", [])
+
+        if not sigs:
+            return
+
+        last_t = candles[-1]["t"]
+        # Ищем незакрытый сигнал (открытая позиция в симуляции) — приоритет: t == last_t
+        open_sig = None
+        for s in reversed(sigs):
+            if s.get("exit_bar") is None or s.get("open_end"):
+                if s.get("t") == last_t or open_sig is None:
+                    open_sig = s
+                if s.get("t") == last_t:
+                    break
+        if open_sig is None:
+            return  # нет активного сигнала в новом конфиге — нечего открывать
+
+        new_dir = open_sig["dir"]   # 1=лонг, -1=шорт
+        ep_new  = open_sig["ep"]
+        tp_new  = open_sig["tp"]
+        sl_new  = open_sig["sl"]
+        cur_price = candles[-1]["close"]
+
+        # Проверяем: цена ещё в допуске от точки входа?
+        slip_pct = abs(cur_price - ep_new) / ep_new * 100 if ep_new else 999
+        if slip_pct > _REOPEN_MAX_SLIP_PCT:
+            print(f"[reopen:{symbol}] Цена ушла на {slip_pct:.2f}% от ep={ep_new:.6g} > лимит {_REOPEN_MAX_SLIP_PCT}% — пропускаем", flush=True)
+            _write_trade_log(symbol, tf or "?", f"reopen skip: slip={slip_pct:.2f}% > {_REOPEN_MAX_SLIP_PCT}% ep={ep_new:.6g}")
+            return
+
+        # Получаем текущую позицию на Gate
+        contract = symbol.replace("/", "_").upper()
+        pos_data, perr = _gate_request(cfg, "GET", f"/api/v4/futures/usdt/positions/{contract}")
+        if perr:
+            print(f"[reopen:{symbol}] Ошибка получения позиции: {perr}", flush=True)
+            return
+        pos_size = int((pos_data or {}).get("size", 0))
+        pos_dir  = 1 if pos_size > 0 else (-1 if pos_size < 0 else 0)
+
+        if pos_dir == new_dir:
+            print(f"[reopen:{symbol}] Позиция уже {'ЛОНГ' if new_dir==1 else 'ШОРТ'} — совпадает с конфигом, не трогаем", flush=True)
+            return
+
+        reason = "противоположная позиция" if pos_dir != 0 else "позиция отсутствует"
+        dir_str = "ЛОНГ" if new_dir == 1 else "ШОРТ"
+        print(f"[reopen:{symbol}] {reason} → переоткрываем {dir_str} ep~{cur_price:.6g} tp={tp_new:.6g} sl={sl_new:.6g} slip={slip_pct:.2f}%", flush=True)
+        _write_trade_log(symbol, tf or "?", f"REOPEN {dir_str} reason={reason} ep={ep_new:.6g} cur={cur_price:.6g} slip={slip_pct:.2f}%")
+
+        _sl_pct = float((best_params or {}).get("sl_pct") or 0)
+        leverage = max(1, round(risk_pct / _sl_pct)) if _sl_pct > 0 else 1
+
+        # Используем текущую цену как ep (маркет-вход)
+        ok, log = _gate_execute_signal(cfg, symbol, new_dir, cur_price, tp_new, sl_new, leverage, gate_pct)
+        status = "✓" if ok else "✕"
+        print(f"[reopen:{symbol}] {status} {dir_str}: {log}", flush=True)
+        _write_trade_log(symbol, tf or "?", f"  reopen gate {status} {dir_str} lev={leverage} — {log.splitlines()[-1] if log else ''}")
+
+    except Exception as _re:
+        import traceback
+        print(f"[reopen:{symbol}] ОШИБКА: {_re}\n{traceback.format_exc()}", flush=True)
+
+
 def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=None, tf=None, precomp_signals=None):
     """Проверяет последнюю свечу. Если сигнал — шлёт telegram + открывает сделку."""
     if not best_params or not alert_cfg: return
@@ -3916,6 +4016,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
     global _sw_candles, _sw_params, _sw_risk
     interval_sec = TF_SECONDS.get(tf, 3600)
     is_multi = symbol in _sw_state  # мультирежим если символ зарегистрирован в _sw_state
+    _sw_prev_trade_best_params = None  # для отслеживания смены конфига → переоткрытие позиции
 
     print(f"[sw:{symbol}] Запущен. ТФ={tf} окно={n_candles} интервал={interval_sec}с multi={is_multi}")
 
@@ -4192,6 +4293,20 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
                     elif _preclose_signal_found and not _confirmed_sigs:
                         print(f"[sw:{symbol}] ❌ Pre-close сигнал НЕ подтверждён на закрытой свече — сделка НЕ открывается")
                     _check_new_candle_signal(new_candles, best_p, risk_pct, _live_alert_cfg, symbol=symbol, tf=tf, precomp_signals=chart_signals_data)
+
+                    # v3.400: переоткрытие позиции при смене конфига (новый trade_best)
+                    _cur_tb_params = dict(best_p) if best_p else None
+                    if _cur_tb_params and _cur_tb_params != _sw_prev_trade_best_params:
+                        # Конфиг изменился — проверяем нужно ли переоткрыть позицию
+                        _reopen_cfg   = _live_alert_cfg
+                        _reopen_sigs  = list(chart_signals_data)
+                        _reopen_cndls = list(new_candles)
+                        _reopen_bp    = dict(_cur_tb_params)
+                        def _do_reopen(_c=_reopen_cfg, _s=symbol, _t=tf, _p=_reopen_bp,
+                                       _r=risk_pct, _cn=_reopen_cndls, _sg=_reopen_sigs):
+                            _gate_reopen_if_needed(_c, _s, _t, _p, _r, _cn, precomp_signals=_sg)
+                        threading.Thread(target=_do_reopen, daemon=True).start()
+                    _sw_prev_trade_best_params = _cur_tb_params
             else:
                 _set_candles(new_candles)
         except Exception as _sw_tick_err:
