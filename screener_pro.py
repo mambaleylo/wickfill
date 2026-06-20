@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.406
+- v3.406: fix кнопка сброса положения графика (⟲, добавлена в v3.403) не реагировала
+  на тап на тач-устройствах (Android/Termux). Причина: wrap.addEventListener('touchstart'/
+  'touchmove'/'touchend', ..., {{passive:false}}) для драга/пинча графика вызывал
+  e.preventDefault() БЕЗ УСЛОВИЙ для любого тача внутри #canvas-wrap — а кнопка ⟲
+  лежит именно внутри canvas-wrap (поверх угла между осями). preventDefault на
+  touchstart подавляет синтетический click, который браузер обычно генерирует после
+  touchend — поэтому _resetView() никогда не вызывался при тапе на кнопку (клик мышью
+  на десктопе при этом работал нормально, поэтому баг не был замечен сразу). Теперь
+  все три touch-хендлера (плюс wheel/mousedown) в начале проверяют
+  e.target.closest('#resetViewBtn') и просто return, если тач/клик начался на кнопке —
+  не дёргая preventDefault и не запуская логику драга/зума графика.
+====
 WickFill Optimizer v3.405
 - v3.405: КРИТИЧЕСКИЙ fix — график показывал винрейт сильно хуже конфига и сделки,
   закрытые противоположным сигналом (sig_close) в плюсе, отрисовывались как минус
@@ -786,7 +799,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.405"
+APP_VERSION = "3.406"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3403,13 +3416,14 @@ function render(){{
     ctx.fillText(lbl,lx,H-PAD_B+16);
   }}
 }}
-wrap.addEventListener('wheel',e=>{{e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}},{{passive:false}});
-wrap.addEventListener('mousedown',e=>{{isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
+wrap.addEventListener('wheel',e=>{{if(e.target.closest('#resetViewBtn'))return;e.preventDefault();const rect=wrap.getBoundingClientRect(),ox=e.clientX-rect.left;const delta=e.deltaY>0?1.18:0.84,ratio=(ox-6)/wrap.clientWidth,pivot=viewStart+ratio*viewLen;viewLen=Math.max(15,Math.min(CANDLES.length,Math.round(viewLen*delta)));viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,Math.round(pivot-ratio*viewLen)));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}},{{passive:false}});
+wrap.addEventListener('mousedown',e=>{{if(e.target.closest('#resetViewBtn'))return;isDragging=true;dragX=e.clientX;dragVS=viewStart;}});
 window.addEventListener('mousemove',e=>{{if(!isDragging)return;const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.clientX-dragX)/cw2);viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,dragVS-dx));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();}});
 window.addEventListener('mouseup',()=>isDragging=false);
 // Touch support
 let _t1x=0,_t1VS=0,_tPinchD=0,_tPinchVL=0,_tPinchVS=0;
 wrap.addEventListener('touchstart',e=>{{
+  if(e.target.closest('#resetViewBtn'))return;
   e.preventDefault();
   if(e.touches.length===1){{_t1x=e.touches[0].clientX;_t1VS=viewStart;}}
   else if(e.touches.length===2){{
@@ -3418,6 +3432,7 @@ wrap.addEventListener('touchstart',e=>{{
   }}
 }},{{passive:false}});
 wrap.addEventListener('touchmove',e=>{{
+  if(e.target.closest('#resetViewBtn'))return;
   e.preventDefault();
   if(e.touches.length===1){{
     const cw2=wrap.clientWidth/viewLen,dx=Math.round((e.touches[0].clientX-_t1x)/cw2);
@@ -3429,7 +3444,7 @@ wrap.addEventListener('touchmove',e=>{{
     viewStart=Math.max(0,Math.min(CANDLES.length-viewLen,_tPinchVS));_atRightEdge=(viewStart+viewLen>=CANDLES.length-1);schedRender();
   }}
 }},{{passive:false}});
-wrap.addEventListener('touchend',e=>{{e.preventDefault();}},{{passive:false}});
+wrap.addEventListener('touchend',e=>{{if(e.target.closest('#resetViewBtn'))return;e.preventDefault();}},{{passive:false}});
 const tip=document.getElementById('tooltip');
 const PAD_L_C=6,PAD_R_C=72;
 wrap.addEventListener('mousemove',e=>{{
