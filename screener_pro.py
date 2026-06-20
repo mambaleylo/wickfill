@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.418
+WickFill Optimizer v3.419
+- v3.419: fix дублирующиеся уведомления в Telegram "новый лучший конфиг" —
+  _auto_save_config() пропускал повторный PUT/уведомление только если наш
+  validated_fitness был НЕ строго выше уже сохранённого на GitHub (our_fit
+  <= gh_best_fit). Этого было недостаточно: при WF-пересчёте vfit — особенно
+  на одном и том же, давно устоявшемся лучшем конфиге — float-шум от запуска
+  к запуску иногда толкал our_fit чуть ВЫШЕ gh_best_fit (на 1e-3..1e-4), хотя
+  все видимые пользователю метрики (equity/SL/TP — уже в имени файла, плюс
+  WR/DD/трейды/PF/стаб — те же поля, что идут в Telegram-текст) оставались
+  бит-в-бит идентичными. Это проходило мимо проверки и триггерило повторный
+  PUT + повторную отправку абсолютно одинакового сообщения в Telegram (репорт:
+  3 копии "DOGE_USDT 15m — новый лучший конфиг" подряд с разницей ~12-13 мин).
+  Добавлена _disp_sig() — сравнение видимых метрик текущего best с уже
+  сохранённым на GitHub (по точному совпадению имени файла); пропуск
+  срабатывает если vfit не лучше ИЛИ видимые метрики совпадают. Если vfit
+  выше И видимые метрики реально отличаются — перезапись и уведомление как
+  и раньше (более качественный конфиг при совпавшем equity/sl/tp всё ещё
+  публикуется).
 - v3.418: fix AMOLED — кнопка-отпечаток "Выйти из AMOLED" не имела смысла:
   тап в ЛЮБОЕ место чёрного экрана сам гасил оверлей (#amoledOverlay имел
   onclick/ontouchstart="wakeFromAmoled(event)", который через elementFromPoint
@@ -931,7 +948,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.418"
+APP_VERSION = "3.419"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5287,6 +5304,22 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
     # Сначала проверяем: вдруг на GitHub уже лежит лучший результат (другое устройство)
     gh_ok = False
     our_fit = best.get("validated_fitness") if best.get("validated_fitness") is not None else best.get("fitness", -9999)
+
+    def _disp_sig(d):
+        # Сигнатура того, что реально увидит пользователь (в т.ч. в Telegram-сообщении).
+        # eq/sl/tp уже зашиты в имени файла — здесь добираем остальное.
+        p = d.get("params", {}) or {}
+        _stab = d.get("stability")
+        return (
+            round(d.get("winrate", 0), 1),
+            round(d.get("max_dd", 0), 1),
+            d.get("trades", 0),
+            round(min(d.get("profit_factor", 0), 999), 2),
+            round(p.get("sl_pct", 0) or 0, 2),
+            round(p.get("tp_pct", 0) or 0, 2),
+            round(_stab, 0) if _stab is not None else None,
+        )
+
     try:
         import re as _re
         sym_key = symbol.replace("_","").replace("/","").lower()
@@ -5294,6 +5327,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
         _pat    = _re.compile(rf"^wickfill_{_re.escape(sym_key)}_{_re.escape(tf)}_{days}d_\$\d+_r{r_key}(_sl[\d.]+_tp[\d.]+)?\.json$")
         existing_files = _gh_list_folder("configs")
         gh_best_fit = -9999
+        gh_exact_match = None  # best-словарь из файла, чьё имя точно совпадает с нашим fname
         for _ef in existing_files:
             if _pat.match(_ef["name"]):
                 try:
@@ -5304,17 +5338,29 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                         _gf = _gb.get("validated_fitness") if _gb.get("validated_fitness") is not None else _gb.get("fitness", -9999)
                         if _gf > gh_best_fit:
                             gh_best_fit = _gf
+                        if _ef["name"] == fname:
+                            gh_exact_match = _gb
                 except Exception: pass
         if gh_best_fit > our_fit:
             _log(f"⏭ GitHub уже лучше (gh={gh_best_fit:.2f} > our={our_fit:.2f}), пропускаем сохранение", "info")
             return fpath
-        # Если файл с точно таким же именем уже есть на GitHub — пропускаем ТОЛЬКО если
-        # наш vfit не лучше. Если наш vfit строго выше (лучшая стабильность / WF),
-        # перезаписываем — иначе более качественный локальный конфиг никогда не попадёт
-        # на GitHub когда equity/sl/tp совпадают с уже лежащим там файлом.
-        if any(_ef["name"] == fname for _ef in existing_files) and our_fit <= gh_best_fit:
-            _log(f"⏭ Конфиг {fname} уже на GitHub (vfit не лучше: our={our_fit:.2f} ≤ gh={gh_best_fit:.2f}), пропускаем", "info")
-            return fpath
+        # Если файл с точно таким же именем уже есть на GitHub — пропускаем если
+        # наш vfit не лучше, ИЛИ если он формально чуть выше, но всё, что реально
+        # видит пользователь (WR/DD/трейды/PF/SL/TP/стаб — те же поля, что идут в
+        # Telegram-сообщение), идентично уже сохранённому. Без второго условия
+        # шум пересчёта validated_fitness при WF (±0.0001 от запуска к запуску)
+        # изредка проталкивал our_fit чуть ВЫШЕ gh_best_fit при абсолютно том же
+        # видимом результате — это триггерило повторный PUT и дублирующее
+        # Telegram-уведомление с идентичным текстом (репорт пользователя:
+        # "ОДИНАКОВЫЕ СОБЩЕНИЯ ОТПРАВЛЯЮТСЯ В ТЕЛЕГУ", 3 копии подряд).
+        # Если наш vfit строго выше И видимые метрики реально отличаются —
+        # перезаписываем как и раньше, иначе более качественный локальный
+        # конфиг никогда не попадёт на GitHub когда equity/sl/tp совпадают.
+        if any(_ef["name"] == fname for _ef in existing_files):
+            _same_visible = gh_exact_match is not None and _disp_sig(gh_exact_match) == _disp_sig(best)
+            if our_fit <= gh_best_fit or _same_visible:
+                _log(f"⏭ Конфиг {fname} уже на GitHub (vfit not better или метрики идентичны: our={our_fit:.4f} gh={gh_best_fit:.4f} same_visible={_same_visible}), пропускаем", "info")
+                return fpath
         # Защита от перезаписи конфига с сильно лучшей прибылью (даже если vfit хуже)
         # Не перезаписываем если новый equity < 70% от текущего на GitHub
         try:
