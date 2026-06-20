@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.409
+- v3.409: проверка "проверка лучшего конфига на GitHub и его применение для торговли"
+  (_gh_fetch_best_for_trading, конец каждого цикла) — протестирован живьём напрямую
+  против реального репозитория: матчинг по regex/risk_pct/days и сравнение
+  validated_fitness работают корректно, конфиг находится и парсится без ошибок.
+  Реального бага в самой функции не нашёл. НО нашёл реальный изъян в видимости:
+  при таймауте (8с) или любой другой ошибке синхронизации с GitHub сообщение
+  раньше шло ТОЛЬКО в print()/stdout — на Termux это никто не видит (веб-UI читает
+  только opt_state["logs"]), поэтому тихий таймаут/сбой сети выглядел как "проверка
+  вообще не работает", хоть код и продолжал использовать локальный trade_best
+  (без падения). Теперь таймаут/ошибка пишутся ещё и через olog() — видно в панели
+  ЛОГИ. Также строка "конфиг не найден" теперь явно показывает symbol/tf/days/risk,
+  по которым искали — если на GitHub лежит файл с другим _r{risk}, видно сразу
+  почему он не подхватился, а не молча используется локальный.
+====
 WickFill Optimizer v3.408
 - v3.408: Telegram-уведомления сделаны минималистичными — убрана лишняя информация
   и визуальный шум (заголовки "WickFill Сигнал/—", пустые строки-разделители,
@@ -825,7 +840,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.408"
+APP_VERSION = "3.409"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6239,10 +6254,15 @@ def run_optimizer(params):
                             _tb = _gh_best; _tp = dict(_gh_best["params"])
                             olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit_snap:.2f})", "info")
                         else:
-                            olog(f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (gh_vfit={_gh_vfit:.2f} local={_local_vfit_snap:.2f})" if _gh_vfit is not None else f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (GitHub пуст)", "info")
+                            olog(f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (gh_vfit={_gh_vfit:.2f} local={_local_vfit_snap:.2f})" if _gh_vfit is not None else f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (на GitHub не найден конфиг для {symbol} {tf} {days}д r{int(round(risk_pct))})", "info")
                     except _GTE:
+                        # Раньше эта ошибка только print()-илась в stdout — на Termux/телефоне
+                        # её никто не видит (UI читает только opt_state["logs"]), поэтому таймаут
+                        # синхронизации с GitHub выглядел как "проверка вообще не работает".
+                        olog(f"⚠ Таймаут 8с при синхронизации торгового конфига с GitHub — trade_best = локальный ${_tb.get('equity',0):.0f}", "warn")
                         print(f"{_ts()} [gh] Таймаут 8с при синхронизации торгового конфига", flush=True)
             except Exception as _e:
+                olog(f"⚠ Ошибка синхронизации торгового конфига с GitHub: {_e} — trade_best = локальный ${_tb.get('equity',0):.0f}", "warn")
                 print(f"{_ts()} [gh] Ошибка синхронизации: {_e}", flush=True)
 
             # Строим граф синхронно — карточка и граф всегда из одного конфига.
