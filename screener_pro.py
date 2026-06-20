@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.417
+WickFill Optimizer v3.418
+- v3.418: fix AMOLED — кнопка-отпечаток "Выйти из AMOLED" не имела смысла:
+  тап в ЛЮБОЕ место чёрного экрана сам гасил оверлей (#amoledOverlay имел
+  onclick/ontouchstart="wakeFromAmoled(event)", который через elementFromPoint
+  ещё и пробрасывал тот же тап на элемент под оверлеем — т.е. экран не просто
+  "разблокировывался" от случайного касания, но и мог нажать что-то в фоне);
+  вторая, независимая причина — глобальный document-листенер ('click'/
+  'touchstart') сам прятал оверлей, если он был display:block, дублируя ту же
+  логику. Убрана функция wakeFromAmoled и атрибуты onclick/ontouchstart с
+  #amoledOverlay; из глобального листенера убран автогас оверлея по тапу.
+  Теперь единственный способ выйти из AMOLED — нажать саму кнопку-отпечаток
+  (#amoledExitBtn → toggleAmoled()), фон экрана на тапы не реагирует.
+  Заодно: сама кнопка-отпечаток простаивала часами неподвижно в одном углу —
+  потенциальный источник локального выгорания на AMOLED-дисплее. Добавлена
+  _amoledExitBtnShift() — кнопка мигрирует по 4 углам экрана со случайным
+  джиттером синхронно со сдвигом панели контента (каждые 30с, тот же таймер
+  _amoledShiftTimer), с мягким transition top/left как у самого контента.
 - v3.417: AMOLED — кнопка выхода переработана: SVG отпечатка пальца
   заменён на классический fingerprint-паттерн (концентрические дуги);
   кнопка крупнее (58px), мягкий press-эффект (scale+подсветка) через
@@ -915,7 +931,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.417"
+APP_VERSION = "3.418"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7927,9 +7943,9 @@ details summary::-webkit-details-marker{display:none}
 
 <div class="app">
 
-<div id="amoledOverlay" onclick="wakeFromAmoled(event)" ontouchstart="wakeFromAmoled(event)" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;">
+<div id="amoledOverlay" style="display:none;position:fixed;inset:0;background:#000;z-index:99999;">
   <div id="amoledContent"></div>
-  <button id="amoledExitBtn" onclick="event.stopPropagation();toggleAmoled();" ontouchstart="event.stopPropagation();" ontouchend="event.stopPropagation();toggleAmoled();" title="Выйти из AMOLED" style="position:fixed;bottom:36px;right:32px;z-index:100000;background:rgba(255,255,255,0.06);border:1.5px solid rgba(255,255,255,0.13);border-radius:50%;width:58px;height:58px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);touch-action:manipulation;transition:background .2s,transform .1s;-webkit-tap-highlight-color:transparent;" onpointerdown="this.style.transform='scale(.9)';this.style.background='rgba(255,255,255,0.14)'" onpointerup="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'" onpointerleave="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'">
+  <button id="amoledExitBtn" onclick="event.stopPropagation();toggleAmoled();" ontouchstart="event.stopPropagation();" ontouchend="event.stopPropagation();toggleAmoled();" title="Выйти из AMOLED" style="position:fixed;bottom:36px;right:32px;z-index:100000;background:rgba(255,255,255,0.06);border:1.5px solid rgba(255,255,255,0.13);border-radius:50%;width:58px;height:58px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);touch-action:manipulation;transition:background .2s,transform .1s,top .9s ease,left .9s ease;-webkit-tap-highlight-color:transparent;" onpointerdown="this.style.transform='scale(.9)';this.style.background='rgba(255,255,255,0.14)'" onpointerup="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'" onpointerleave="this.style.transform='';this.style.background='rgba(255,255,255,0.06)'">
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="opacity:.75;display:block">
       <!-- дуга кончика пальца -->
       <path d="M12 4a5 5 0 0 1 5 5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
@@ -9774,6 +9790,30 @@ function _amoledPanels(night){
   return [head+depositBlock+balBlock+tradeBlock+miniChart+statusRow];
 }
 
+function _amoledExitBtnShift(){
+  // v3.418: кнопка-отпечаток выхода раньше стояла часами неподвижно в одном
+  // углу (bottom:36/right:32) — сама становилась источником локального
+  // выгорания пикселей на AMOLED-экране. Теперь при каждом сдвиге панели
+  // контента (тот же _amoledShiftTimer, раз в AMOLED_SHIFT_INTERVAL) кнопка
+  // случайно перепрыгивает в один из 4 углов экрана с джиттером, плавно
+  // (transition top/left на самой кнопке).
+  const btn=document.getElementById('amoledExitBtn');
+  if(!btn) return;
+  const w=window.innerWidth, h=window.innerHeight;
+  const size=58, m=28, jitter=40;
+  const corners=[
+    {top:m+Math.random()*jitter,        left:m+Math.random()*jitter},
+    {top:m+Math.random()*jitter,        left:w-size-m-Math.random()*jitter},
+    {top:h-size-m-Math.random()*jitter, left:m+Math.random()*jitter},
+    {top:h-size-m-Math.random()*jitter, left:w-size-m-Math.random()*jitter},
+  ];
+  const c=corners[Math.floor(Math.random()*corners.length)];
+  btn.style.top=Math.max(m,c.top)+'px';
+  btn.style.left=Math.max(m,c.left)+'px';
+  btn.style.bottom='auto';
+  btn.style.right='auto';
+}
+
 function _amoledShift(){
   const ov=document.getElementById('amoledOverlay');
   const content=document.getElementById('amoledContent');
@@ -9791,6 +9831,7 @@ function _amoledShift(){
     content.style.top=(32+Math.random()*36)+'%';
     content.style.left=(28+Math.random()*44)+'%';
     content.style.opacity='1';
+    _amoledExitBtnShift();
   },350);
 }
 
@@ -9841,30 +9882,6 @@ function _resetAmoledTimer(){
       if(ov) ov.style.display='block';
       _amoledStartScreensaver();
     }, AMOLED_DELAY);
-  }
-}
-
-let _amoledWoke=false;
-function wakeFromAmoled(ev){
-  const ov=document.getElementById('amoledOverlay');
-  if(ov) ov.style.display='none';
-  _amoledStopScreensaver();
-  _resetAmoledTimer();
-  // Если под оверлеем была кнопка/элемент — "пробрасываем" этот же тап дальше,
-  // чтобы не требовался второй клик для срабатывания кнопки.
-  if(!ev) return;
-  if(ev.type==='click' && _amoledWoke){ _amoledWoke=false; return; } // уже обработали через touchstart
-  const x=(ev.touches&&ev.touches[0]?ev.touches[0].clientX:ev.clientX);
-  const y=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
-  if(typeof x!=='number'||typeof y!=='number') return;
-  const target=document.elementFromPoint(x,y);
-  if(!target || target===ov) return;
-  if(ev.type==='touchstart'){
-    ev.preventDefault();
-    _amoledWoke=true;
-    setTimeout(()=>target.click(), 0);
-  } else {
-    target.click();
   }
 }
 
@@ -9942,11 +9959,14 @@ function toggleAmoled(){
     if(_amoledOn && !document.fullscreenElement && (ev==='click'||ev==='touchstart'||ev==='keydown')){
       _requestFS();
     }
+    // v3.418: раньше тут же гасили #amoledOverlay по любому click/touchstart,
+    // если он был display:block — из-за этого ЛЮБОЙ тап по чёрному экрану
+    // "разблокировывал" AMOLED, и кнопка-отпечаток #amoledExitBtn была не
+    // нужна. Теперь, пока оверлей показан, экран реагирует ТОЛЬКО на саму
+    // кнопку (у неё свой onclick→toggleAmoled()); остальная активность на
+    // заблокированном экране полностью игнорируется.
     const ov=document.getElementById('amoledOverlay');
-    if(ov && ov.style.display==='block'){
-      // первое касание — только гасим оверлей, не даём провалиться в клик под ним
-      if(ev==='click'||ev==='touchstart'){ ov.style.display='none'; _amoledStopScreensaver(); }
-    }
+    if(ov && ov.style.display==='block') return;
     _resetAmoledTimer();
   }, {passive:true});
 });
