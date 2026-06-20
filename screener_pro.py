@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.413
+- v3.413: буква L/S у треугольника сделки на графике теперь рисуется только
+  у САМОГО СВЕЖЕГО сигнала, а не у каждого исторического. Раньше каждый
+  сигнал на графике (и текущий, и прошлые) всегда подписывался буквой L/S
+  рядом со стрелкой — лишний визуальный шум, т.к. направление и так видно
+  по цвету треугольника (зелёный/красный). Технический нюанс: сигналы в
+  SIGNALS — это уже закрытые/подтверждённые свечи (свеча в процессе
+  формирования вообще не попадает в этот массив, см. пропуск
+  _drawBar===_liveBarGlobal чуть выше), поэтому "показать только в момент
+  формирования" в буквальном смысле недоступно — буква теперь показывается
+  у самого нового сигнала и исчезает, как только появляется следующий.
+====
 WickFill Optimizer v3.412
 - v3.412: убрано всплывающее окошко с инфой о свече (OHLC tooltip) на
   графике — мешало при наведении курсора/тапе. Появлялось и по mousemove
@@ -871,7 +883,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.412"
+APP_VERSION = "3.413"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3424,6 +3436,13 @@ function render(){{
     _usedLabelX.push([lx-half, lx+half]);
     return true;
   }}
+  // v3.413: буква L/S у треугольника сделки теперь рисуется только у САМОГО
+  // СВЕЖЕГО сигнала (последняя по времени свеча из SIGNALS) — пока он
+  // "только что сформировался". У всех более старых/исторических сигналов
+  // буква убирается, остаётся только сам треугольник (цвет уже показывает
+  // лонг/шорт). Раньше L/S рисовались у каждого сигнала на графике всегда.
+  let _latestSigBar=-1;
+  for(const s of SIGNALS){{ const db=(s.signal_bar!=null)?s.signal_bar:s.bar_i; if(db>_latestSigBar) _latestSigBar=db; }}
   for(const s of SIGNALS){{
     // Для use_next_bar: рисуем стрелку на свече сигнала (signal_bar), а не на свече входа (bar_i)
     const _drawBar = (s.signal_bar != null) ? s.signal_bar : s.bar_i;
@@ -3444,11 +3463,13 @@ function render(){{
     if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
-    // Лейбл L / S рядом со стрелкой
-    ctx.font=`bold ${{Math.max(8,Math.min(10,cw*1.2))}}px system-ui`;ctx.textAlign='center';
-    ctx.fillStyle=arrowFill;
-    if(isLong){{ctx.fillText('L',x,py(c_sig.l)+arrowOff+arrowSz+10);}}
-    else{{ctx.fillText('S',x,py(c_sig.h)-arrowOff-arrowSz-3);}}
+    // Лейбл L / S рядом со стрелкой — только у самого свежего сигнала
+    if(_drawBar===_latestSigBar){{
+      ctx.font=`bold ${{Math.max(8,Math.min(10,cw*1.2))}}px system-ui`;ctx.textAlign='center';
+      ctx.fillStyle=arrowFill;
+      if(isLong){{ctx.fillText('L',x,py(c_sig.l)+arrowOff+arrowSz+10);}}
+      else{{ctx.fillText('S',x,py(c_sig.h)-arrowOff-arrowSz-3);}}
+    }}
     if(_showLabels&&!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
