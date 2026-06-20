@@ -168,9 +168,9 @@
     "pending_signal_dir": null,
     "pending_signal_t": null,
     "stability_ratio": 1.0,
-    "validated_fitness": 54.4178,
-    "wf_slope": -0.55,
-    "wf_trend_penalty": 0.983
+    "validated_fitness": 55.2059,
+    "wf_slope": -0.08,
+    "wf_trend_penalty": 0.998
   },
   "top20": [
     {
@@ -1397,5 +1397,5 @@
   "tf": "15m",
   "days": 30,
   "risk_pct": 10.0,
-  "saved_at": "2026-06-20 21:49:54"
+  "saved_at": "2026-06-20 22:01:05"
 }
