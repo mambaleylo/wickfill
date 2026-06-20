@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.408
+- v3.408: Telegram-уведомления сделаны минималистичными — убрана лишняя информация
+  и визуальный шум (заголовки "WickFill Сигнал/—", пустые строки-разделители,
+  повторное эхо TP/SL, время свечи, сырой fitness, имя файла конфига).
+  (1) Сигнал входа: было 4 секции/7 строк с заголовком и временем → стало 2 строки
+  "🟢 ЛОНГ SYMBOL · tf · ⚡18×" + "entry → TP X (+1.25%) / SL Y (−0.55%)" — TP/SL
+  показаны сразу в %, направление цветом (🟢/🔴 вместо 🔵/🟡).
+  (2) Закрытие сделки: было 10-13 строк (отдельно Вход/Выход/TP/SL/Плечо/P&L%/
+  P&L$/Баланс с пустыми строками) → стало 2-3: результат+направление+символ,
+  entry → exit (move%), и одной строкой P&L%(плечо)+P&L$+баланс если включена
+  автоторговля.
+  (3) Новый лучший конфиг: было 6 строк (включая fit, days/risk%, имя файла на
+  GitHub) → стало 3: заголовок, депо/WR/сделки/DD/PF, SL/TP/стабильность.
+====
 WickFill Optimizer v3.407
 - v3.407: fix AMOLED после reload страницы (auto-update / восстановление связи) —
   статус AMOLED восстанавливался из localStorage (кнопка зелёная, чёрная тема,
@@ -811,7 +825,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.407"
+APP_VERSION = "3.408"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2541,24 +2555,17 @@ def _send_alert(cfg, text):
     return tg_ok or ntfy_ok
 
 def _send_signal_email(cfg, symbol, tf, direction, entry, tp, sl, candle_t, leverage=None):
-    dir_str="🔵 ЛОНГ" if direction==1 else "🟡 ШОРТ"
-    # Показываем время ЗАКРЫТИЯ свечи (открытие + интервал), в московском времени (UTC+3)
-    close_t = candle_t + TF_SECONDS.get(tf, 3600)
-    moscow_offset = 3 * 3600  # UTC+3
-    dt = time.strftime("%Y-%m-%d %H:%M", time.gmtime(close_t + moscow_offset))
-    lev_str = f"\n⚡ Плечо: <b>{int(leverage)}×</b>" if leverage else ""
+    is_long = direction == 1
+    dir_str = "🟢 ЛОНГ" if is_long else "🔴 ШОРТ"
+    tp_pct = abs(tp - entry) / entry * 100 if entry else 0
+    sl_pct = abs(entry - sl) / entry * 100 if entry else 0
+    lev_str = f" · ⚡{int(leverage)}×" if leverage else ""
     text = (
-        f"🔔 <b>WickFill Сигнал</b>\n\n"
-
-        f"{dir_str} <b>{symbol}</b> {tf}\n"
-        f"🕐 {dt}\n\n"
-
-        f"📥 Вход: <b>{entry:.6g}</b>\n"
-        f"✅ Тейк-профит: <b>{tp:.6g}</b>\n"
-        f"❌ Стоп-лосс: <b>{sl:.6g}</b>"
-        f"{lev_str}"
+        f"{dir_str} <b>{symbol}</b> · {tf}{lev_str}\n"
+        f"<b>{entry:.6g}</b> → TP {tp:.6g} (+{tp_pct:.2f}%) / SL {sl:.6g} (−{sl_pct:.2f}%)"
     )
     return _send_alert(cfg, text)
+
 
 # ═══════════════════════════════════════════════════════════════
 # GATE.IO AUTO-TRADING — USDT-M фьючерсы
@@ -3830,7 +3837,6 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pc
                  if s.get("exit_bar") is None or s.get("open_end")}
     if not prev_open:
         return
-    moscow_offset = 3 * 3600
     # Получаем баланс и параметры позиции один раз для всех закрытий
     gate_key    = alert_cfg.get("gate_key", "")
     gate_secret = alert_cfg.get("gate_secret", "")
@@ -3861,50 +3867,34 @@ def _check_trade_close(prev_signals, new_signals, alert_cfg, symbol, tf, risk_pc
             exit_p   = s.get("exit_p") or (s["tp"] if is_win else s["sl"])
             is_long  = s["dir"] == 1
             ep       = s["ep"]
-            tp       = s["tp"]
-            sl_price = s["sl"]
 
             # Движение цены (без плеча)
             price_move_pct = ((exit_p - ep) / ep * 100 if is_long
                               else (ep - exit_p) / ep * 100)
 
-            # Берём время закрытия свечи
-            exit_candle_t = s.get("t", int(time.time())) + TF_SECONDS.get(tf, 3600)
-            dt = time.strftime("%d.%m.%Y %H:%M", time.gmtime(exit_candle_t + moscow_offset))
-
-            dir_str  = "🔵 ЛОНГ" if is_long else "🟡 ШОРТ"
+            dir_str  = "🟢 ЛОНГ" if is_long else "🔴 ШОРТ"
             res_emoji = "✅" if is_win else "❌"
-            res_str  = "ТЕЙК-ПРОФИТ" if is_win else "СТОП-ЛОСС"
+            res_str  = "ТЕЙК" if is_win else "СТОП"
 
-            # Базовые строки (всегда)
             price_sign = "+" if price_move_pct >= 0 else ""
-            price_pct_str = f"{price_sign}{price_move_pct:.3f}%"
+            price_pct_str = f"{price_sign}{price_move_pct:.2f}%"
 
             lines = [
-                f"{res_emoji} <b>WickFill — {res_str}</b>",
-                f"",
-                f"{dir_str} <b>{symbol}</b> · {tf} · {dt} МСК",
-                f"",
-                f"📥 Вход:    <b>{ep:.6g}</b>",
-                f"📤 Выход:   <b>{exit_p:.6g}</b>",
-                f"🎯 TP:      {tp:.6g}",
-                f"🛡 SL:      {sl_price:.6g}",
-                f"",
-                f"📊 Движение цены: <b>{price_pct_str}</b>",
+                f"{res_emoji} <b>{res_str}</b> · {dir_str} {symbol} · {tf}",
+                f"{ep:.6g} → <b>{exit_p:.6g}</b> ({price_pct_str})",
             ]
 
-            # Если есть данные о позиции — добавляем P&L
+            # Если есть данные о позиции — одной строкой P&L + плечо + баланс
             if gate_pct > 0 and gate_lev > 0:
                 pnl_on_margin_pct = price_move_pct * gate_lev
                 pnl_sign = "+" if pnl_on_margin_pct >= 0 else ""
-                lines.append(f"⚡ Плечо:  {gate_lev}× · позиция {gate_pct:.0f}% баланса")
-                lines.append(f"💰 P&L на маржу: <b>{pnl_sign}{pnl_on_margin_pct:.2f}%</b>")
+                tail = f"💰 <b>{pnl_sign}{pnl_on_margin_pct:.2f}%</b> ({gate_lev}×)"
                 if balance is not None:
                     margin_usdt = balance * gate_pct / 100.0
                     pnl_usdt    = margin_usdt * pnl_on_margin_pct / 100.0
                     pnl_usdt_sign = "+" if pnl_usdt >= 0 else ""
-                    lines.append(f"💵 P&L USDT: <b>{pnl_usdt_sign}{pnl_usdt:.2f} $</b>")
-                    lines.append(f"🏦 Баланс после: <b>{balance:.2f} $</b>")
+                    tail += f" · {pnl_usdt_sign}{pnl_usdt:.2f}$ · баланс {balance:.2f}$"
+                lines.append(tail)
 
             text = "\n".join(lines)
             ok = _send_alert(alert_cfg, text)
@@ -5270,21 +5260,17 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                     _dd  = best.get("max_dd", 0)
                     _tr  = best.get("trades", 0)
                     _pf  = best.get("profit_factor", 0)
-                    _vf  = best.get("validated_fitness") or best.get("fitness", 0)
                     _sl  = best.get("params", {}).get("sl_pct", 0)
                     _tp  = best.get("params", {}).get("tp_pct", 0)
                     _use_atrsl = best.get("params", {}).get("use_atr_sl", False)
                     _atr_m = best.get("params", {}).get("atr_sl_mult", 1.0)
-                    _sl_str = f"{_sl:.2f}% {'⚡ATR×'+str(_atr_m) if _use_atrsl else ''}"
+                    _sl_str = f"{_sl:.2f}%" + (f" ⚡ATR×{_atr_m}" if _use_atrsl else "")
                     _stab = best.get("stability", None)
-                    _stab_str = f"  стаб: {_stab:.0f}%" if _stab is not None else ""
+                    _stab_str = f" · стаб {_stab:.0f}%" if _stab is not None else ""
                     _tg_text = (
-                        f"🏆 <b>Новый лучший конфиг — {symbol} {tf}</b>" + "\n" +
-                        f"💰 Депо: <b>${eq:.0f}</b>  WR: <b>{_wr:.0f}%</b>" + "\n" +
-                        f"📉 DD: {_dd:.1f}%  Сделок: {_tr}  PF: {_pf:.2f}" + "\n" +
-                        f"🎯 SL: {_sl_str}  TP: {_tp:.2f}%{_stab_str}" + "\n" +
-                        f"📊 fit: {_vf:.2f}  ({days}д · r{int(round(risk_pct))}%)" + "\n" +
-                        f"💾 {fname}"
+                        f"🏆 <b>{symbol} {tf}</b> — новый лучший конфиг" + "\n" +
+                        f"💰 <b>${eq:.0f}</b> · WR {_wr:.0f}% · {_tr} сд · DD {_dd:.1f}% · PF {_pf:.2f}" + "\n" +
+                        f"🎯 SL {_sl_str} · TP {_tp:.2f}%{_stab_str}"
                     )
                     threading.Thread(target=_send_telegram, args=(_acfg, _tg_text), daemon=True).start()
             except Exception as _tge:
