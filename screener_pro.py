@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.412
+- v3.412: убрано всплывающее окошко с инфой о свече (OHLC tooltip) на
+  графике — мешало при наведении курсора/тапе. Появлялось и по mousemove
+  на десктопе, и по touch на мобиле/планшете (_showTipAt). Теперь функция
+  всегда прячет tip — сам график, ховер-линия цены справа и сетка не
+  трогали, убрана только эта карточка с датой/O/H/L/C (+инфо по сигналу).
+====
 WickFill Optimizer v3.411
 - v3.411: fix AMOLED — клик по кнопке AMOLED после auto-update/reload не
   возвращал реальный Fullscreen (оставался виден кусок браузера/адресной
@@ -864,7 +871,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.411"
+APP_VERSION = "3.412"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3519,24 +3526,10 @@ wrap.addEventListener('mousemove',e=>{{
 wrap.addEventListener('mouseleave',()=>{{if(!_touchActive)tip.style.display='none';}});
 // Touch tooltip для мобильных/планшетов
 let _touchActive=false,_tipHideTimer=null;
+// v3.412: окошко с инфой о свече (OHLC tooltip) отключено по просьбе —
+// мешало на графике. Функция-заглушка просто всегда прячет tip.
 function _showTipAt(offsetX,offsetY){{
-  const W=wrap.clientWidth,drawW=W-PAD_L_C-PAD_R_C;
-  if(offsetX>=W-PAD_R_C){{tip.style.display='none';return;}}
-  const vis=CANDLES.slice(viewStart,viewStart+Math.min(viewLen,CANDLES.length-viewStart));
-  if(!vis.length){{tip.style.display='none';return;}}
-  const cw2=drawW/vis.length;
-  const i=Math.min(vis.length-1,Math.max(0,Math.floor((offsetX-PAD_L_C)/cw2)));
-  if(i<0||i>=vis.length){{tip.style.display='none';return;}}
-  const c=vis[i],gi=viewStart+i,sig=SIGNALS.find(s=>(s.signal_bar!=null?s.signal_bar:s.bar_i)===gi);
-  const mskMs=(c.t+TF_SEC)*1000+3*3600*1000,d=new Date(mskMs);
-  const dt=d.getUTCDate().toString().padStart(2,'0')+'.'+(d.getUTCMonth()+1).toString().padStart(2,'0')+'.'+d.getUTCFullYear()+' '+d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' МСК';
-  let html=`<b>${{dt}}</b><br>O ${{c.o.toPrecision(6)}} H ${{c.h.toPrecision(6)}}<br>L ${{c.l.toPrecision(6)}} C ${{c.c.toPrecision(6)}}`;
-  if(sig){{const dir=sig.dir===1?'🔵 Лонг':'🟡 Шорт',res=sig.open_end?'⛔ не закрыт':sig.win?'✅ TP':'❌ SL';html+=`<br><br>${{dir}} ${{res}}<br>Вход ${{sig.ep.toPrecision(6)}}<br>TP ${{sig.tp.toPrecision(6)}}<br>SL ${{sig.sl.toPrecision(6)}}`;}}
-  tip.innerHTML=html;tip.style.display='block';
-  const W2=wrap.clientWidth;
-  const ty=Math.max(0,offsetY-tip.offsetHeight-16);
-  const tx=Math.min(W2-tip.offsetWidth-4,Math.max(4,offsetX-tip.offsetWidth/2));
-  tip.style.left=tx+'px';tip.style.top=ty+'px';
+  tip.style.display='none';
 }}
 wrap.addEventListener('touchstart',()=>{{
   _touchActive=true;
