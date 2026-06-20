@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+WickFill Optimizer v3.414
+- v3.414: чистка логов — убраны спамящие повторяющиеся сообщения:
+  [chart] signals/trades/candles (каждый цикл), [DBG] cycle/stop-flag,
+  [multi] Цикл N (round-robin), [live_candle] live t= (каждый тик),
+  [live_candle] тикер (каждый poll), [reload] Лёгкий merge, [sw] retry
+  финализации и пропуска дублей. Добавлены ANSI-цвета: серый=рутина,
+  жёлтый=предупреждения, красный=ошибки, зелёный=успех, cyan=старт/стоп,
+  bold=важные события (сигнал, gate, trade_close). Все логи без _ts()
+  теперь имеют метку времени. Убраны буквы L/S у треугольников сигналов.
+====
 WickFill Optimizer v3.413
 - v3.413: буква L/S у треугольника сделки на графике теперь рисуется только
   у САМОГО СВЕЖЕГО сигнала, а не у каждого исторического. Раньше каждый
@@ -883,7 +893,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.413"
+APP_VERSION = "3.414"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1232,8 +1242,6 @@ def _live_candle_updater():
                                     _existing_sw, fresh_batch, _interval_sec, max_len=_ncw)
                                 if not _gap:
                                     fresh_reload = _merged
-                                    print(f"{_ts()} [reload] Лёгкий merge: +{len(fresh_batch)} св. "
-                                          f"(итог {len(fresh_reload)})", flush=True)
                                 else:
                                     print(f"{_ts()} [reload] Гэп после merge — fallback на полный reload", flush=True)
                         if fresh_reload is None:
@@ -2359,7 +2367,6 @@ def _fetch_current_candle(symbol, tf):
                 result = {"t": last_t, "open": float(last["o"]),
                           "high": float(last["h"]), "low": float(last["l"]),
                           "close": float(last["c"]), "live": True}
-                print(f"[live_candle] live t={last_t} close_at={candle_close_t} now={now} c={result['close']}", flush=True)
                 return result
             else:
                 # last уже закрыта (now >= candle_close_t) — текущий интервал Gate ещё не отдал
@@ -2373,7 +2380,6 @@ def _fetch_current_candle(symbol, tf):
                     if not td: return None
                     price = float(td[0].get("last", 0))
                     open_p = float(last.get("c", price))
-                    print(f"[live_candle] тикер (новый интервал): price={price} open={open_p} t={cur_candle_open_t}", flush=True)
                     return {"t": cur_candle_open_t, "open": open_p,
                             "high": max(open_p, price), "low": min(open_p, price),
                             "close": price, "live": True}
@@ -3463,13 +3469,7 @@ function render(){{
     if(isLong){{const ay=py(c_sig.l)+arrowOff;ctx.moveTo(x,ay-arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     else{{const ay=py(c_sig.h)-arrowOff;ctx.moveTo(x,ay+arrowSz);ctx.lineTo(x-arrowSz,ay);ctx.lineTo(x+arrowSz,ay);}}
     ctx.closePath();ctx.fill();ctx.stroke();
-    // Лейбл L / S рядом со стрелкой — только у самого свежего сигнала
-    if(_drawBar===_latestSigBar){{
-      ctx.font=`bold ${{Math.max(8,Math.min(10,cw*1.2))}}px system-ui`;ctx.textAlign='center';
-      ctx.fillStyle=arrowFill;
-      if(isLong){{ctx.fillText('L',x,py(c_sig.l)+arrowOff+arrowSz+10);}}
-      else{{ctx.fillText('S',x,py(c_sig.h)-arrowOff-arrowSz-3);}}
-    }}
+
     if(_showLabels&&!isOpenEnd&&s.exit_bar!==null&&s.win!==null){{
       const exitPrice=s.exit_p??( s.win?s.tp:s.sl);
       const pct=isLong?(exitPrice-s.ep)/s.ep*100:(s.ep-exitPrice)/s.ep*100;
@@ -4053,8 +4053,8 @@ def _check_new_candle_signal(candles, best_params, risk_pct, alert_cfg, symbol=N
         _gate_auto_raw = alert_cfg.get("gate_auto_enabled", False)
         # gate_auto_enabled может прийти как bool True или строка "true" — нормализуем
         gate_auto_on = (_gate_auto_raw is True) or (str(_gate_auto_raw).lower() == "true")
-        print(f"[gate_check] key={'да' if gate_key else 'нет'} secret={'да' if gate_secret else 'нет'} "
-              f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r})", flush=True)
+        print(f"{_ts()} {_C_GREY}[gate_check] key={'да' if gate_key else 'нет'} secret={'да' if gate_secret else 'нет'} "
+              f"pct={gate_pct} auto_on={gate_auto_on} (raw={_gate_auto_raw!r}){_C_RST}", flush=True)
         _write_trade_log(symbol, tf, f"gate_check key={'да' if gate_key else 'НЕТ'} secret={'да' if gate_secret else 'НЕТ'} pct={gate_pct} auto_on={gate_auto_on} raw={_gate_auto_raw!r}")
         if gate_key and gate_secret and gate_pct > 0 and gate_auto_on:
             # Плечо всегда = risk_pct / sl_pct — как в таблице "Плечо×" в UI.
@@ -4302,7 +4302,6 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             if _cand and _cur_candles and _cand["t"] > _cur_candles[-1]["t"]:
                 new_c = _cand
                 break
-            print(f"[sw:{symbol}] Свеча ещё не финализирована, retry {_retry+1}/{_RETRY_N}...")
             time.sleep(2)
         if new_c is None:
             new_c = _fetch_latest_candle(symbol, tf)
@@ -4316,7 +4315,7 @@ def _sliding_window_thread(symbol, tf, n_candles, alert_cfg, risk_pct, htf_index
             print(f"[sw:{symbol}] Свечи ещё не загружены"); continue
 
         if new_c["t"] <= candles[-1]["t"]:
-            print(f"[sw:{symbol}] Свеча t={new_c['t']} уже есть, пропускаем"); continue
+            continue
 
         new_candles = candles[1:] + [new_c]
 
@@ -6214,9 +6213,8 @@ def run_optimizer(params):
               stopped=_opt_stop_flag.is_set(), has_result=final_result is not None)
 
         if _opt_stop_flag.is_set():
-            print(f"[DBG] while-loop: stop_flag сработал на cycle={cycle}", flush=True); break
+            break
 
-        print(f"[DBG] cycle={cycle} infinite={infinite} final_result={final_result is not None} stop={_opt_stop_flag.is_set()}", flush=True)
         cycle_elapsed = round(time.time() - cycle_t0, 1)   # вычисляем сразу — используется ниже
         if final_result:
             elapsed = round(time.time()-t0, 1)
@@ -6344,7 +6342,6 @@ def run_optimizer(params):
                     _carry_forward_pending_signal(_prev_pending_cf, _csig, _chart_src, _tp,
                                                    _cpend, _cpend_dir, _cpend_t)
 
-                print(f"{_ts()} [chart] signals={len(_csig)} trades={_sim.get('trades',0) if _sim else 0} candles={len(_chart_src)}", flush=True)
 
                 # --- HTF-фильтр: сводная статистика эффективности ---
                 # Сравниваем результат "с фильтром" (выше) и "без фильтра" на ТОМ ЖЕ
@@ -6665,7 +6662,6 @@ def _run_multi_safe(sym_list, base_params):
                         opt_states[sym] = {}
                     opt_states[sym]["running"] = True
                     opt_states[sym]["cycle"]   = sym_cycles[sym]
-                print(f"[multi] Цикл #{sym_cycles[sym]} → {sym}", flush=True)
                 # Обновляем _htf_index_sym для текущего символа (строим один раз, кешируем)
                 if sym not in _htf_index_cache:
                     if HTF_MAP.get(tf) and TF_SECONDS.get(tf, 9999) < 3600:
