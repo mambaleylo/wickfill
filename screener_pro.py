@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.422
+WickFill Optimizer v3.423
+- v3.423: fix "устройства не подхватывают лучший конфиг друг друга" —
+  торговый конфиг (trade_best) уже сравнивался с GitHub и брал лучшее
+  (v3.245), а вот СТАРТОВАЯ точка следующего цикла перебора (prev_best_params,
+  "Старт #1 предыдущий лучший") всегда бралась только из локального
+  cycle_best — даже если на GitHub уже лежал более удачный конфиг,
+  найденный другим устройством, локальный перебор продолжался от своего,
+  возможно худшего, рекорда и никогда не подхватывал чужую находку.
+  Теперь после сравнения с GitHub (которое уже выполняется в конце
+  каждого цикла) prev_best_params тоже берётся из лучшего по vfit —
+  локального или GitHub — так что все устройства, гоняющие один и тот же
+  символ/TF, в течение одного цикла подтягиваются к общему лучшему
+  известному конфигу и дальше шевелят (shake) именно его, а не
+  расходятся в разные стороны.
 - v3.422: fix главный баг "автообновление иногда ломает страницу" — после
   auto-update рестарта бэкенда фронт перезагружается и проверяет флаг
   wf_autostart: если /opt_status вдруг ответил running=true (другая вкладка
@@ -1000,7 +1013,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.422"
+APP_VERSION = "3.423"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6549,6 +6562,7 @@ def run_optimizer(params):
             # Async вызывал гонку: карточка обновлялась новым best сразу, граф — секунды спустя
             _tb = dict(all_time_best)
             _tp = dict(all_time_params)
+            _gh_beat_local = False
             try:
                 from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _GTE
                 with _TPE(max_workers=1) as _gex:
@@ -6557,6 +6571,7 @@ def run_optimizer(params):
                         _gh_vfit, _gh_best = _gf.result(timeout=8)
                         if _gh_vfit is not None and _gh_best and _gh_vfit > _local_vfit_snap:
                             _tb = _gh_best; _tp = dict(_gh_best["params"])
+                            _gh_beat_local = True
                             olog(f"☁️ Для торговли взят конфиг с GitHub (vfit={_gh_vfit:.2f} > локальный {_local_vfit_snap:.2f})", "info")
                         else:
                             olog(f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (gh_vfit={_gh_vfit:.2f} local={_local_vfit_snap:.2f})" if _gh_vfit is not None else f"📌 trade_best = локальный ${_tb.get('equity',0):.0f} (на GitHub не найден конфиг для {symbol} {tf} {days}д r{int(round(risk_pct))})", "info")
@@ -6569,6 +6584,17 @@ def run_optimizer(params):
             except Exception as _e:
                 olog(f"⚠ Ошибка синхронизации торгового конфига с GitHub: {_e} — trade_best = локальный ${_tb.get('equity',0):.0f}", "warn")
                 print(f"{_ts()} [gh] Ошибка синхронизации: {_e}", flush=True)
+
+            # Если на GitHub нашёлся конфиг лучше локального — со следующего цикла
+            # перебор должен стартовать ОТ НЕГО, а не от локального cycle_best.
+            # Раньше prev_best_params всегда брался только из локального результата
+            # (см. выше), из-за чего разные устройства, гоняющие один и тот же
+            # символ/TF, никогда не подхватывали находки друг друга и продолжали
+            # независимый перебор от своего, возможно худшего, рекорда —
+            # лучший конфиг лежал на GitHub, но точкой старта не становился.
+            if _gh_beat_local:
+                prev_best_params = dict(_tp)
+                olog(f"☁️ Следующий цикл стартует с конфига GitHub (vfit={_local_vfit_snap:.2f} → лучше найден другим устройством)", "info")
 
             # Строим граф синхронно — карточка и граф всегда из одного конфига.
             # ВАЖНО: используем АКТУАЛЬНЫЕ _sw_candles (на момент завершения цикла),
