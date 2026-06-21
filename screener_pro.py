@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 WickFill Optimizer v3.430
+- v3.431: добавлена пометка "→ATR" рядом с SL% в карточке "Лучшая" (renderTop20), если у конфига включён use_atr_sl — реальный стоп сделки динамический (по ATR свечи входа, зажат между sl_pct и sl_pct×3) и может отличаться от базового значения sl_pct, отображаемого в шапке. Без этой пометки два конфига с одинаковым TP% и разным SL% могли давать неожиданно разные исходы сделок на одних и тех же свечах — потому что фактический стоп одного из них на самом деле не равен значению в заголовке.
 - v3.430: fix график показывал ЛОНГ после reopen в ШОРТ. JS activeSig использовал
   SIGNALS.find() — находил первый незакрытый сигнал (старый лонг у которого open_end=true
   и нет exit_bar). После reopen новый шорт-сигнал добавлялся в конец массива но find()
@@ -1069,7 +1070,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.430"
+APP_VERSION = "3.431"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -9966,6 +9967,9 @@ function renderTop20(list){
     const eq=(r.equity??100).toFixed(0),wr=(r.winrate??0).toFixed(1),dd=(r.max_dd??0).toFixed(1);
     const pf=r.profit_factor===999?'∞':(r.profit_factor??0).toFixed(2);
     const sl=r.params?.sl_pct??'—',tp=r.params?.tp_pct??'—';
+    const useAtrSl=!!r.params?.use_atr_sl;
+    const atrSlMult=r.params?.atr_sl_mult??1;
+    const slLabel=useAtrSl?`${sl}<span style="font-size:.55rem;color:var(--yellow)" title="Динамический SL по ATR: реальный стоп может быть до ${(parseFloat(sl)*3).toFixed(2)}% (×${atrSlMult} ATR), отличается от базового значения">→ATR</span>`:`${sl}`;
     const nb=r.params?.use_next_bar!=null?(r.params.use_next_bar?'✔ след.':'✘ тек.'):'—';
     const eqColor=parseFloat(eq)>100?'var(--green)':parseFloat(eq)<100?'var(--red)':'inherit';
     const risk=parseFloat(document.getElementById('wf_risk')?.value)||20;
@@ -9979,7 +9983,7 @@ function renderTop20(list){
       <td><span style="font-size:.6rem;color:var(--text3)">Сделок</span><br>${r.trades??0}</td>
       <td><span style="font-size:.6rem;color:var(--text3)">DD%</span><br><span style="color:${parseFloat(dd)>25?'var(--red)':'inherit'}">${dd}</span></td>
       <td><span style="font-size:.6rem;color:var(--text3)">PF</span><br><span style="color:${parseFloat(pf)>=1.5?'var(--green)':'inherit'}">${pf}</span></td>
-      <td><span style="font-size:.6rem;color:var(--text3)">SL%</span><br>${sl}</td>
+      <td><span style="font-size:.6rem;color:var(--text3)">SL%</span><br>${slLabel}</td>
       <td><span style="font-size:.6rem;color:var(--text3)">TP%</span><br>${tp}</td>
       <td><span style="font-size:.6rem;color:var(--text3)">Вход</span><br><span style="font-size:.8rem;color:${nb.startsWith('✔')?'var(--green)':'var(--text3)'}">${nb}</span></td>
       <td><span style="font-size:.6rem;color:var(--text3)">Плечо×</span><br><span style="font-size:.85rem;font-weight:700;color:${levColor}">${lev}</span></td>
