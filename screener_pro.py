@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.428
+WickFill Optimizer v3.429
+- v3.429: КРИТИЧЕСКИЙ fix — найден лучший локальный конфиг не заливался на GitHub.
+  Причина: автосейв-снапшот в _save_snapshot собирался из dict(all_time_best) ПОСЛЕ
+  WF slope-штрафа (строка ~7683 домножает all_time_best["validated_fitness"] на
+  wf_trend_penalty), а гейт запуска автосейва (new_vfit > _last_autosave_vfit) считался
+  по «сырому» _raw_vfit_for_autosave ДО штрафа (это было специально сделано в v3.226,
+  чтобы штраф не блокировал реально новые рекорды). Из-за рассинхрона: гейт пропускал
+  автосейв (raw vfit реально вырос), но внутри _auto_save_config our_fit (уже штрафованный,
+  заниженный) сравнивался с gh_best_fit конфига на GitHub (сохранённого в цикл без штрафа
+  или с меньшим штрафом) и проигрывал ему — функция тихо писала "GitHub уже лучше" и
+  возвращала fpath без PUT. Конфиг при этом существовал только локально (или даже не
+  сохранялся локально, т.к. ветка return была ДО блока локального сохранения/постановки
+  в очередь), а на GitHub продолжал висеть старый. Фикс: _save_snapshot теперь берёт
+  _atb_snap — копию all_time_best, снятую СТРОГО до WF slope-штрафа (та же точка,
+  что уже используется для _trade_best/_tb синхронизации торгового конфига с GitHub,
+  см. v3.245/v3.268) — гейт и фактически сохраняемый/сравниваемый конфиг теперь
+  смотрят на один и тот же (raw) validated_fitness.
 - v3.428: Numba JIT-ядро симуляции (_simulate_njit). Весь bar loop (~400 строк)
   переписан как @njit функция принимающая только numpy float64/int64 arrays.
   Параметры передаются как float64[56] (порядок _PARAM_KEYS). Включается
@@ -1049,7 +1065,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.428"
+APP_VERSION = "3.429"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -7713,8 +7729,15 @@ def run_optimizer(params):
             new_vfit = _raw_vfit_for_autosave
             if new_vfit > _last_autosave_vfit:
                 _last_autosave_vfit = new_vfit  # обновляем сразу чтобы не запускать повторно
+                # ВАЖНО: в сам конфиг кладём _atb_snap (снят ДО WF slope-штрафа, см. строку
+                # ~7435), а НЕ текущий all_time_best — к этому моменту all_time_best["validated_fitness"]
+                # уже может быть домножен на wf_trend_penalty (строка ~7683). Раньше здесь стоял
+                # dict(all_time_best) — гейт new_vfit>_last_autosave_vfit (raw) пропускал автосохранение,
+                # но внутри _auto_save_config our_fit (penalized) сравнивался с gh_best_fit и проигрывал
+                # ему чисто из-за штрафа, не отражающего реальное качество — конфиг находился локально,
+                # но на GitHub не заливался, хотя реально был лучше уже лежащего там.
                 _save_snapshot = (symbol, tf, days, risk_pct,
-                                  dict(all_time_best), list(prev_top20))
+                                  dict(_atb_snap), list(prev_top20))
                 def _do_autosave(_snap=_save_snapshot):
                     _sym, _tf, _d, _r, _best, _top20 = _snap
                     try:
