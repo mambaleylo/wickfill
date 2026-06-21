@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.427
+WickFill Optimizer v3.428
+- v3.428: fix два краша в gh-startup-sync треде: (1) NameError _C_YEL/_C_GRN/_C_RST/_C_GREY —
+  ANSI-константы цветов использовались везде в логах но нигде не были определены как глобалы;
+  добавлены в начало файла после imports. (2) ascii codec error при print кириллицы из пути
+  файла конфига — _gh_request теперь использует json.dumps(ensure_ascii=False).encode("utf-8")
+  и UnicodeEncodeError-safe print. Оба бага существовали с момента добавления gh-startup-sync
+  и приводили к падению треда при каждом старте.
 - v3.427: fix auto-update — три проблемы: (1) bash-скрипт sleep 2→4с и добавлен
   redirect stdout/stderr нового процесса в ~/wickfill.log (было DEVNULL — краши
   нового процесса были невидимы); (2) JS autostart retry loop: вместо одной попытки
@@ -1025,6 +1031,17 @@ WickFill Optimizer v3.395
 import json, time, threading, random, math, os, base64
 import math as _math  # используется в fitness внутри _simulate
 import multiprocessing
+
+# ── ANSI цвета для логов в терминале ─────────────────────────────────────────
+_C_RST  = "\033[0m"
+_C_GRN  = "\033[32m"
+_C_YEL  = "\033[33m"
+_C_RED  = "\033[31m"
+_C_CYN  = "\033[36m"
+_C_GREY = "\033[90m"
+_C_BLD  = "\033[1m"
+_C_MAG  = "\033[35m"
+# ─────────────────────────────────────────────────────────────────────────────
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
@@ -1040,7 +1057,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.427"
+APP_VERSION = "3.428"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5286,20 +5303,23 @@ def _gh_request(method, path, payload=None):
     """Минимальный GitHub API клиент. Возвращает dict или None при ошибке."""
     import urllib.request as _ur, urllib.error as _ue
     url = f"{_GH_API}/repos/{_GH_REPO}/contents/{path}"
-    headers = {"Authorization": f"token {_GH_TOKEN}", "Content-Type": "application/json"}
-    data = json.dumps(payload).encode() if payload else None
+    headers = {"Authorization": f"token {_GH_TOKEN}", "Content-Type": "application/json; charset=utf-8"}
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
     req = _ur.Request(url, data=data, method=method, headers=headers)
     try:
         with _ur.urlopen(req, timeout=10) as r:
             return json.load(r)
     except _ue.HTTPError as e:
         if e.code == 404: return None
-        try: body = e.read().decode()[:300]
+        try: body = e.read().decode("utf-8", errors="replace")[:300]
         except: body = ""
         print(f"{_ts()} [gh] HTTP {e.code} {method} {path}: {body}", flush=True)
         return None
     except Exception as e:
-        print(f"{_ts()} [gh] {e}", flush=True)
+        try:
+            print(f"{_ts()} [gh] {e}", flush=True)
+        except UnicodeEncodeError:
+            print(f"{_ts()} [gh] request error (unicode)", flush=True)
         return None
 
 def _gh_put_file(gh_path, content_str, message):
