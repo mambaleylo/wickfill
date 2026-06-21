@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.429
+WickFill Optimizer v3.430
+- v3.430: fix график показывал ЛОНГ после reopen в ШОРТ. JS activeSig использовал
+  SIGNALS.find() — находил первый незакрытый сигнал (старый лонг у которого open_end=true
+  и нет exit_bar). После reopen новый шорт-сигнал добавлялся в конец массива но find()
+  возвращал старый лонг первым. Исправлено на findLast() (с fallback для старых браузеров)
+  — теперь берётся самый свежий незакрытый сигнал. TP/SL линии и стрелка теперь
+  соответствуют реальной активной позиции.
 - v3.429: fix сигнал переоткрытия сделки не отображался на графике ни на одном устройстве.
   _gate_reopen_on_new_config вызывал _simulate(_collect=True) внутри себя чтобы найти
   сигнал для входа, но результат нигде не сохранялся — chart_signals в opt_states не
@@ -1063,7 +1069,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.429"
+APP_VERSION = "3.430"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3670,9 +3676,11 @@ function render(){{
   }}
   // Индекс live-свечи (глобальный) — не рисуем сигналы на незакрытой свече
   const _liveBarGlobal = (CANDLES.length > 0 && CANDLES[CANDLES.length-1].live) ? CANDLES.length-1 : -1;
-  // Active open trade — find regardless of viewport (labels always visible)
-  // Исключаем сигналы на live-свече — до закрытия свечи TP/SL не рисуем
-  const activeSig=SIGNALS.find(s=>s.open_end===true && s.bar_i!==_liveBarGlobal);
+  // Active open trade — берём ПОСЛЕДНИЙ незакрытый сигнал (не первый)
+  // После reopen старый лонг-сигнал может оставаться с open_end=true —
+  // findLast гарантирует что берём актуальный (самый свежий) сигнал
+  const activeSig=SIGNALS.findLast ? SIGNALS.findLast(s=>s.open_end===true && s.bar_i!==_liveBarGlobal)
+                                    : [...SIGNALS].reverse().find(s=>s.open_end===true && s.bar_i!==_liveBarGlobal);
   // Маркер ожидающего сигнала (use_next_bar=true, вход на следующей свече которая ещё live)
   const _pendingVi = PENDING_BAR !== null ? PENDING_BAR - viewStart : -1;
   if(_pendingVi >= 0 && _pendingVi < vis.length) {{
