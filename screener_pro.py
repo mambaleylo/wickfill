@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.421
+WickFill Optimizer v3.422
+- v3.422: fix главный баг "автообновление иногда ломает страницу" — после
+  auto-update рестарта бэкенда фронт перезагружается и проверяет флаг
+  wf_autostart: если /opt_status вдруг ответил running=true (другая вкладка
+  уже стартовала, либо страница перезагрузилась прямо на стыке со свежим
+  процессом) — код просто стирал флаг и НИЧЕГО больше не делал. polling/
+  scheduleNext запускается только внутри startOpt(), а startOpt() в этой
+  ветке не вызывался — в итоге UI замирал навсегда с устаревшими логами/
+  версией/графиком, хотя сервер дальше считал новые циклы. scheduleNext()
+  вынесен из startOpt() в глобальную функцию; добавлена _attachRunningPolling()
+  которая в "уже работает" ветке подключает UI (кнопки, progWrap) и
+  запускает обычный поллинг без повторного /scan (который иначе либо
+  получил бы отказ, либо обнулил уже идущий прогон).
 - v3.421: (1) в шапку добавлен флаг страны текущего внешнего IP (эндпоинт
   /ip_country: ipapi.co с фолбэком на ipinfo.io, кеш на сервере 10 мин,
   ISO alpha-2 → эмодзи флага), фронт опрашивает раз в 10 минут и обновляет
@@ -988,7 +1000,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.421"
+APP_VERSION = "3.422"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -8718,7 +8730,10 @@ window.addEventListener('DOMContentLoaded', function(){
           console.log('[autostart] Сервер готов, запускаю startOpt()');
           startOpt();
         } else {
-          // Уже работает (редкий случай) — просто сбрасываем флаг
+          // Уже работает (другая вкладка, либо гонка с auto-update рестартом) —
+          // подключаемся к идущему процессу, а не молча бросаем UI замёрзшим
+          console.log('[autostart] Уже работает — подключаюсь к идущему опросу');
+          _attachRunningPolling(d);
           localStorage.removeItem('wf_autostart');
         }
       }).catch(()=>{
@@ -8989,16 +9004,6 @@ function startOpt(){
       if(_cf){_cf.style.display='none';_cf.src='about:blank';_chartFrameLoaded=false;}
       if(_cp){_cp.style.display='flex';}
       startTs=Date.now();
-      function scheduleNext(){
-        let interval;
-        if (_connLost) {
-          // При потере связи: экспоненциальный backoff, макс 15с
-          interval = Math.min(_MIN_POLL_INTERVAL * Math.pow(1.8, Math.min(_connRetryCount, 6)), _MAX_POLL_INTERVAL);
-        } else {
-          interval = document.hidden ? 5000 : _MIN_POLL_INTERVAL;
-        }
-        polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
-      }
       scheduleNext();
       const st=document.getElementById('alertStatusMsg');
       if(alertCfg){st.className='alert-msg ok';st.textContent='✓ Алерты: chat '+alertCfg.tg_chat_id;}
@@ -9161,6 +9166,35 @@ function _onReconnect() {
     _chartFrameLoaded = false;
     _loadChartFrame(frame._pendingSym || _activeChart || undefined);
   }
+}
+
+function scheduleNext(){
+  let interval;
+  if (_connLost) {
+    // При потере связи: экспоненциальный backoff, макс 15с
+    interval = Math.min(_MIN_POLL_INTERVAL * Math.pow(1.8, Math.min(_connRetryCount, 6)), _MAX_POLL_INTERVAL);
+  } else {
+    interval = document.hidden ? 5000 : _MIN_POLL_INTERVAL;
+  }
+  polling=setTimeout(()=>{poll();if(polling!==null)scheduleNext();},interval);
+}
+
+function _attachRunningPolling(d){
+  // Сервер сообщил, что оптимизация уже идёт (другая вкладка её запустила,
+  // либо страница перезагрузилась прямо в момент рестарта auto-update и
+  // успела увидеть "running" от уже поднявшегося нового процесса). Раньше
+  // в этом случае мы просто молча сбрасывали wf_autostart и НИЧЕГО не делали —
+  // polling/scheduleNext никогда не запускался (он стартует только внутри
+  // startOpt()), и страница навсегда замирала с устаревшими данными,
+  // несмотря на то что сервер дальше прекрасно считал новые циклы.
+  // Дергать /scan повторно нельзя — сервер либо откажет, либо обнулит
+  // уже идущий прогон. Вместо этого просто подключаем UI к идущему процессу.
+  if(d.symbols && d.symbols.length) _symList=d.symbols;
+  document.getElementById('wfBtn').style.display='none';
+  document.getElementById('wfStopBtn').style.display='flex';
+  document.getElementById('progWrap').style.display='flex';
+  if(!startTs) startTs=Date.now();
+  if(!polling) scheduleNext();
 }
 
 /* ── Poll ── */
