@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.426
+WickFill Optimizer v3.427
+- v3.427: fix auto-update — три проблемы: (1) bash-скрипт sleep 2→4с и добавлен
+  redirect stdout/stderr нового процесса в ~/wickfill.log (было DEVNULL — краши
+  нового процесса были невидимы); (2) JS autostart retry loop: вместо одной попытки
+  через 2с теперь до 10 попыток × 1.5с (итого до 15с) пока сервер не ответит, первый
+  запрос через 3с — устраняет "сервер не успел подняться" при медленном старте; (3)
+  iframe 5-минутный location.reload() теперь сначала проверяет доступность сервера
+  и пропускает reload если сервер недоступен (после auto-update новый процесс ещё
+  грузится — старый iframe не ломает UI бесконечным "График не готов").
 - v3.426: УСКОРЕНИЕ ПЕРЕБОРА — индикаторный кэш воркера. _worker_init теперь предвычисляет
   один раз на весь массив свечей: RSI для всех 7 периодов (2..8), ATR для всех 10 периодов
   (5..50 шаг 5), EMA для всех 10 периодов (20..200 шаг 20), базовые свечные массивы
@@ -1032,7 +1040,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.426"
+APP_VERSION = "3.427"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3977,7 +3985,17 @@ function fetchLiveCandle() {{
 fetchLiveCandle();
 
 // Полный перезапрос страницы раз в 5 минут — только если пользователь у правого края
-setTimeout(() => {{ if (viewStart + viewLen >= CANDLES.length - 2) location.reload(); }}, 300000);
+// и сервер не был недавно недоступен (авто-апдейт мог только что перезапустить процесс)
+setTimeout(() => {{
+  if (viewStart + viewLen >= CANDLES.length - 2) {{
+    // Проверяем что сервер живой прежде чем делать reload
+    fetch('/live_candle?symbol=X&tf=X',{{cache:'no-store'}}).then(()=>{{
+      location.reload();
+    }}).catch(()=>{{
+      // Сервер недоступен — не делаем reload, подождём следующего цикла
+    }});
+  }}
+}}, 300000);
 
 // postMessage — обновляем CANDLES/SIGNALS без перезагрузки страницы
 window.addEventListener('message', e => {{
@@ -5486,16 +5504,17 @@ def _auto_update_worker():
                                 _ftmp.write(_new_bytes)
                             _name = os.path.basename(_script)
                             _sh = os.path.expanduser("~/wickfill_update.sh")
+                            _log = os.path.expanduser("~/wickfill.log")
                             with open(_sh, "w") as _f3:
                                 _f3.write("#!/data/data/com.termux/files/usr/bin/bash\n")
                                 _f3.write("termux-wake-lock\n")
                                 _f3.write(f"pkill -9 -f {_name}\n")
                                 _f3.write("pkill -9 -f 'multiprocessing.spawn'\n")
-                                _f3.write("sleep 2\n")
+                                _f3.write("sleep 4\n")
                                 # Файл уже скачан и проверен (SHA+синтаксис) в Python выше —
                                 # bash здесь не лезет в сеть, просто подменяет файл и перезапускает.
                                 _f3.write(f"mv -f '{_tmp_path}' '{_script}'\n")
-                                _f3.write(f"{_sys2.executable} '{_script}'\n")
+                                _f3.write(f"{_sys2.executable} '{_script}' >> '{_log}' 2>&1\n")
                             os.chmod(_sh, 0o755)
                             _sp2.Popen(["bash", _sh], stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL, start_new_session=True)
                             time.sleep(1)
@@ -8925,12 +8944,13 @@ window.addEventListener('DOMContentLoaded', function(){
 
   // Авто-старт после рестарта (авто-апдейт)
   if(localStorage.getItem('wf_autostart')==='1'){
-    console.log('[autostart] Обнаружен флаг — запускаю оптимизацию через 2с...');
-    setTimeout(()=>{
-      // Проверяем что сервер живой и поля заполнены
-      fetch('/opt_status').then(r=>r.json()).then(d=>{
+    console.log('[autostart] Обнаружен флаг — жду готовности сервера...');
+    let _asRetry = 0;
+    const _asMaxRetry = 10;  // до 10 попыток × 1.5с = 15с
+    function _tryAutostart(){
+      fetch('/opt_status',{cache:'no-store'}).then(r=>r.json()).then(d=>{
         if(!d.running){
-          console.log('[autostart] Сервер готов, запускаю startOpt()');
+          console.log('[autostart] Сервер готов (попытка '+(_asRetry+1)+'), запускаю startOpt()');
           startOpt();
         } else {
           // Уже работает (другая вкладка, либо гонка с auto-update рестартом) —
@@ -8940,10 +8960,18 @@ window.addEventListener('DOMContentLoaded', function(){
           localStorage.removeItem('wf_autostart');
         }
       }).catch(()=>{
-        // Сервер ещё не готов — попробуем ещё раз через 2с
-        setTimeout(()=>{ startOpt(); }, 2000);
+        // Сервер ещё не готов — ждём и повторяем
+        _asRetry++;
+        if(_asRetry < _asMaxRetry){
+          console.log('[autostart] Сервер не готов, повтор через 1.5с (попытка '+_asRetry+'/'+_asMaxRetry+')');
+          setTimeout(_tryAutostart, 1500);
+        } else {
+          console.warn('[autostart] Сервер не ответил за 15с — сбрасываю флаг');
+          localStorage.removeItem('wf_autostart');
+        }
       });
-    }, 2000);
+    }
+    setTimeout(_tryAutostart, 3000);  // первая попытка через 3с (было 2с)
   }
 });
 
@@ -11090,17 +11118,18 @@ class Handler(BaseHTTPRequestHandler):
                             with open(_tmp_path, "wb") as _ftmp:
                                 _ftmp.write(_new_bytes)
                             sh = os.path.expanduser("~/wickfill_update.sh")
+                            _log2 = os.path.expanduser("~/wickfill.log")
                             with open(sh, "w") as f:
                                 f.write("#!/data/data/com.termux/files/usr/bin/bash\n")
                                 f.write("termux-wake-lock\n")
                                 f.write(f"pkill -9 -f {script_name}\n")
                                 f.write("pkill -9 -f 'multiprocessing.spawn'\n")
                                 f.write("pkill -9 -f 'multiprocessing.resource_tracker'\n")
-                                f.write("sleep 2\n")
+                                f.write("sleep 4\n")
                                 # Файл уже скачан и проверен выше (SHA + синтаксис) —
                                 # bash здесь не лезет в сеть, просто подменяет файл.
                                 f.write(f"mv -f '{_tmp_path}' '{script_path}'\n")
-                                f.write(f"{sys.executable} '{script_path}'\n")
+                                f.write(f"{sys.executable} '{script_path}' >> '{_log2}' 2>&1\n")
                             os.chmod(sh, 0o755)
                             subprocess.Popen(["bash", sh],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
