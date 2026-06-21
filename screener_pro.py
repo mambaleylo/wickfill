@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.423
+WickFill Optimizer v3.424
+- v3.424: КРИТИЧЕСКИЙ fix — найдена причина "сделка сама сменила направление
+  без сигнала и без уведомления в Telegram". Это не сбой, а штатный
+  механизм _gate_reopen_on_new_config (срабатывает когда найден новый рекорд
+  is_new_rec и включена автоторговля): он пересчитывает сигнал по ПОСЛЕДНЕЙ
+  свече с НОВЫМ конфигом, и если направление отличается от уже открытой
+  позиции — закрывает её и открывает в новом направлении. Логика рабочая,
+  но результат шёл только в opt_state["logs"] (видно в приложении) — ни
+  Telegram, ни ntfy уведомление никогда не отправлялись, поэтому смена
+  направления выглядела как будто сделка "сама" развернулась без следа.
+  Теперь оба случая (разворот позиции и открытие новой при отсутствии
+  позиции) шлют тот же Telegram/ntfy алерт, что и обычный сигнал.
 - v3.423: fix "устройства не подхватывают лучший конфиг друг друга" —
   торговый конфиг (trade_best) уже сравнивался с GitHub и брал лучшее
   (v3.245), а вот СТАРТОВАЯ точка следующего цикла перебора (prev_best_params,
@@ -1013,7 +1024,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.423"
+APP_VERSION = "3.424"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -2930,6 +2941,21 @@ def _gate_reopen_on_new_config(cfg, symbol, tf, best_params, risk_pct, candles, 
         msg = f"[reopen] конфиг сменился: позиция {'ЛОНГ' if pos_dir==1 else 'ШОРТ'} → новый сигнал {dir_str}. Переоткрываем."
         if log_fn: log_fn(msg)
         ok, tlog = _gate_execute_signal(cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct)
+        if ok:
+            # Раньше это происходило ПОЛНОСТЬЮ молча для пользователя — лог
+            # уходил только в opt_state["logs"] (видно в приложении), а
+            # Telegram/ntfy уведомление не отправлялось вообще: пользователь
+            # видел смену направления сделки на бирже без единого сигнала
+            # в чате, как будто сделка "сама" развернулась.
+            _tg_text = (
+                f"🔄 <b>{symbol}</b> · {tf} — конфиг сменился, позиция переоткрыта\n"
+                f"{'🟢 ЛОНГ' if pos_dir==1 else '🔴 ШОРТ'} → {'🟢 ЛОНГ' if direction==1 else '🔴 ШОРТ'}\n"
+                f"<b>{ep:.6g}</b> → TP {trade_tp:.6g} / SL {trade_sl:.6g} · ⚡{int(leverage)}×"
+            )
+            try:
+                _send_alert(cfg, _tg_text)
+            except Exception:
+                pass
         return f"{msg}\n{'✓' if ok else '✕'} {tlog}"
 
     elif pos_dir == 0:
@@ -2948,6 +2974,16 @@ def _gate_reopen_on_new_config(cfg, symbol, tf, best_params, risk_pct, candles, 
                 msg = f"[reopen] позиции нет, цена близко к ep ({dist_pct:.2f}% ≤ {reopen_ep_pct}%). Открываем {dir_str}."
                 if log_fn: log_fn(msg)
                 ok, tlog = _gate_execute_signal(cfg, symbol, direction, ep, trade_tp, trade_sl, leverage, gate_pct)
+                if ok:
+                    _tg_text = (
+                        f"🔄 <b>{symbol}</b> · {tf} — конфиг сменился, открыта новая позиция\n"
+                        f"{dir_str}\n"
+                        f"<b>{ep:.6g}</b> → TP {trade_tp:.6g} / SL {trade_sl:.6g} · ⚡{int(leverage)}×"
+                    )
+                    try:
+                        _send_alert(cfg, _tg_text)
+                    except Exception:
+                        pass
                 return f"{msg}\n{'✓' if ok else '✕'} {tlog}"
             else:
                 return f"[reopen] позиции нет, цена далеко от ep ({dist_pct:.2f}% > {reopen_ep_pct}%). Пропуск."
