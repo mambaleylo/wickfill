@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.424
+WickFill Optimizer v3.425
+- v3.425: fix разные конфиги на графиках разных устройств — /chart endpoint в ветке opt_states брал sym_state["best"] (локальный) вместо trade_best (финальный после GitHub-синхронизации); chart_signals пересчитываются с trade_best, а таблица параметров на графике показывала best → параметры и сигналы расходились. Теперь /chart берёт trade_best||best как и все остальные пути.
 - v3.424: КРИТИЧЕСКИЙ fix — найдена причина "сделка сама сменила направление
   без сигнала и без уведомления в Telegram". Это не сбой, а штатный
   механизм _gate_reopen_on_new_config (срабатывает когда найден новый рекорд
@@ -1024,7 +1025,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.424"
+APP_VERSION = "3.425"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -10533,10 +10534,10 @@ class Handler(BaseHTTPRequestHandler):
                     chart_signals = list(sym_state.get("chart_signals") or [])
                     chart_symbol  = sym_state.get("symbol", req_sym)
                     chart_tf      = sym_state.get("chart_tf", "")
-                    chart_best    = sym_state.get("best")
+                    chart_best    = sym_state.get("trade_best") or sym_state.get("best")
                     chart_path    = sym_state.get("chart_path", "")
-                elif sym_state.get("best"):
-                    chart_best   = sym_state["best"]
+                elif sym_state.get("trade_best") or sym_state.get("best"):
+                    chart_best   = sym_state.get("trade_best") or sym_state["best"]
                     chart_symbol = req_sym
                     chart_tf     = sym_state.get("chart_tf", "")
 
