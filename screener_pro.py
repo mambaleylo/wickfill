@@ -1,6 +1,39 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.419
+WickFill Optimizer v3.420
+- v3.420: расследование "сделки не открываются автоматически". Проверил живые
+  торговые логи на GitHub (logs/wickfill_trade_*.txt) — последняя запись
+  wickfill_trade_sys_upd.txt показывает gate_auto_enabled=False как самое
+  свежее состояние сервера. Это явно пришло POST'ом с браузера (сервер сам
+  никогда не выставляет это поле программно — grep подтвердил отсутствие
+  такого кода), т.е. где-то на пути восстановления настроек после рестарта
+  процесса (авто-обновление/OOM-килл) или ресинка страницы переключатель
+  реально лёг в False. Раньше это проходило ПОЛНОСТЬЮ молча — ни предупреждения,
+  ни следа в логе, который можно было бы доверять. Три фикса:
+  (1) alert_cfg теперь сохраняется локально в ~/.wf_alert_cfg.json при каждом
+      /update_alert_cfg и подхватывается из файла СРАЗУ при старте процесса —
+      ДО первого подключения браузера. Раньше opt_state["alert_cfg"] жил только
+      в памяти и после любого рестарта был None, пока браузер не дотянется
+      и не зашлёт состояние заново (через 500мс после загрузки страницы) —
+      окно, в которое автоторговля гарантированно выключена, плюс риск что
+      придёт неверное значение из-за состояния гонки на клиенте;
+  (2) /update_alert_cfg теперь шлёт Telegram-алерт на РЕАЛЬНОМ переходе
+      gate_auto_enabled True→False (и обратно) — не на каждый повторный ресинк
+      с тем же значением (иначе спамил бы при каждой загрузке страницы).
+      Теперь любое отключение автоторговли — намеренное или случайное — видно
+      сразу, а не постфактум по отсутствующим сделкам;
+  (3) фикс гонки записи торгового лога — _write_trade_log() раньше плодил
+      отдельный поток-PUT на КАЖДЫЙ вызов с общим буфером на ВСЕ символы;
+      если два вызова шли почти одновременно (СИГНАЛ, затем gate_check),
+      их HTTP-запросы на GitHub могли завершиться в обратном порядке и более
+      медленный (со старым, урезанным снапшотом) затирал уже записанную
+      свежую строку — лог выглядел так, будто исполнение сделки после сигнала
+      никогда не запускалось, хотя строка просто терялась в гонке. Теперь
+      отдельный буфер на каждый (symbol, tf) + один воркер-поток, пуши строго
+      по очереди. ВАЖНО: пока неясно, реально ли gate_auto_enabled был выключен
+      именно из-за этой гонки/таймингов на клиенте, или его кто-то отключил
+      вручную при отладке — нужно понаблюдать с включённым тогглом и новым
+      алертом, действительно ли он держится после рестартов.
 - v3.419: fix дублирующиеся уведомления в Telegram "новый лучший конфиг" —
   _auto_save_config() пропускал повторный PUT/уведомление только если наш
   validated_fitness был НЕ строго выше уже сохранённого на GitHub (our_fit
@@ -948,7 +981,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.419"
+APP_VERSION = "3.420"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -3729,19 +3762,30 @@ def _save_chart(candles, signals, best_result, symbol, tf, risk_pct_ui=20.0):
 # ═══════════════════════════════════════════════════════════════
 # CHECK SIGNAL ON LAST CANDLE & SEND EMAIL
 # ═══════════════════════════════════════════════════════════════
+import queue as _queue
 _trade_log_lock = threading.Lock()
-_trade_log_lines = []   # in-memory buffer для торгового лога
+_trade_log_buffers = {}   # {(symbol,tf): [lines]} — раздельный буфер на каждый символ/ТФ,
+                           # чтобы сигналы разных монет не смешивались в одном файле
+_trade_log_queue = _queue.Queue()
+_trade_log_worker_started = [False]
 
-def _write_trade_log(symbol, tf, line):
-    """Добавляет строку в торговый лог и выгружает на GitHub."""
-    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    entry = f"[{ts}] {line}"
-    with _trade_log_lock:
-        _trade_log_lines.append(entry)
-        lines_copy = list(_trade_log_lines)
-    # Пишем на GitHub асинхронно чтобы не блокировать поток сигналов
-    def _push():
+def _trade_log_worker():
+    """Единственный поток, который реально шлёт PUT на GitHub — строго по очереди.
+    Раньше каждый _write_trade_log() поднимал СВОЙ отдельный поток с PUT; если два
+    вызова шли почти одновременно (например СИГНАЛ, а сразу следом gate_check), их
+    HTTP-запросы могли завершиться в обратном порядке — более МЕДЛЕННЫЙ (с более
+    старым, урезанным снапшотом) дозавершался ПОСЛЕ быстрого и затирал на GitHub уже
+    записанную свежую строку. В логе это выглядело так, будто сигнал был, а попытки
+    исполнить сделку никогда не было — хотя на самом деле строка просто потерялась
+    в гонке записи. Теперь push'и идут последовательно одним воркером, и каждый
+    берёт АКТУАЛЬНЫЙ снапшот буфера на момент своего исполнения — потерять более
+    свежую строку уже нельзя."""
+    while True:
+        key = _trade_log_queue.get()
         try:
+            symbol, tf = key
+            with _trade_log_lock:
+                lines_copy = list(_trade_log_buffers.get(key, []))
             sym = symbol.replace("_","").replace("/","").lower()
             fname = f"wickfill_trade_{sym}_{tf}.txt"
             gh_path = f"logs/{fname}"
@@ -3749,7 +3793,22 @@ def _write_trade_log(symbol, tf, line):
             _gh_put_file(gh_path, txt, f"trade-log: {fname}")
         except Exception as e:
             print(f"[trade_log] ошибка GitHub: {e}", flush=True)
-    threading.Thread(target=_push, daemon=True).start()
+        finally:
+            _trade_log_queue.task_done()
+
+def _write_trade_log(symbol, tf, line):
+    """Добавляет строку в торговый лог (свой буфер на symbol/tf) и ставит выгрузку
+    на GitHub в очередь — последовательно, без гонок (см. докстринг воркера выше)."""
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    entry = f"[{ts}] {line}"
+    key = (symbol, tf)
+    with _trade_log_lock:
+        _trade_log_buffers.setdefault(key, []).append(entry)
+    if not _trade_log_worker_started[0]:
+        _trade_log_worker_started[0] = True
+        threading.Thread(target=_trade_log_worker, daemon=True).start()
+    _trade_log_queue.put(key)
+
 
 def _carry_forward_open_signal(prev_signals, new_signals, new_candles, prev_best_p=None, cur_best_p=None):
     """
@@ -4897,6 +4956,46 @@ _GH_TOKEN  = _load_gh_token()
 _GH_REPO   = "mambaleylo/wickfill"
 _GH_API    = "https://api.github.com"
 _GH_SYNC_PENDING = []   # [(local_path, gh_path, content_str)] — очередь на синхронизацию
+
+# ── Локальная персистентность alert_cfg (gate_auto_enabled и ключи) ──────────
+# Раньше alert_cfg жил только в памяти (opt_state) и восстанавливался ИСКЛЮЧИТЕЛЬНО
+# через повторный POST с клиента (JS: restore из localStorage → saveAlertCfg() через
+# 500мс после загрузки страницы). Каждый рестарт процесса (авто-обновление, OOM-килл,
+# ручной Restart) обнулял opt_state["alert_cfg"] в None, и до следующего успешного
+# ресинка с браузера автоторговля фактически выключена на сервере — а если тот ресинк
+# по любой причине (тайминг загрузки страницы, пустой localStorage в этот момент,
+# браузер не открыт) не произошёл вовремя или прислал gate_auto_enabled=false — сервер
+# тихо остаётся с автоторговлей off, без какого-либо предупреждения пользователю.
+# Теперь alert_cfg (кроме явного None) сохраняется на диск при каждом /update_alert_cfg
+# и подхватывается из файла сразу при старте процесса — ДО первого подключения браузера.
+# Файл не пушится на GitHub (содержит gate_secret/tg_token).
+def _alert_cfg_path():
+    import os as _os
+    return _os.path.expanduser("~/.wf_alert_cfg.json")
+
+def _save_alert_cfg_local(cfg):
+    try:
+        with open(_alert_cfg_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg or {}, f)
+    except Exception as e:
+        print(f"{_ts()} [alert_cfg] ⚠ не удалось сохранить локально: {e}", flush=True)
+
+def _load_alert_cfg_local():
+    try:
+        with open(_alert_cfg_path(), "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if isinstance(cfg, dict) and cfg:
+            return cfg
+    except Exception:
+        pass
+    return None
+
+_persisted_alert_cfg = _load_alert_cfg_local()
+if _persisted_alert_cfg:
+    opt_state["alert_cfg"] = _persisted_alert_cfg
+    print(f"{_ts()} [alert_cfg] восстановлен из ~/.wf_alert_cfg.json — "
+          f"auto={_persisted_alert_cfg.get('gate_auto_enabled')} "
+          f"key={'да' if _persisted_alert_cfg.get('gate_key') else 'нет'}", flush=True)
 _GH_SYNC_LOCK = threading.Lock()
 
 def _gh_request(method, path, payload=None):
@@ -10803,15 +10902,33 @@ class Handler(BaseHTTPRequestHandler):
                 v = new_cfg["gate_auto_enabled"]
                 new_cfg["gate_auto_enabled"] = (v is True) or (str(v).lower() == "true")
             with opt_lock:
+                _prev_cfg = opt_state.get("alert_cfg") or {}
                 opt_state["alert_cfg"] = new_cfg
             # В мультирежиме обновляем для всех активных символов
             with opt_states_lock:
                 for sym_key in list(opt_states.keys()):
                     opt_states[sym_key]["alert_cfg"] = new_cfg
+            # Сохраняем на диск — переживает рестарт процесса (авто-обновление/OOM-килл),
+            # не дожидаясь повторного ресинка с браузера (см. комментарий у _load_alert_cfg_local)
+            _save_alert_cfg_local(new_cfg)
             _write_trade_log("sys", "upd",
                 f"alert_cfg обновлён: auto={new_cfg.get('gate_auto_enabled')} key={'да' if new_cfg.get('gate_key') else 'НЕТ'}")
+            # v3.420: уведомление о СМЕНЕ состояния автоторговли — раньше переключение
+            # gate_auto_enabled (в т.ч. незаметное, например из-за гонки при ресинке
+            # после рестарта) проходило тихо: пользователь мог месяцами не замечать,
+            # что автоторговля выключена, пока сделки просто не открывались. Шлём
+            # алерт ТОЛЬКО на реальном переходе True↔False, не на каждый ресинк с тем
+            # же значением (иначе он улетал бы при каждой загрузке страницы).
+            _prev_auto = (_prev_cfg.get("gate_auto_enabled") is True) or (str(_prev_cfg.get("gate_auto_enabled")).lower() == "true")
+            _new_auto  = bool(new_cfg.get("gate_auto_enabled"))
+            if _prev_auto != _new_auto and new_cfg.get("tg_token") and new_cfg.get("tg_chat_id"):
+                _msg = ("⚠️ <b>Автоторговля Gate.io ВЫКЛЮЧЕНА</b>\nНовые сигналы больше не будут открывать сделки автоматически."
+                        if not _new_auto else
+                        "✅ <b>Автоторговля Gate.io ВКЛЮЧЕНА</b>")
+                threading.Thread(target=_send_telegram, args=(new_cfg, _msg), daemon=True).start()
             self._json({"ok": True})
             return
+
 
         if parsed.path == "/set_gh_token":
             global _GH_TOKEN
