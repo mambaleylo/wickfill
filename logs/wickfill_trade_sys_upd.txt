@@ -1,2 +1,3 @@
 [2026-06-21 07:34:44] alert_cfg обновлён: auto=False key=да
 [2026-06-21 08:00:18] alert_cfg обновлён: auto=False key=да
+[2026-06-21 08:00:26] alert_cfg обновлён: auto=False key=да
