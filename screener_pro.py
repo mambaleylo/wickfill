@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.420
+WickFill Optimizer v3.421
+- v3.421: (1) в шапку добавлен флаг страны текущего внешнего IP (эндпоинт
+  /ip_country: ipapi.co с фолбэком на ipinfo.io, кеш на сервере 10 мин,
+  ISO alpha-2 → эмодзи флага), фронт опрашивает раз в 10 минут и обновляет
+  плашку рядом с версией. (2) fix: у логов "Потеряно соединение" /
+  "Восстановлено" не было метки времени — addLogLine() теперь всегда
+  проставляет текущее [HH:MM:SS], если ts не передан явно (раньше timestamp
+  ставился только когда сервер явно его прислал в d.logs).
 - v3.420: расследование "сделки не открываются автоматически". Проверил живые
   торговые логи на GitHub (logs/wickfill_trade_*.txt) — последняя запись
   wickfill_trade_sys_upd.txt показывает gate_auto_enabled=False как самое
@@ -981,7 +988,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.420"
+APP_VERSION = "3.421"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1012,6 +1019,63 @@ def _get_cpu_temp():
 def _ts():
     """Возвращает метку времени для логов: [HH:MM:SS]"""
     return time.strftime("[%H:%M:%S]")
+
+_ip_country_cache = {"t": 0, "data": {"ok": False, "country": None, "flag": "🏳️"}}
+
+def _country_code_to_flag(code):
+    """ISO 3166-1 alpha-2 код страны → эмодзи флага (regional indicator symbols)."""
+    try:
+        code = code.upper()
+        if len(code) != 2 or not code.isalpha():
+            return "🏳️"
+        return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in code)
+    except Exception:
+        return "🏳️"
+
+def _get_ip_country():
+    """Определяет страну текущего внешнего IP. Кеш на 10 минут, чтобы не дёргать API
+    при каждом опросе фронтенда (фронт обновляет флаг периодически)."""
+    now = time.time()
+    if now - _ip_country_cache["t"] < 600 and _ip_country_cache["data"]["ok"]:
+        return _ip_country_cache["data"]
+    try:
+        r = requests.get("https://ipapi.co/json/", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            code = d.get("country") or d.get("country_code")
+            data = {
+                "ok": bool(code),
+                "country": code,
+                "country_name": d.get("country_name"),
+                "ip": d.get("ip"),
+                "flag": _country_code_to_flag(code) if code else "🏳️",
+            }
+            if data["ok"]:
+                _ip_country_cache["t"] = now
+                _ip_country_cache["data"] = data
+            return data
+    except Exception as e:
+        pass
+    # фолбэк если первый сервис недоступен
+    try:
+        r = requests.get("https://ipinfo.io/json", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            code = d.get("country")
+            data = {
+                "ok": bool(code),
+                "country": code,
+                "country_name": None,
+                "ip": d.get("ip"),
+                "flag": _country_code_to_flag(code) if code else "🏳️",
+            }
+            if data["ok"]:
+                _ip_country_cache["t"] = now
+                _ip_country_cache["data"] = data
+            return data
+    except Exception:
+        pass
+    return _ip_country_cache["data"]
 
 def _dt(ts):
     """Unix timestamp → читаемая строка UTC: YYYY-MM-DD HH:MM:SS"""
@@ -8116,6 +8180,7 @@ details summary::-webkit-details-marker{display:none}
     <span class="dot-live" id="apidot2"></span>
     WickFill <span style="font-weight:300;color:var(--text3)">Optimizer</span>
     <span style="font-size:.72rem;font-weight:400;color:var(--text3)" id="versionSpan">v</span>
+    <span id="ipFlag" title="Страна текущего IP" style="font-size:.95rem;margin-left:4px">🏳️</span>
   </div>
   <div class="topbar-spacer"></div>
   <button class="tb btn" id="amoledBtnMob" onclick="toggleAmoled()" title="AMOLED режим" style="display:none">
@@ -8490,6 +8555,19 @@ function checkCpuTemp(){
   }).catch(()=>{});
 }
 checkCpuTemp();setInterval(checkCpuTemp,15000);
+
+/* ── Флаг страны текущего IP ── */
+function checkIpCountry(){
+  fetch('/ip_country').then(r=>r.json()).then(d=>{
+    const el=document.getElementById('ipFlag');
+    if(!el) return;
+    if(d.ok && d.flag){
+      el.textContent=d.flag;
+      el.title=(d.country_name||d.country||'')+(d.ip?(' · '+d.ip):'');
+    }
+  }).catch(()=>{});
+}
+checkIpCountry();setInterval(checkIpCountry,600000);
 
 /* ── Battery ── */
 (function initBattery(){
@@ -9274,10 +9352,16 @@ function _resetLog(){
   lastLogCount=0; lastLogTotal=0; _cc={}; _ccPrevEq=null; _startBuf=null;
 }
 
+function _nowTs(){
+  const d=new Date();
+  const p=n=>String(n).padStart(2,'0');
+  return '['+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+']';
+}
+
 function addLogLine(msg,level,ts){
   const el=document.createElement('div');
   el.className='log-line '+(level||'info');
-  el.textContent=(ts?ts+' ':'')+msg;
+  el.textContent=(ts||_nowTs())+' '+msg;
   const wfLog=document.getElementById('wfLog');
   wfLog.insertBefore(el,wfLog.firstChild);
   // Keep activity line pinned at the very top
@@ -10580,6 +10664,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": str(e)})
         elif parsed.path == "/cpu_temp":
             self._json({"temp": _get_cpu_temp()})
+        elif parsed.path == "/ip_country":
+            self._json(_get_ip_country())
         elif parsed.path == "/ping":
             result={"ok":False,"ms":None,"error":""}
             try:
