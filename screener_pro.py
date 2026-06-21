@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.428
+WickFill Optimizer v3.429
+- v3.429: fix сигнал переоткрытия сделки не отображался на графике ни на одном устройстве.
+  _gate_reopen_on_new_config вызывал _simulate(_collect=True) внутри себя чтобы найти
+  сигнал для входа, но результат нигде не сохранялся — chart_signals в opt_states не
+  обновлялся. Пользователь видел смену позиции на бирже (ЛОНГ→ШОРТ или обратно) без
+  какого-либо сигнала на графике. Теперь после успешного reopen chart_signals обновляется
+  сигналами из свежей симуляции — сигнал появится на графике при следующем poll.
 - v3.428: fix два краша в gh-startup-sync треде: (1) NameError _C_YEL/_C_GRN/_C_RST/_C_GREY —
   ANSI-константы цветов использовались везде в логах но нигде не были определены как глобалы;
   добавлены в начало файла после imports. (2) ascii codec error при print кириллицы из пути
@@ -1057,7 +1063,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.428"
+APP_VERSION = "3.429"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -6930,6 +6936,18 @@ def run_optimizer(params):
                         for _rl in _reopen_log.splitlines():
                             if _rl.strip():
                                 olog(_rl.strip(), "info")
+                        # Обновляем chart_signals сигналом из reopen — иначе на графике
+                        # нет никакого следа переоткрытой сделки (пользователь видит
+                        # смену позиции на бирже без сигнала на графике)
+                        try:
+                            _ro_sim = _simulate(_fresh_candles_for_reopen, _tp, 0, _collect=True, risk_pct=risk_pct)
+                            if _ro_sim and _ro_sim.get("_signals"):
+                                with opt_lock:
+                                    _sym_st = opt_states.get(symbol, {})
+                                    _sym_st["chart_signals"] = _ro_sim["_signals"]
+                                    opt_states[symbol] = _sym_st
+                        except Exception:
+                            pass
                 except Exception as _re:
                     import traceback
                     olog(f"[reopen] ошибка: {_re}", "warn")
