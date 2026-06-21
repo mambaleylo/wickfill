@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-WickFill Optimizer v3.425
+WickFill Optimizer v3.426
+- v3.426: УСКОРЕНИЕ ПЕРЕБОРА — индикаторный кэш воркера. _worker_init теперь предвычисляет
+  один раз на весь массив свечей: RSI для всех 7 периодов (2..8), ATR для всех 10 периодов
+  (5..50 шаг 5), EMA для всех 10 периодов (20..200 шаг 20), базовые свечные массивы
+  _all_hi/lo/upw/dnw/rng, sliding max/min для всех окон level_lookback(3..20),
+  sweep_len(5,10,15,20), ms_lookback(20..60 и ×2). _simulate читает из кэша вместо
+  пересчёта — экономия ~30-40% времени на каждой симуляции в режиме воркера. Вне воркера
+  (SW-тред, WF-валидация) поведение без изменений — fallback на старый расчёт.
 - v3.425: fix разные конфиги на графиках разных устройств — /chart endpoint в ветке opt_states брал sym_state["best"] (локальный) вместо trade_best (финальный после GitHub-синхронизации); chart_signals пересчитываются с trade_best, а таблица параметров на графике показывала best → параметры и сигналы расходились. Теперь /chart берёт trade_best||best как и все остальные пути.
 - v3.424: КРИТИЧЕСКИЙ fix — найдена причина "сделка сама сменила направление
   без сигнала и без уведомления в Telegram". Это не сбой, а штатный
@@ -1025,7 +1032,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.425"
+APP_VERSION = "3.426"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -1652,44 +1659,60 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
     n = len(candles_list)
 
     # Используем предвычисленный массив closes если доступен (worker-процесс)
-    global _worker_closes
-    if _worker_closes is not None and len(_worker_closes) == n and days_limit == 0:
+    global _worker_closes, _worker_rsi_cache, _worker_atr_cache, _worker_ema_cache
+    global _worker_all_hi, _worker_all_lo, _worker_all_upw, _worker_all_dnw, _worker_all_rng
+    global _worker_slide_hi, _worker_slide_lo
+    _use_worker_cache = (_worker_closes is not None and len(_worker_closes) == n and days_limit == 0)
+    if _use_worker_cache:
         closes = _worker_closes
     else:
         closes = [c["close"] for c in candles_list]
-    def _rsi(closes, period):
-        if len(closes) < period + 1: return [50.0]*len(closes)
-        gains, losses = [], []
-        for i in range(1, len(closes)):
-            d = closes[i]-closes[i-1]; gains.append(max(d,0)); losses.append(max(-d,0))
-        rsi_vals=[50.0]*len(closes)
-        ag=sum(gains[:period])/period; al=sum(losses[:period])/period
-        for i in range(period, len(closes)):
-            ag=(ag*(period-1)+gains[i-1])/period; al=(al*(period-1)+losses[i-1])/period
-            rs=ag/al if al>0 else 100; rsi_vals[i]=100-100/(1+rs)
-        return rsi_vals
-    rsi_series = _rsi(closes, rl)
 
-    def _atr(candles, period):
-        trs=[]
-        for i in range(1,len(candles)):
-            hi=candles[i]["high"]; lo=candles[i]["low"]; pc=candles[i-1]["close"]
-            trs.append(max(hi-lo, abs(hi-pc), abs(lo-pc)))
-        atr_vals=[0.0]*len(candles)
-        if len(trs)<period: return atr_vals
-        atr_vals[period]=sum(trs[:period])/period
-        for i in range(period+1,len(candles)):
-            atr_vals[i]=(atr_vals[i-1]*(period-1)+trs[i-1])/period
-        return atr_vals
-    atr_series = _atr(candles_list, max(q_atr,2))
+    # RSI — берём из кэша воркера если доступен, иначе считаем на месте
+    if _use_worker_cache and _worker_rsi_cache is not None and rl in _worker_rsi_cache:
+        rsi_series = _worker_rsi_cache[rl]
+    else:
+        def _rsi(closes, period):
+            if len(closes) < period + 1: return [50.0]*len(closes)
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                d = closes[i]-closes[i-1]; gains.append(max(d,0)); losses.append(max(-d,0))
+            rsi_vals=[50.0]*len(closes)
+            ag=sum(gains[:period])/period; al=sum(losses[:period])/period
+            for i in range(period, len(closes)):
+                ag=(ag*(period-1)+gains[i-1])/period; al=(al*(period-1)+losses[i-1])/period
+                rs=ag/al if al>0 else 100; rsi_vals[i]=100-100/(1+rs)
+            return rsi_vals
+        rsi_series = _rsi(closes, rl)
 
-    # EMA series (exponential moving average)
-    ema_series = [0.0] * n
-    if uemaf and n >= ema_per:
-        k = 2.0 / (ema_per + 1)
-        ema_series[ema_per - 1] = sum(closes[:ema_per]) / ema_per
-        for _ei in range(ema_per, n):
-            ema_series[_ei] = closes[_ei] * k + ema_series[_ei - 1] * (1 - k)
+    # ATR — берём из кэша воркера если доступен
+    _atr_key = max(q_atr, 2)
+    if _use_worker_cache and _worker_atr_cache is not None and _atr_key in _worker_atr_cache:
+        atr_series = _worker_atr_cache[_atr_key]
+    else:
+        def _atr(candles, period):
+            trs=[]
+            for i in range(1,len(candles)):
+                hi=candles[i]["high"]; lo=candles[i]["low"]; pc=candles[i-1]["close"]
+                trs.append(max(hi-lo, abs(hi-pc), abs(lo-pc)))
+            atr_vals=[0.0]*len(candles)
+            if len(trs)<period: return atr_vals
+            atr_vals[period]=sum(trs[:period])/period
+            for i in range(period+1,len(candles)):
+                atr_vals[i]=(atr_vals[i-1]*(period-1)+trs[i-1])/period
+            return atr_vals
+        atr_series = _atr(candles_list, _atr_key)
+
+    # EMA — берём из кэша воркера если доступен
+    if _use_worker_cache and _worker_ema_cache is not None and ema_per in _worker_ema_cache:
+        ema_series = _worker_ema_cache[ema_per]
+    else:
+        ema_series = [0.0] * n
+        if uemaf and n >= ema_per:
+            k = 2.0 / (ema_per + 1)
+            ema_series[ema_per - 1] = sum(closes[:ema_per]) / ema_per
+            for _ei in range(ema_per, n):
+                ema_series[_ei] = closes[_ei] * k + ema_series[_ei - 1] * (1 - k)
 
     def _calc_return_rate(i, is_up_wick):
         # OPT: плоские массивы вместо candles_list[ki]["high"] и т.д.
@@ -1772,11 +1795,19 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         return cnt
 
     # Предвычисляем массивы high/low/upwick/dnwick для быстрых скользящих окон
-    _all_hi  = [c["high"] for c in candles_list]
-    _all_lo  = [c["low"]  for c in candles_list]
-    _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
-    _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
-    _all_rng = [c["high"]-c["low"] for c in candles_list]  # OPT: для _css без доступа к candles_list[j]
+    # В режиме воркера берём из глобального кэша (уже готово), иначе считаем на месте
+    if _use_worker_cache and _worker_all_hi is not None and len(_worker_all_hi) == n:
+        _all_hi  = _worker_all_hi
+        _all_lo  = _worker_all_lo
+        _all_upw = _worker_all_upw
+        _all_dnw = _worker_all_dnw
+        _all_rng = _worker_all_rng
+    else:
+        _all_hi  = [c["high"] for c in candles_list]
+        _all_lo  = [c["low"]  for c in candles_list]
+        _all_upw = [c["high"]-max(c["open"],c["close"]) for c in candles_list]
+        _all_dnw = [min(c["open"],c["close"])-c["low"]  for c in candles_list]
+        _all_rng = [c["high"]-c["low"] for c in candles_list]
 
     # OPT: скользящие deque для max(_all_hi[s:i]) и min(_all_lo[s:i]) — O(1) вместо O(window)
     from collections import deque as _deque
@@ -1806,17 +1837,27 @@ def _simulate(candles_list, p, days_limit, init_deposit=100.0, risk_pct=20.0,
         return out
 
     # Предвычисляем скользящие max/min для каждого фильтра с окном
-    _slide_hi_ll  = _build_sliding_max(_all_hi, ll)   if ulf  else None
-    _slide_lo_ll  = _build_sliding_min(_all_lo, ll)   if ulf  else None
+    # В режиме воркера берём из кэша если окно было предвычислено
+    def _get_slide_hi(window):
+        if _use_worker_cache and _worker_slide_hi is not None and window in _worker_slide_hi:
+            return _worker_slide_hi[window]
+        return _build_sliding_max(_all_hi, window)
+    def _get_slide_lo(window):
+        if _use_worker_cache and _worker_slide_lo is not None and window in _worker_slide_lo:
+            return _worker_slide_lo[window]
+        return _build_sliding_min(_all_lo, window)
+
+    _slide_hi_ll  = _get_slide_hi(ll)   if ulf  else None
+    _slide_lo_ll  = _get_slide_lo(ll)   if ulf  else None
     _slide_upw_gl = _build_sliding_max(_all_upw, gl)  if ugf  else None  # не нужен, geo считает percentile
-    _slide_hi_sw  = _build_sliding_max(_all_hi, sw_len) if uswf else None
-    _slide_lo_sw  = _build_sliding_min(_all_lo, sw_len) if uswf else None
+    _slide_hi_sw  = _get_slide_hi(sw_len) if uswf else None
+    _slide_lo_sw  = _get_slide_lo(sw_len) if uswf else None
     # Для geo filter: percentile — нужен полный слайс, оставляем как есть (окно gl <= 30, дёшево)
     # Для ms filter: sliding max/min с окном ms_lb
-    _slide_hi_ms1 = _build_sliding_max(_all_hi, ms_lb)   if umsf else None
-    _slide_lo_ms1 = _build_sliding_min(_all_lo, ms_lb)   if umsf else None
-    _slide_hi_ms2 = _build_sliding_max(_all_hi, ms_lb*2) if umsf else None
-    _slide_lo_ms2 = _build_sliding_min(_all_lo, ms_lb*2) if umsf else None
+    _slide_hi_ms1 = _get_slide_hi(ms_lb)   if umsf else None
+    _slide_lo_ms1 = _get_slide_lo(ms_lb)   if umsf else None
+    _slide_hi_ms2 = _get_slide_hi(ms_lb*2) if umsf else None
+    _slide_lo_ms2 = _get_slide_lo(ms_lb*2) if umsf else None
 
     equity=init_deposit; max_eq=init_deposit; max_dd=0.0
     trades=0; wins=0; losses_n=0; pnls=[]
@@ -2265,11 +2306,25 @@ _worker_opens   = None
 _worker_highs   = None
 _worker_lows    = None
 _worker_closes  = None
+# Индикаторные кэши — предвычислены для всех возможных периодов из PARAM_SPACE
+_worker_all_hi        = None   # [c["high"]] — фиксированный, не зависит от params
+_worker_all_lo        = None
+_worker_all_upw       = None
+_worker_all_dnw       = None
+_worker_all_rng       = None
+_worker_rsi_cache     = None   # dict {period: rsi_series}
+_worker_atr_cache     = None   # dict {period: atr_series}
+_worker_ema_cache     = None   # dict {period: ema_series}
+_worker_slide_hi      = None   # dict {window: sliding_max(_all_hi, window)}
+_worker_slide_lo      = None   # dict {window: sliding_min(_all_lo, window)}
 
 def _worker_init(candles, days, risk, htf_index=None):
     global _worker_candles, _worker_days, _worker_risk, _worker_htf_index
     global _worker_opens, _worker_highs, _worker_lows, _worker_closes
     global _worker_htf_ts, _worker_htf_dir
+    global _worker_all_hi, _worker_all_lo, _worker_all_upw, _worker_all_dnw, _worker_all_rng
+    global _worker_rsi_cache, _worker_atr_cache, _worker_ema_cache
+    global _worker_slide_hi, _worker_slide_lo
     _worker_candles   = candles
     _worker_days      = days
     _worker_risk      = risk
@@ -2287,6 +2342,91 @@ def _worker_init(candles, days, risk, htf_index=None):
     _worker_highs  = [c["high"]  for c in candles]
     _worker_lows   = [c["low"]   for c in candles]
     _worker_closes = [c["close"] for c in candles]
+
+    # ── ИНДИКАТОРНЫЙ КЭШ ────────────────────────────────────────────────────
+    # Предвычисляем один раз на весь массив свечей для всех возможных периодов.
+    # _simulate вызывается тысячи раз с разными params, но candles не меняются —
+    # каждый раз пересчитывать RSI/ATR/EMA/sliding_max/min расточительно.
+    n = len(candles)
+    opens_w  = _worker_opens
+    highs_w  = _worker_highs
+    lows_w   = _worker_lows
+    closes_w = _worker_closes
+
+    # Базовые свечные массивы
+    _worker_all_hi  = highs_w[:]
+    _worker_all_lo  = lows_w[:]
+    _worker_all_upw = [highs_w[i] - max(opens_w[i], closes_w[i]) for i in range(n)]
+    _worker_all_dnw = [min(opens_w[i], closes_w[i]) - lows_w[i]  for i in range(n)]
+    _worker_all_rng = [highs_w[i] - lows_w[i] for i in range(n)]
+
+    # ── RSI: периоды 2..8 (rsi_len PARAM_SPACE min=2 max=8 step=1) ─────────
+    def _calc_rsi(closes, period):
+        if len(closes) < period + 1: return [50.0] * len(closes)
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            d = closes[i] - closes[i-1]; gains.append(max(d, 0)); losses.append(max(-d, 0))
+        rsi_vals = [50.0] * len(closes)
+        ag = sum(gains[:period]) / period; al = sum(losses[:period]) / period
+        for i in range(period, len(closes)):
+            ag = (ag * (period-1) + gains[i-1]) / period
+            al = (al * (period-1) + losses[i-1]) / period
+            rs = ag / al if al > 0 else 100
+            rsi_vals[i] = 100 - 100 / (1 + rs)
+        return rsi_vals
+    _worker_rsi_cache = {p: _calc_rsi(closes_w, p) for p in range(2, 9)}
+
+    # ── ATR: периоды 5,10,15,...,50 (quiet_atr_len min=5 max=50 step=5) ────
+    def _calc_atr(highs, lows, closes, period):
+        trs = []
+        for i in range(1, len(highs)):
+            trs.append(max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])))
+        atr_vals = [0.0] * len(highs)
+        if len(trs) < period: return atr_vals
+        atr_vals[period] = sum(trs[:period]) / period
+        for i in range(period+1, len(highs)):
+            atr_vals[i] = (atr_vals[i-1] * (period-1) + trs[i-1]) / period
+        return atr_vals
+    _worker_atr_cache = {p: _calc_atr(highs_w, lows_w, closes_w, p) for p in range(5, 55, 5)}
+
+    # ── EMA: периоды 20,40,...,200 (ema_period min=20 max=200 step=20) ──────
+    def _calc_ema(closes, period):
+        ema = [0.0] * len(closes)
+        if len(closes) < period: return ema
+        k = 2.0 / (period + 1)
+        ema[period-1] = sum(closes[:period]) / period
+        for i in range(period, len(closes)):
+            ema[i] = closes[i] * k + ema[i-1] * (1 - k)
+        return ema
+    _worker_ema_cache = {p: _calc_ema(closes_w, p) for p in range(20, 201, 20)}
+
+    # ── Sliding max/min по _all_hi/_all_lo для всех окон ────────────────────
+    # Окна: level_lookback 3..20 step=1, sweep_len 5,10,15,20, ms_lookback 20..60 step=10 и ×2
+    from collections import deque as _dq
+    def _slide_max(arr, window):
+        dq = _dq(); out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] <= v: dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window: dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+    def _slide_min(arr, window):
+        dq = _dq(); out = [0.0] * len(arr)
+        for i, v in enumerate(arr):
+            while dq and arr[dq[-1]] >= v: dq.pop()
+            dq.append(i)
+            if dq[0] <= i - window: dq.popleft()
+            out[i] = arr[dq[0]]
+        return out
+    _windows = set()
+    for w in range(3, 21):   _windows.add(w)          # level_lookback 3..20
+    for w in (5, 10, 15, 20): _windows.add(w)         # sweep_len
+    for w in range(20, 61, 10): _windows.add(w)       # ms_lookback
+    for w in range(40, 121, 20): _windows.add(w)      # ms_lookback*2
+    _worker_slide_hi = {w: _slide_max(_worker_all_hi, w) for w in _windows}
+    _worker_slide_lo = {w: _slide_min(_worker_all_lo, w) for w in _windows}
+    # ── конец индикаторного кэша ─────────────────────────────────────────────
 
 def _worker_evaluate(ind):
     r = _simulate(_worker_candles, ind, _worker_days, risk_pct=_worker_risk,
