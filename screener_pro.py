@@ -1070,7 +1070,7 @@ import requests
 import smtplib, email.mime.text, email.mime.multipart
 
 GATE_API = "https://api.gateio.ws/api/v4"
-APP_VERSION = "3.431"
+APP_VERSION = "3.432"
 
 def _get_cpu_temp():
     """Возвращает температуру CPU (°C) или None. Работает на Termux/Android и Linux."""
@@ -5834,7 +5834,7 @@ def _auto_save_config(symbol, tf, days, risk_pct, best, top20, olog=None):
                     _stab_str = f" · стаб {_stab:.0f}%" if _stab is not None else ""
                     _tg_text = (
                         f"🏆 <b>{symbol} {tf}</b> — новый лучший конфиг" + "\n" +
-                        f"💰 <b>${eq:.0f}</b> · WR {_wr:.0f}% · {_tr} сд · DD {_dd:.1f}% · PF {_pf:.2f}" + "\n" +
+                        f"💰 <b>$100→${eq/10:.0f}</b> · WR {_wr:.0f}% · {_tr} сд · DD {_dd:.1f}% · PF {_pf:.2f}" + "\n" +
                         f"🎯 SL {_sl_str} · TP {_tp:.2f}%{_stab_str}"
                     )
                     threading.Thread(target=_send_telegram, args=(_acfg, _tg_text), daemon=True).start()
